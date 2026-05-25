@@ -1,0 +1,10 @@
+.env
+.env.local
+__pycache__
+*.pyc
+*.pyo
+.git
+logs
+CURSOR_*.md
+.venv
+venv

@@ -1,0 +1,31 @@
+# Секреты и локальная конфигурация
+.env
+.env.local
+*.pem
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+.Python
+.venv/
+venv/
+env/
+*.egg-info/
+dist/
+build/
+
+# Логи и ОС
+logs/
+*.log
+.DS_Store
+Thumbs.db
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*~
+
+# Cursor (локальные заметки агента)
+CURSOR_*.md
