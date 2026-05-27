@@ -28,6 +28,8 @@ except ImportError:
     storage = MemoryStorage()
 
 from notifications import notify_florist, router as notifications_router
+from order_store import save_order
+from poller import start_polling
 from posiflora import create_posiflora_order
 
 logger = logging.getLogger(__name__)
@@ -460,6 +462,9 @@ async def process_budget(message: Message, state: FSMContext, bot: Bot) -> None:
             telegram_id=client_tg_id,
         )
         logger.info("✅ Заказ Posiflora: #%s", order_id)
+
+        if hasattr(dp, "redis") and dp.redis:
+            await save_order(dp.redis, order_id, client_tg_id, status="new")
     except Exception:
         logger.exception("❌ Ошибка Posiflora")
         posiflora_ok = False
@@ -513,6 +518,14 @@ async def main() -> None:
             ),
         ],
     )
+    redis = getattr(dp.storage, "redis", None)
+    if redis:
+        dp.redis = redis
+        asyncio.create_task(start_polling(bot, redis))
+        logger.info("🔄 Polling задача запущена")
+    else:
+        logger.warning("⚠️ Redis недоступен — polling отключён")
+
     await bot.set_my_commands(
         [
             BotCommand(command="start", description="Начать заказ букета"),

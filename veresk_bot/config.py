@@ -20,3 +20,4 @@ POSIFLORA_USERNAME = _require("POSIFLORA_USERNAME")
 POSIFLORA_PASSWORD = _require("POSIFLORA_PASSWORD")
 POSIFLORA_STORE_ID = _require("POSIFLORA_STORE_ID")
 POSIFLORA_BASE_URL = os.getenv("POSIFLORA_BASE_URL", "https://demo.posiflora.com/api").strip()
+POLL_INTERVAL = int(os.getenv("POLL_INTERVAL", "60"))  # секунды между проверками

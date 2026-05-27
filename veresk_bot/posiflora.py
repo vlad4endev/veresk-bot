@@ -125,3 +125,23 @@ async def create_posiflora_order(
             resp.raise_for_status()
             data = await resp.json()
             return str(data["data"]["id"])
+
+
+async def get_order_status(order_id: str) -> str:
+    """
+    GET /v1/orders/{id}
+    Возвращает текущий статус заказа.
+    """
+    async with aiohttp.ClientSession() as session:
+        access_token = await _get_access_token(session)
+        async with session.get(
+            f"{POSIFLORA_BASE_URL}/v1/orders/{order_id}",
+            headers={
+                **JSON_API_HEADERS,
+                "Authorization": f"Bearer {access_token}",
+            },
+        ) as resp:
+            resp.raise_for_status()
+            data = await resp.json()
+            attrs = data["data"]["attributes"]
+            return attrs.get("status") or attrs.get("deliveryStatus", "unknown")
