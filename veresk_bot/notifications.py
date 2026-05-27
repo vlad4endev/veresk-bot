@@ -49,9 +49,11 @@ def florist_keyboard(
     )
 
 
-def florist_message(data: dict, order_id: str, client_tg_id: int) -> str:
+def florist_message(
+    data: dict, order_id: str, client_tg_id: int, posiflora_ok: bool = True
+) -> str:
     now = datetime.now().strftime("%d.%m.%Y %H:%M")
-    return (
+    text = (
         "🌸 *Новый заказ — Veresk*\n"
         f"_trail of happiness · {now}_\n\n"
         "┌─────────────────────\n"
@@ -66,6 +68,12 @@ def florist_message(data: dict, order_id: str, client_tg_id: int) -> str:
         "└─────────────────────\n\n"
         f"🆔 Заказ Posiflora: `#{order_id}`"
     )
+    if not posiflora_ok:
+        text += (
+            "\n\n⚠️ *Заказ НЕ создан в Posiflora\\!*\n"
+            "Создайте вручную по данным выше\\."
+        )
+    return text
 
 
 async def notify_florist(
@@ -74,6 +82,7 @@ async def notify_florist(
     data: dict,
     order_id: str,
     client_tg_id: int,
+    posiflora_ok: bool = True,
 ) -> None:
     if not florist_chat_id:
         logger.warning("FLORIST_CHAT_ID не задан — уведомление флористу пропущено")
@@ -82,7 +91,9 @@ async def notify_florist(
     try:
         await bot.send_message(
             chat_id=florist_chat_id,
-            text=florist_message(data, order_id, client_tg_id),
+            text=florist_message(
+                data, order_id, client_tg_id, posiflora_ok=posiflora_ok
+            ),
             parse_mode=PARSE_MODE,
             reply_markup=florist_keyboard(order_id, client_tg_id, phone),
         )

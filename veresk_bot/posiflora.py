@@ -24,24 +24,6 @@ BUDGET_MAP = {
     "от 15 000 ₽": 15000,
 }
 
-today = datetime.now()
-DATE_MAP = {
-    "Сегодня": today,
-    "Завтра": today + timedelta(days=1),
-    "Через 2–3 дня": today + timedelta(days=2),
-    "Через неделю": today + timedelta(days=7),
-    "Через 2 недели": today + timedelta(days=14),
-}
-
-
-def _delivery_at_iso(delivery_date_label: str) -> str:
-    if delivery_date_label in DATE_MAP:
-        delivery_dt = DATE_MAP[delivery_date_label]
-    else:
-        delivery_dt = today + timedelta(days=1)
-    return delivery_dt.strftime("%Y-%m-%dT%H:%M:%S+00:00")
-
-
 def _build_comment(
     customer_name: str,
     phone: str,
@@ -91,8 +73,18 @@ async def create_posiflora_order(
     delivery_date: str,
     telegram_id: int,
 ) -> str:
+    today = datetime.now()
+    date_map = {
+        "Сегодня": today,
+        "Завтра": today + timedelta(days=1),
+        "Через 2–3 дня": today + timedelta(days=2),
+        "Через неделю": today + timedelta(days=7),
+        "Через 2 недели": today + timedelta(days=14),
+    }
+    delivery_dt = date_map.get(delivery_date, today + timedelta(days=1))
+    delivery_at = delivery_dt.strftime("%Y-%m-%dT%H:%M:%S+00:00")
+
     amount = BUDGET_MAP.get(budget, 4999)
-    delivery_at = _delivery_at_iso(delivery_date)
     comment = _build_comment(
         customer_name, phone, recipient, occasion, relation, budget, telegram_id
     )
