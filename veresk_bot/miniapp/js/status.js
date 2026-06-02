@@ -41,13 +41,19 @@ function renderTimeline(containerId, steps) {
   container.innerHTML = html;
 }
 
+function normalizeStepState(state) {
+  if (state === "done") return "done";
+  if (state === "current" || state === "active") return "current";
+  return "wait";
+}
+
 function renderTimelineFromStatus(containerId, statusKey, apiSteps) {
   if (apiSteps?.length) {
     renderTimeline(
       containerId,
       apiSteps.map((s) => ({
         label: s.label,
-        state: s.state,
+        state: normalizeStepState(s.state),
         time: s.time,
         emoji: STATUS_STEPS.find((x) => x.key === s.key)?.emoji,
       }))
@@ -111,9 +117,11 @@ function applyOrderData(data) {
   if (table) {
     const rows = [
       ["Клиент", details.name],
+      ["Телефон", details.phone],
       ["Получатель", details.recipient],
       ["Дата", details.date],
       ["Повод", details.occasion],
+      ["Кто получатель", details.relation],
       ["Бюджет", details.budget],
     ];
     table.innerHTML = rows
@@ -215,7 +223,13 @@ function openStatusScreen() {
 async function loadAndPoll(orderId) {
   activeOrderId = orderId;
   const data = await fetchStatus(orderId);
-  if (data) applyOrderData(data);
+  if (data) {
+    applyOrderData(data);
+  } else {
+    window.tg?.showAlert?.(
+      "Не удалось загрузить заказ. Закройте приложение и откройте снова из сообщения бота."
+    );
+  }
 
   if (pollTimer) clearInterval(pollTimer);
   pollTimer = setInterval(async () => {
@@ -252,3 +266,13 @@ function getActiveScreen() {
   const active = document.querySelector(".screen.active");
   return active?.id?.replace("screen-", "") || "home";
 }
+
+document.addEventListener("DOMContentLoaded", () => {
+  const urlOrderId = new URLSearchParams(window.location.search).get("order_id");
+  if (urlOrderId) {
+    setOrderId(urlOrderId);
+    if (typeof goTo === "function") goTo("status");
+    return;
+  }
+  refreshPreview();
+});

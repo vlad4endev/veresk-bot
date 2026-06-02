@@ -528,20 +528,19 @@ async def process_budget(message: Message, state: FSMContext, bot: Bot) -> None:
             "Флорист свяжется с вами вручную._"
         )
 
+    track_kb = tracking_keyboard(order_id)
+    if track_kb:
+        summary += (
+            "\n\n_Нажмите кнопку ниже — детали анкеты и этапы заказа 💜_"
+        )
+
     await message.answer(
         summary,
         parse_mode=PARSE_MODE,
-        reply_markup=ReplyKeyboardRemove(),
+        reply_markup=track_kb or ReplyKeyboardRemove(),
     )
 
-    track_kb = tracking_keyboard(order_id)
-    if track_kb:
-        await message.answer(
-            "Откройте трекер, чтобы следить за заказом в реальном времени 💜",
-            reply_markup=track_kb,
-        )
-
-    await message.answer("🌷")
+    await message.answer("🌷", reply_markup=ReplyKeyboardRemove())
     await state.clear()
 
 

@@ -89,13 +89,4 @@ document.getElementById("btn-open-status")?.addEventListener("click", () => goTo
 document.getElementById("btn-go-home")?.addEventListener("click", () => goTo("home"));
 document.getElementById("btn-go-status")?.addEventListener("click", () => goTo("status"));
 
-const params = new URLSearchParams(window.location.search);
-const urlOrderId = params.get("order_id");
-if (urlOrderId && window.VereskStatus) {
-  window.VereskStatus.setOrderId(urlOrderId);
-  document.addEventListener("DOMContentLoaded", () => goTo("status"));
-} else {
-  document.addEventListener("DOMContentLoaded", () => {
-    if (window.VereskStatus) window.VereskStatus.refreshPreview();
-  });
-}
+// Старт с order_id — в status.js после загрузки всех скриптов

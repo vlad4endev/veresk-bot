@@ -15,7 +15,7 @@ def tracking_keyboard(order_id: str) -> InlineKeyboardMarkup | None:
         inline_keyboard=[
             [
                 InlineKeyboardButton(
-                    text="💜 Следить за заказом",
+                    text="📋 Детали и статус заказа",
                     web_app=WebAppInfo(url=url),
                 )
             ]

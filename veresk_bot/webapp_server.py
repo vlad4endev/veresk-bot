@@ -5,10 +5,11 @@ HTTP API для Mini App: статус заказа (nginx проксирует 
 from __future__ import annotations
 
 import logging
+from typing import Any
 
 from aiohttp import web
 
-from client_db import get_client, get_orders_for_client
+from client_db import get_client, get_order_by_posiflora_id, get_orders_for_client
 from config import BOT_TOKEN
 from order_status import miniapp_status_payload, normalize_status, status_meta
 from order_store import get_active_order_by_tg, get_order_for_user, update_order_status
@@ -40,6 +41,34 @@ async def handle_options(_request: web.Request) -> web.Response:
     return web.Response(status=204, headers=_cors_headers())
 
 
+def _order_from_db_row(row: dict[str, Any]) -> dict:
+    return {
+        "order_id": row["posiflora_order_id"],
+        "created_at": row.get("created_at"),
+        "status": row.get("status", "new"),
+        "details": {
+            "name": row.get("name", ""),
+            "phone": row.get("phone", ""),
+            "recipient": row.get("recipient", ""),
+            "date": row.get("delivery_date", ""),
+            "occasion": row.get("occasion", ""),
+            "relation": row.get("relation", ""),
+            "budget": row.get("budget", ""),
+        },
+    }
+
+
+async def _resolve_order(redis, tg_id: int, order_id: str) -> dict | None:
+    if redis:
+        order = await get_order_for_user(redis, order_id, tg_id)
+        if order:
+            return order
+    row = await get_order_by_posiflora_id(tg_id, order_id)
+    if row:
+        return _order_from_db_row(row)
+    return None
+
+
 async def _order_payload(redis, order: dict, live_status: str) -> dict:
     details = order.get("details") or {}
     status_info = miniapp_status_payload(live_status, order.get("created_at"))
@@ -65,7 +94,7 @@ async def _order_payload(redis, order: dict, live_status: str) -> dict:
 async def _respond_order_status(
     redis, tg_id: int, order_id: str
 ) -> web.Response:
-    order = await get_order_for_user(redis, order_id, tg_id)
+    order = await _resolve_order(redis, tg_id, order_id)
     if not order:
         return web.json_response({"error": "not_found"}, status=404, headers=_cors_headers())
 
@@ -100,7 +129,15 @@ async def handle_order_active(request: web.Request) -> web.Response:
     if tg_id is None:
         return web.json_response({"error": "unauthorized"}, status=401, headers=_cors_headers())
 
-    order = await get_active_order_by_tg(redis, tg_id)
+    order = None
+    if redis:
+        order = await get_active_order_by_tg(redis, tg_id)
+    if not order:
+        recent = await get_orders_for_client(tg_id, limit=1)
+        if recent:
+            row = await get_order_by_posiflora_id(tg_id, recent[0]["posiflora_order_id"])
+            if row:
+                order = _order_from_db_row(row)
     if not order:
         return web.json_response({"order": None}, headers=_cors_headers())
 

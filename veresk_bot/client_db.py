@@ -178,6 +178,27 @@ async def save_client_and_order(
     logger.info("Клиент %s и заказ #%s сохранены в БД", tg_id, posiflora_order_id)
 
 
+async def get_order_by_posiflora_id(
+    tg_id: int, posiflora_order_id: str
+) -> dict[str, Any] | None:
+    """Полная карточка заказа из SQLite (запасной источник для Mini App)."""
+
+    def _get() -> dict[str, Any] | None:
+        with _connect() as db:
+            row = db.execute(
+                """
+                SELECT posiflora_order_id, status, name, phone, delivery_date,
+                       recipient, occasion, relation, budget, created_at
+                FROM orders
+                WHERE tg_id = ? AND posiflora_order_id = ?
+                """,
+                (tg_id, posiflora_order_id),
+            ).fetchone()
+        return dict(row) if row else None
+
+    return await _run_db(_get)
+
+
 async def get_orders_for_client(tg_id: int, limit: int = 15) -> list[dict[str, Any]]:
     def _get() -> list[dict[str, Any]]:
         with _connect() as db:

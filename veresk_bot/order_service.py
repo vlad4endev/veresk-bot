@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import uuid
 from typing import Any
 
 from aiogram import Bot
@@ -25,38 +26,43 @@ async def submit_order(
     """Создать заказ. Возвращает (order_id, posiflora_ok)."""
     order_id = "—"
     posiflora_ok = True
+    details = {
+        "name": data.get("name", ""),
+        "phone": data.get("phone", ""),
+        "date": data.get("date", ""),
+        "recipient": data.get("recipient", ""),
+        "occasion": data.get("occasion", ""),
+        "relation": data.get("relation", ""),
+        "budget": data.get("budget", ""),
+    }
     try:
         order_id = await create_posiflora_order(
-            customer_name=data.get("name", ""),
-            phone=data.get("phone", ""),
-            recipient=data.get("recipient", ""),
-            occasion=data.get("occasion", ""),
-            relation=data.get("relation", ""),
-            budget=data.get("budget", ""),
-            delivery_date=data.get("date", ""),
+            customer_name=details["name"],
+            phone=details["phone"],
+            recipient=details["recipient"],
+            occasion=details["occasion"],
+            relation=details["relation"],
+            budget=details["budget"],
+            delivery_date=details["date"],
             telegram_id=client_tg_id,
         )
         logger.info("✅ Заказ Posiflora: #%s", order_id)
-
-        if redis:
-            await save_order(
-                redis,
-                order_id,
-                client_tg_id,
-                status="new",
-                details={
-                    "name": data.get("name", ""),
-                    "phone": data.get("phone", ""),
-                    "date": data.get("date", ""),
-                    "recipient": data.get("recipient", ""),
-                    "occasion": data.get("occasion", ""),
-                    "relation": data.get("relation", ""),
-                    "budget": data.get("budget", ""),
-                },
-            )
     except Exception:
         logger.exception("❌ Ошибка Posiflora")
         posiflora_ok = False
+
+    if order_id == "—":
+        order_id = uuid.uuid4().hex[:10].upper()
+
+    order_id = str(order_id)
+    if redis:
+        await save_order(
+            redis,
+            order_id,
+            client_tg_id,
+            status="new",
+            details=details,
+        )
 
     await notify_florist(
         bot=bot,
@@ -106,7 +112,7 @@ async def finalize_miniapp_order(
     if track_kb:
         await bot.send_message(
             client_tg_id,
-            "Откройте трекер, чтобы следить за заказом в реальном времени 💜",
+            "Нажмите кнопку ниже — там детали анкеты и этапы заказа 💜",
             reply_markup=track_kb,
         )
 
