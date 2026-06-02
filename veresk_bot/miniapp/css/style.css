@@ -122,27 +122,45 @@ body:has(.tg-guard:not(.hidden)) #app {
   display: none !important;
 }
 
-/* Brand (логотип на светлом фоне — не сливается с hero) */
-.home-brand {
-  display: flex;
-  justify-content: center;
-  padding: 20px 20px 8px;
-  background: var(--v-cream);
-  position: relative;
-  z-index: 3;
-}
-
 /* Hero */
 .hero {
   position: relative;
   background: linear-gradient(155deg, var(--v-purple-deep) 0%, var(--v-purple) 42%, #5E3A8C 100%);
   color: var(--v-white);
-  padding: 24px 20px 56px;
+  padding: 20px 20px 56px;
   overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
 }
 
-.hero.hero--compact {
-  padding: 28px 20px 52px;
+.hero-glow {
+  position: absolute;
+  top: 12px;
+  left: 50%;
+  transform: translateX(-50%);
+  width: min(240px, 72vw);
+  height: min(240px, 72vw);
+  border-radius: 50%;
+  background: radial-gradient(
+    circle,
+    rgba(255, 93, 168, 0.35) 0%,
+    rgba(255, 125, 191, 0.12) 45%,
+    transparent 70%
+  );
+  pointer-events: none;
+  z-index: 0;
+}
+
+.hero-logo {
+  position: relative;
+  z-index: 2;
+  display: block;
+  width: min(200px, 68vw);
+  height: auto;
+  margin: 4px 0 14px;
+  object-fit: contain;
+  filter: drop-shadow(0 6px 20px rgba(0, 0, 0, 0.25));
 }
 
 .hero::before {
@@ -181,30 +199,6 @@ body:has(.tg-guard:not(.hidden)) #app {
   background: radial-gradient(circle, rgba(255, 125, 191, 0.45) 0%, rgba(255, 93, 168, 0.12) 55%, transparent 72%);
   pointer-events: none;
   z-index: 0;
-}
-
-.hero-logo-badge {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  width: min(220px, 78vw);
-  aspect-ratio: 1;
-  border-radius: 50%;
-  background: #ffffff;
-  padding: 10px;
-  box-shadow:
-    0 14px 36px rgba(74, 47, 110, 0.18),
-    0 0 0 3px rgba(255, 93, 168, 0.35),
-    0 0 0 6px rgba(255, 255, 255, 0.9);
-  border: 2px solid rgba(255, 93, 168, 0.45);
-}
-
-.hero-logo-img {
-  display: block;
-  width: 100%;
-  height: 100%;
-  object-fit: contain;
-  border-radius: 50%;
 }
 
 .hero-title {
