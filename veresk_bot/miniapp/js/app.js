@@ -83,11 +83,6 @@ function goTo(screenName) {
 
 window.goTo = goTo;
 
-document.getElementById("btn-order")?.addEventListener("click", () => {
-  window.VereskOrder?.reset?.();
-  goTo("order");
-});
-
 document.getElementById("order-back")?.addEventListener("click", () => goTo("home"));
 document.getElementById("status-back")?.addEventListener("click", () => goTo("home"));
 document.getElementById("btn-open-status")?.addEventListener("click", () => goTo("status"));

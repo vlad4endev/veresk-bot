@@ -1,5 +1,4 @@
 import asyncio
-import json
 import logging
 import os
 import re
@@ -15,14 +14,10 @@ from aiogram.fsm.state import State, StatesGroup
 from aiogram.fsm.storage.memory import MemoryStorage
 from aiogram.types import (
     BotCommand,
-    InlineKeyboardButton,
-    InlineKeyboardMarkup,
     KeyboardButton,
-    MenuButtonWebApp,
     Message,
     ReplyKeyboardMarkup,
     ReplyKeyboardRemove,
-    WebAppInfo,
 )
 
 from app_context import set_redis
@@ -38,7 +33,7 @@ except ImportError:
 
 from client_db import get_client, get_orders_for_client
 from notifications import router as notifications_router
-from order_service import finalize_miniapp_order, submit_order
+from order_service import submit_order
 from order_status import status_meta
 from poller import start_polling
 from webapp_buttons import tracking_keyboard
@@ -192,36 +187,8 @@ def kb_budget() -> ReplyKeyboardMarkup:
     )
 
 
-def miniapp_keyboard() -> InlineKeyboardMarkup | None:
-    if not MINIAPP_URL:
-        return None
-    return InlineKeyboardMarkup(
-        inline_keyboard=[
-            [
-                InlineKeyboardButton(
-                    text="🌸 Открыть Veresk",
-                    web_app=WebAppInfo(url=MINIAPP_URL),
-                )
-            ]
-        ]
-    )
-
-
-async def cmd_start(message: Message, state: FSMContext) -> None:
-    await state.clear()
-    text = (
-        "🌿 *Добро пожаловать в Veresk*\n"
-        "_trail of happiness_\n\n"
-        "Нажмите кнопку, чтобы открыть приложение и заказать букет 🌸"
-    )
-    kb = miniapp_keyboard()
-    if not kb:
-        text += "\n\n_Или напишите /order для заказа в чате_"
-    await message.answer(text, parse_mode=PARSE_MODE, reply_markup=kb)
-
-
-async def cmd_order(message: Message, state: FSMContext) -> None:
-    """Заказ через диалог в чате (альтернатива Mini App)."""
+async def begin_order_dialog(message: Message, state: FSMContext, intro: str) -> None:
+    """Анкета заказа в чате (кнопки клавиатуры)."""
     await state.clear()
     tg_id = message.from_user.id
     client = await get_client(tg_id)
@@ -233,8 +200,7 @@ async def cmd_order(message: Message, state: FSMContext) -> None:
             returning=True,
         )
         await message.answer(
-            "🌿 *Заказ букета в чате*\n"
-            "_trail of happiness_\n\n"
+            f"{intro}\n\n"
             f"С возвращением, *{client['name']}* 🌸\n\n"
             "Когда нужен букет?",
             parse_mode=PARSE_MODE,
@@ -245,12 +211,24 @@ async def cmd_order(message: Message, state: FSMContext) -> None:
 
     await state.update_data(returning=False)
     await message.answer(
-        "🌿 *Заказ букета в чате*\n"
-        "_trail of happiness_\n\n"
-        "Как вас зовут?",
+        f"{intro}\n\nКак вас зовут?",
         parse_mode=PARSE_MODE,
     )
     await state.set_state(OrderForm.name)
+
+
+async def cmd_start(message: Message, state: FSMContext) -> None:
+    intro = (
+        "🌿 *Добро пожаловать в Veresk*\n"
+        "_trail of happiness_\n\n"
+        "Я помогу подобрать идеальный букет для вашего особенного момента."
+    )
+    await begin_order_dialog(message, state, intro)
+
+
+async def cmd_order(message: Message, state: FSMContext) -> None:
+    intro = "🌿 *Заказ букета*\n_trail of happiness_"
+    await begin_order_dialog(message, state, intro)
 
 
 async def cmd_orders(message: Message) -> None:
@@ -259,7 +237,7 @@ async def cmd_orders(message: Message) -> None:
     if not orders:
         await message.answer(
             "📋 У вас пока нет заказов.\n\n"
-            "Нажмите /order или откройте приложение, чтобы оформить первый букет 🌸",
+            "Напишите /start или /order, чтобы оформить первый букет 🌸",
             parse_mode=PARSE_MODE,
         )
         return
@@ -275,20 +253,6 @@ async def cmd_orders(message: Message) -> None:
         )
     lines.append("\n\n_Новый заказ: /order_")
     await message.answer("".join(lines), parse_mode=PARSE_MODE)
-
-
-async def handle_miniapp_data(message: Message, bot: Bot) -> None:
-    """Принимает JSON из Mini App и создаёт заказ."""
-    try:
-        data = json.loads(message.web_app_data.data)
-    except (json.JSONDecodeError, TypeError, AttributeError):
-        logger.error("Невалидный JSON из MiniApp")
-        await message.answer("⚠️ Не удалось обработать заказ. Попробуйте ещё раз.")
-        return
-
-    client_tg_id = message.from_user.id
-    redis = getattr(dp, "redis", None)
-    await finalize_miniapp_order(bot, data, client_tg_id, redis=redis)
 
 
 async def cmd_cancel(message: Message, state: FSMContext) -> None:
@@ -553,27 +517,31 @@ async def process_budget(message: Message, state: FSMContext, bot: Bot) -> None:
         "└─────────────────────\n\n"
         "Наш флорист свяжется с вами в течение *15 минут* 🌷"
     )
-    if MINIAPP_URL:
-        summary += (
-            "\n\n_Нажмите кнопку ниже — откроется трекер заказа "
-            "в реальном времени 💜_"
-        )
     summary += "\n\n_Спасибо, что выбираете Veresk_"
 
     redis = getattr(dp, "redis", None)
     order_id, posiflora_ok = await submit_order(bot, data, client_tg_id, redis=redis)
 
-    track_kb = tracking_keyboard(order_id)
+    if not posiflora_ok:
+        summary += (
+            "\n\n⚠️ _Заявка принята, но возникла задержка с CRM. "
+            "Флорист свяжется с вами вручную._"
+        )
+
     await message.answer(
         summary,
-        reply_markup=track_kb,
         parse_mode=PARSE_MODE,
-    )
-    await message.answer(
-        "🌷",
         reply_markup=ReplyKeyboardRemove(),
     )
 
+    track_kb = tracking_keyboard(order_id)
+    if track_kb:
+        await message.answer(
+            "Откройте трекер, чтобы следить за заказом в реальном времени 💜",
+            reply_markup=track_kb,
+        )
+
+    await message.answer("🌷")
     await state.clear()
 
 
@@ -581,7 +549,6 @@ def register_handlers(dp: Dispatcher) -> None:
     dp.message.register(cmd_start, CommandStart())
     dp.message.register(cmd_order, Command("order"))
     dp.message.register(cmd_orders, Command("orders"))
-    dp.message.register(handle_miniapp_data, F.web_app_data)
     dp.message.register(cmd_cancel, Command("cancel"))
     dp.message.register(process_name, OrderForm.name)
     dp.message.register(process_phone_contact, OrderForm.phone, F.contact)
@@ -597,8 +564,8 @@ def register_handlers(dp: Dispatcher) -> None:
 
 
 BOT_COMMANDS = [
-    BotCommand(command="start", description="Открыть приложение Veresk"),
-    BotCommand(command="order", description="Заказать букет в чате"),
+    BotCommand(command="start", description="Заказать букет"),
+    BotCommand(command="order", description="Новый заказ"),
     BotCommand(command="orders", description="История ваших заказов"),
     BotCommand(command="cancel", description="Отменить текущую анкету"),
 ]
@@ -626,23 +593,6 @@ async def validate_bot_token() -> None:
         raise SystemExit(1) from None
 
     logger.info("Бот авторизован: @%s (id=%s)", me.username, me.id)
-
-
-async def setup_miniapp_menu_button() -> None:
-    """Кнопка меню слева в чате — тот же URL, что в MINIAPP_URL."""
-    if not MINIAPP_URL:
-        return
-    try:
-        await bot.set_chat_menu_button(
-            menu_button=MenuButtonWebApp(
-                text="🌸 Veresk",
-                web_app=WebAppInfo(url=MINIAPP_URL),
-            ),
-            request_timeout=90,
-        )
-        logger.info("Кнопка меню Mini App: %s", MINIAPP_URL)
-    except TelegramNetworkError as exc:
-        logger.warning("Не удалось установить кнопку меню Mini App: %s", exc)
 
 
 async def setup_menu_commands() -> None:
@@ -704,7 +654,6 @@ async def main() -> None:
         logger.warning("⚠️ Redis недоступен — polling и Mini App отключены")
 
     await setup_menu_commands()
-    await setup_miniapp_menu_button()
     await dp.start_polling(bot)
 
 

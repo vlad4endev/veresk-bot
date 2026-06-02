@@ -183,6 +183,22 @@ body:has(.tg-guard:not(.hidden)) #app {
   flex: 1;
 }
 
+.order-hint {
+  margin: 0 0 16px;
+  padding: 12px 14px;
+  font-size: 13px;
+  line-height: 1.45;
+  color: var(--text-muted, #6b5f7a);
+  background: rgba(255, 255, 255, 0.65);
+  border-radius: 12px;
+  border: 1px solid rgba(64, 44, 96, 0.08);
+}
+
+.order-hint strong {
+  color: var(--purple, #402c60);
+  font-weight: 500;
+}
+
 /* CTA */
 .cta-btn {
   display: flex;
