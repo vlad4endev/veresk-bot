@@ -1,4 +1,5 @@
 import logging
+import time
 from datetime import datetime, timedelta
 
 import aiohttp
@@ -24,6 +25,19 @@ BUDGET_MAP = {
     "от 15 000 ₽": 15000,
 }
 
+# Кэш токена между запросами polling (секунды)
+_TOKEN_CACHE: dict[str, float | str] = {"token": "", "expires_at": 0.0}
+_TOKEN_TTL_SEC = 50 * 60
+
+
+class PosifloraAuthError(Exception):
+    """Неверный логин/пароль или URL API Posiflora."""
+
+
+class PosifloraAPIError(Exception):
+    """Ошибка запроса к Posiflora после авторизации."""
+
+
 def _build_comment(
     customer_name: str,
     phone: str,
@@ -44,7 +58,20 @@ def _build_comment(
     )
 
 
+async def _read_error_body(resp: aiohttp.ClientResponse) -> str:
+    try:
+        text = await resp.text()
+        return text[:500] if text else ""
+    except Exception:
+        return ""
+
+
 async def _get_access_token(session: aiohttp.ClientSession) -> str:
+    now = time.time()
+    cached = _TOKEN_CACHE.get("token")
+    if cached and now < float(_TOKEN_CACHE.get("expires_at", 0)):
+        return str(cached)
+
     async with session.post(
         f"{POSIFLORA_BASE_URL}/v1/sessions",
         headers=JSON_API_HEADERS,
@@ -58,9 +85,28 @@ async def _get_access_token(session: aiohttp.ClientSession) -> str:
             }
         },
     ) as resp:
-        resp.raise_for_status()
+        if resp.status == 401:
+            body = await _read_error_body(resp)
+            logger.error(
+                "Posiflora 401: проверьте POSIFLORA_USERNAME, POSIFLORA_PASSWORD "
+                "и POSIFLORA_BASE_URL (%s). Ответ: %s",
+                POSIFLORA_BASE_URL,
+                body,
+            )
+            raise PosifloraAuthError(
+                "Авторизация Posiflora отклонена (401). "
+                "Укажите рабочий логин/пароль и URL вашего салона, не demo."
+            )
+        if resp.status >= 400:
+            body = await _read_error_body(resp)
+            raise PosifloraAPIError(
+                f"Posiflora sessions HTTP {resp.status}: {body}"
+            )
         data = await resp.json()
-        return data["data"]["attributes"]["accessToken"]
+        token = data["data"]["attributes"]["accessToken"]
+        _TOKEN_CACHE["token"] = token
+        _TOKEN_CACHE["expires_at"] = now + _TOKEN_TTL_SEC
+        return token
 
 
 async def create_posiflora_order(
@@ -122,7 +168,11 @@ async def create_posiflora_order(
                 }
             },
         ) as resp:
-            resp.raise_for_status()
+            if resp.status >= 400:
+                body = await _read_error_body(resp)
+                raise PosifloraAPIError(
+                    f"Posiflora create order HTTP {resp.status}: {body}"
+                )
             data = await resp.json()
             return str(data["data"]["id"])
 
@@ -141,7 +191,13 @@ async def get_order_status(order_id: str) -> str:
                 "Authorization": f"Bearer {access_token}",
             },
         ) as resp:
-            resp.raise_for_status()
+            if resp.status == 404:
+                raise PosifloraAPIError(f"Заказ #{order_id} не найден в Posiflora")
+            if resp.status >= 400:
+                body = await _read_error_body(resp)
+                raise PosifloraAPIError(
+                    f"Posiflora order HTTP {resp.status}: {body}"
+                )
             data = await resp.json()
             attrs = data["data"]["attributes"]
             return attrs.get("status") or attrs.get("deliveryStatus", "unknown")

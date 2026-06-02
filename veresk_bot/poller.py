@@ -12,14 +12,16 @@ from aiogram import Bot
 from client_db import update_order_status_db
 from config import POLL_INTERVAL
 from order_status import normalize_status
-from order_store import get_all_orders, update_order_status
-from posiflora import get_order_status
+from order_store import get_all_orders, is_local_order_id, update_order_status
+from posiflora import PosifloraAuthError, PosifloraAPIError, get_order_status
 from webapp_buttons import tracking_keyboard
 
 logger = logging.getLogger(__name__)
 
 # Финальные статусы — заказ остаётся в Redis до TTL (Mini App)
 FINAL_STATUSES = {"delivered", "cancelled", "returned"}
+
+_auth_error_logged = False
 
 # ── Тексты уведомлений клиенту по статусу ────────────────────────────────────
 # ВАЖНО: уточнить точные значения статусов у Posiflora (support@posiflora.com)
@@ -63,13 +65,34 @@ async def poll_once(bot: Bot, redis) -> None:
 
     logger.debug("🔄 Polling %s заказов...", len(orders))
 
+    global _auth_error_logged
+
     for order in orders:
         order_id = order["order_id"]
         tg_id = order["tg_id"]
         last_status = normalize_status(order["status"])
 
+        if order.get("in_posiflora") is False or is_local_order_id(order_id):
+            logger.debug(
+                "Пропуск polling #%s — заказ не в Posiflora (локальный ID)",
+                order_id,
+            )
+            continue
+
         try:
             current_status = normalize_status(await get_order_status(order_id))
+        except PosifloraAuthError:
+            if not _auth_error_logged:
+                logger.error(
+                    "❌ Posiflora: неверная авторизация — проверьте .env "
+                    "(POSIFLORA_BASE_URL, POSIFLORA_USERNAME, POSIFLORA_PASSWORD). "
+                    "Polling статусов приостановлен до исправления."
+                )
+                _auth_error_logged = True
+            return
+        except PosifloraAPIError as exc:
+            logger.warning("Posiflora #%s: %s", order_id, exc)
+            continue
         except Exception:
             logger.exception("❌ Не удалось получить статус заказа #%s", order_id)
             continue

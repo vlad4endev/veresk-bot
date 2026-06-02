@@ -6,11 +6,13 @@ import logging
 from typing import Any
 
 from aiogram import Bot
-from aiogram.exceptions import TelegramNetworkError
+from aiogram.exceptions import TelegramAPIError, TelegramNetworkError
 from aiogram.types import (
     InlineKeyboardButton,
     InlineKeyboardMarkup,
+    KeyboardButton,
     MenuButtonWebApp,
+    ReplyKeyboardMarkup,
     WebAppInfo,
 )
 
@@ -54,6 +56,24 @@ def launch_keyboard(order_id: str | None = None) -> InlineKeyboardMarkup | None:
     return status_keyboard(order_id)
 
 
+def tracker_reply_keyboard(order_id: str | None = None) -> ReplyKeyboardMarkup | None:
+    """
+    Кнопка внизу чата (Web App) — работает у любого клиента,
+    не зависит от FLORIST_CHAT_ID.
+    """
+    url = miniapp_url(order_id)
+    if not url:
+        return None
+    label = TRACKER_FOLLOW_LABEL if order_id else TRACKER_OPEN_LABEL
+    return ReplyKeyboardMarkup(
+        keyboard=[
+            [KeyboardButton(text=label, web_app=WebAppInfo(url=url))],
+        ],
+        resize_keyboard=True,
+        is_persistent=True,
+    )
+
+
 def orders_list_keyboard(orders: list[dict[str, Any]]) -> InlineKeyboardMarkup | None:
     """Кнопки трекера для каждого заказа в /orders."""
     rows: list[list[InlineKeyboardButton]] = []
@@ -92,5 +112,12 @@ async def setup_bot_menu_button(bot: Bot) -> None:
             request_timeout=90,
         )
         logger.info("Кнопка меню трекера заказа установлена")
+    except TelegramAPIError as exc:
+        logger.error(
+            "Кнопка меню Mini App не установлена: %s. "
+            "Проверьте MINIAPP_URL (HTTPS), домен в @BotFather → Domain, "
+            "и что URL совпадает с публичным адресом miniapp.",
+            exc,
+        )
     except TelegramNetworkError as exc:
         logger.warning("Не удалось установить кнопку меню Mini App: %s", exc)

@@ -25,12 +25,20 @@ def _tg_key(tg_id: int) -> str:
     return f"{TG_ORDER_PREFIX}{tg_id}"
 
 
+def is_local_order_id(order_id: str) -> bool:
+    """Локальный ID (Posiflora недоступна при создании), не опрашивать CRM."""
+    oid = (order_id or "").strip().upper()
+    return len(oid) == 10 and all(c in "0123456789ABCDEF" for c in oid)
+
+
 async def save_order(
     redis,
     order_id: str,
     tg_id: int,
     status: str = "new",
     details: dict[str, Any] | None = None,
+    *,
+    in_posiflora: bool = True,
 ) -> None:
     """Сохранить новый заказ при создании."""
     key = _order_key(order_id)
@@ -40,6 +48,7 @@ async def save_order(
         "status": status,
         "created_at": datetime.now().isoformat(),
         "details": details or {},
+        "in_posiflora": in_posiflora,
     }
     await redis.set(key, json.dumps(data, ensure_ascii=False), ex=ORDER_TTL)
     await redis.set(_tg_key(tg_id), order_id, ex=ORDER_TTL)

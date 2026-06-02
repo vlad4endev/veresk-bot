@@ -62,6 +62,7 @@ async def submit_order(
             client_tg_id,
             status="new",
             details=details,
+            in_posiflora=posiflora_ok,
         )
 
     await notify_florist(
@@ -88,7 +89,7 @@ async def finalize_miniapp_order(
     redis=None,
 ) -> tuple[str, bool]:
     """Создать заказ из Mini App и уведомить клиента в чате."""
-    from webapp_buttons import tracking_keyboard
+    from webapp_buttons import tracker_reply_keyboard, tracking_keyboard
 
     await bot.send_message(
         client_tg_id,
@@ -109,11 +110,18 @@ async def finalize_miniapp_order(
         )
 
     track_kb = tracking_keyboard(order_id)
+    track_reply = tracker_reply_keyboard(order_id)
     if track_kb:
         await bot.send_message(
             client_tg_id,
             "Нажмите «Следить за заказом» — этапы и детали в приложении 💜",
             reply_markup=track_kb,
+        )
+    if track_reply:
+        await bot.send_message(
+            client_tg_id,
+            "👇 Или кнопка внизу экрана:",
+            reply_markup=track_reply,
         )
 
     return order_id, posiflora_ok

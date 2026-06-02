@@ -42,6 +42,7 @@ from webapp_buttons import (
     launch_keyboard,
     orders_list_keyboard,
     setup_bot_menu_button,
+    tracker_reply_keyboard,
     tracking_keyboard,
 )
 from webapp_server import start_webapp_server
@@ -197,6 +198,10 @@ def kb_budget() -> ReplyKeyboardMarkup:
 async def begin_order_dialog(message: Message, state: FSMContext, intro: str) -> None:
     """Анкета заказа в чате (кнопки клавиатуры)."""
     await state.clear()
+    await message.answer(
+        "Переходим к оформлению заказа 🌸",
+        reply_markup=ReplyKeyboardRemove(),
+    )
     tg_id = message.from_user.id
     client = await get_client(tg_id)
 
@@ -236,31 +241,63 @@ async def _latest_order_id(tg_id: int) -> str | None:
     return None
 
 
-async def cmd_start(message: Message, state: FSMContext) -> None:
-    """Открыть трекер статуса (Mini App). Заказ в чате — /order."""
-    await state.clear()
-    order_id = await _latest_order_id(message.from_user.id)
-    intro = "🌿 *Veresk*\n_trail of happiness_\n\n"
-    if order_id:
-        intro += (
-            f"Ваш заказ *№{order_id}* — нажмите кнопку ниже, "
-            "чтобы видеть этапы и детали в реальном времени."
-        )
-    else:
-        intro += (
-            "Здесь можно следить за заказом после оформления.\n"
-            "Новый букет — команда /order 🌸"
-        )
+async def _send_tracker_invite(
+    message: Message,
+    intro: str,
+    order_id: str | None = None,
+) -> None:
+    """Сообщение + inline и reply-кнопки Web App (для любого tg_id)."""
+    inline_kb = launch_keyboard(order_id)
+    reply_kb = tracker_reply_keyboard(order_id)
 
-    kb = launch_keyboard(order_id)
-    if kb:
-        await message.answer(intro, parse_mode=PARSE_MODE, reply_markup=kb)
+    if not inline_kb and not reply_kb:
+        await message.answer(
+            intro
+            + "\n\n_Трекер недоступен: на сервере не задан MINIAPP_URL (HTTPS)._",
+            parse_mode=PARSE_MODE,
+            reply_markup=ReplyKeyboardRemove(),
+        )
         return
 
     await message.answer(
-        intro + "\n\n_Трекер временно недоступен — задайте MINIAPP_URL в настройках бота._",
+        intro,
         parse_mode=PARSE_MODE,
+        reply_markup=inline_kb,
     )
+    if reply_kb:
+        await message.answer(
+            "👇 *Откройте трекер* — кнопка внизу экрана "
+            "(работает для всех клиентов, не только флориста).",
+            parse_mode=PARSE_MODE,
+            reply_markup=reply_kb,
+        )
+
+
+async def cmd_start(message: Message, state: FSMContext) -> None:
+    """Открыть трекер статуса (Mini App). Заказ в чате — /order."""
+    await state.clear()
+    uid = message.from_user.id
+    logger.info("/start tg_id=%s (@%s)", uid, message.from_user.username)
+
+    order_id = await _latest_order_id(uid)
+    intro = "🌿 *Veresk*\n_trail of happiness_\n\n"
+    if order_id:
+        intro += (
+            f"Ваш заказ *№{order_id}* — откройте трекер, "
+            "чтобы видеть этапы и детали."
+        )
+    else:
+        intro += (
+            "Следите за заказом после оформления.\n"
+            "Новый букет — /order 🌸"
+        )
+
+    await _send_tracker_invite(message, intro, order_id)
+
+
+async def cmd_status(message: Message, state: FSMContext) -> None:
+    """Тот же трекер, что /start."""
+    await cmd_start(message, state)
 
 
 async def cmd_order(message: Message, state: FSMContext) -> None:
@@ -272,10 +309,10 @@ async def cmd_orders(message: Message) -> None:
     """История заказов клиента."""
     orders = await get_orders_for_client(message.from_user.id, limit=15)
     if not orders:
-        await message.answer(
+        await _send_tracker_invite(
+            message,
             "📋 У вас пока нет заказов.\n\n"
-            "Напишите /start или /order, чтобы оформить первый букет 🌸",
-            parse_mode=PARSE_MODE,
+            "Оформите букет: /order",
         )
         return
 
@@ -607,12 +644,20 @@ async def process_budget(message: Message, state: FSMContext, bot: Bot) -> None:
         reply_markup=track_kb or ReplyKeyboardRemove(),
     )
 
-    await message.answer("🌷", reply_markup=ReplyKeyboardRemove())
+    track_reply = tracker_reply_keyboard(order_id)
+    if track_reply:
+        await message.answer(
+            "👇 Или откройте трекер кнопкой внизу:",
+            reply_markup=track_reply,
+        )
+    else:
+        await message.answer("🌷", reply_markup=ReplyKeyboardRemove())
     await state.clear()
 
 
 def register_handlers(dp: Dispatcher) -> None:
     dp.message.register(cmd_start, CommandStart())
+    dp.message.register(cmd_status, Command("status"))
     dp.message.register(on_miniapp_order, F.web_app_data)
     dp.message.register(cmd_order, Command("order"))
     dp.message.register(cmd_orders, Command("orders"))
@@ -632,6 +677,7 @@ def register_handlers(dp: Dispatcher) -> None:
 
 BOT_COMMANDS = [
     BotCommand(command="start", description="Статус заказа"),
+    BotCommand(command="status", description="Открыть трекер"),
     BotCommand(command="order", description="Новый заказ"),
     BotCommand(command="orders", description="История ваших заказов"),
     BotCommand(command="cancel", description="Отменить текущую анкету"),
@@ -717,10 +763,10 @@ async def main() -> None:
 
     if MINIAPP_URL:
         await start_webapp_server(redis, WEBAPP_HOST, WEBAPP_PORT, bot=bot)
-        logger.info("🌐 API трекера заказов запущен")
+        logger.info("🌐 Mini App URL: %s (доступен всем клиентам)", MINIAPP_URL)
     else:
         logger.warning(
-            "⚠️ MINIAPP_URL не задан — трекер недоступен (задайте HTTPS-URL в .env)"
+            "⚠️ MINIAPP_URL не задан — Web App не откроется (задайте HTTPS в .env)"
         )
 
     await setup_menu_commands()
