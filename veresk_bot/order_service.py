@@ -73,3 +73,33 @@ async def submit_order(
         logger.exception("Не удалось сохранить заказ в БД клиентов")
 
     return str(order_id), posiflora_ok
+
+
+async def finalize_miniapp_order(
+    bot: Bot,
+    data: dict[str, Any],
+    client_tg_id: int,
+    redis=None,
+) -> tuple[str, bool]:
+    """Создать заказ из Mini App и уведомить клиента в чате."""
+    from webapp_buttons import tracking_keyboard
+
+    order_id, posiflora_ok = await submit_order(bot, data, client_tg_id, redis=redis)
+
+    if not posiflora_ok:
+        await bot.send_message(
+            client_tg_id,
+            "⚠️ Заявка принята, но возникла задержка с CRM. "
+            "Флорист свяжется с вами вручную.",
+            parse_mode="Markdown",
+        )
+
+    track_kb = tracking_keyboard(order_id)
+    if track_kb:
+        await bot.send_message(
+            client_tg_id,
+            "Откройте трекер, чтобы следить за заказом в реальном времени 💜",
+            reply_markup=track_kb,
+        )
+
+    return order_id, posiflora_ok

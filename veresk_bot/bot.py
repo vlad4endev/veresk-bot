@@ -18,6 +18,7 @@ from aiogram.types import (
     InlineKeyboardButton,
     InlineKeyboardMarkup,
     KeyboardButton,
+    MenuButtonWebApp,
     Message,
     ReplyKeyboardMarkup,
     ReplyKeyboardRemove,
@@ -37,7 +38,7 @@ except ImportError:
 
 from client_db import get_client, get_orders_for_client
 from notifications import router as notifications_router
-from order_service import submit_order
+from order_service import finalize_miniapp_order, submit_order
 from order_status import status_meta
 from poller import start_polling
 from webapp_buttons import tracking_keyboard
@@ -295,20 +296,7 @@ async def handle_miniapp_data(message: Message, bot: Bot) -> None:
         parse_mode=PARSE_MODE,
     )
 
-    order_id, posiflora_ok = await submit_order(bot, data, client_tg_id, redis=redis)
-    if not posiflora_ok:
-        await message.answer(
-            "⚠️ Заявка принята, но возникла задержка с CRM. "
-            "Флорист свяжется с вами вручную.",
-            parse_mode=PARSE_MODE,
-        )
-
-    track_kb = tracking_keyboard(order_id)
-    if track_kb:
-        await message.answer(
-            "Откройте трекер, чтобы следить за заказом в реальном времени 💜",
-            reply_markup=track_kb,
-        )
+    await finalize_miniapp_order(bot, data, client_tg_id, redis=redis)
 
 
 async def cmd_cancel(message: Message, state: FSMContext) -> None:
@@ -648,6 +636,23 @@ async def validate_bot_token() -> None:
     logger.info("Бот авторизован: @%s (id=%s)", me.username, me.id)
 
 
+async def setup_miniapp_menu_button() -> None:
+    """Кнопка меню слева в чате — тот же URL, что в MINIAPP_URL."""
+    if not MINIAPP_URL:
+        return
+    try:
+        await bot.set_chat_menu_button(
+            menu_button=MenuButtonWebApp(
+                text="🌸 Veresk",
+                web_app=WebAppInfo(url=MINIAPP_URL),
+            ),
+            request_timeout=90,
+        )
+        logger.info("Кнопка меню Mini App: %s", MINIAPP_URL)
+    except TelegramNetworkError as exc:
+        logger.warning("Не удалось установить кнопку меню Mini App: %s", exc)
+
+
 async def setup_menu_commands() -> None:
     """Регистрация /start и /cancel в меню Telegram. Сбой сети не останавливает бота."""
     for attempt in range(1, 4):
@@ -698,7 +703,7 @@ async def main() -> None:
         asyncio.create_task(start_polling(bot, redis))
         logger.info("🔄 Polling задача запущена")
         if MINIAPP_URL:
-            await start_webapp_server(redis, WEBAPP_HOST, WEBAPP_PORT)
+            await start_webapp_server(redis, WEBAPP_HOST, WEBAPP_PORT, bot=bot)
         else:
             logger.warning(
                 "⚠️ MINIAPP_URL не задан — API статусов отключён (задайте HTTPS-URL в .env)"
@@ -707,6 +712,7 @@ async def main() -> None:
         logger.warning("⚠️ Redis недоступен — polling и Mini App отключены")
 
     await setup_menu_commands()
+    await setup_miniapp_menu_button()
     await dp.start_polling(bot)
 
 

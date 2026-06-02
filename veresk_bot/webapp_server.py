@@ -24,7 +24,7 @@ def _cors_headers() -> dict[str, str]:
     return {
         "Access-Control-Allow-Origin": "*",
         "Access-Control-Allow-Headers": f"Content-Type, {INIT_DATA_HEADER}",
-        "Access-Control-Allow-Methods": "GET, OPTIONS",
+        "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
     }
 
 
@@ -160,6 +160,55 @@ async def handle_client_orders(request: web.Request) -> web.Response:
     return web.json_response({"orders": items}, headers=_cors_headers())
 
 
+async def handle_order_submit(request: web.Request) -> web.Response:
+    """Создание заказа из Mini App (если tg.sendData недоступен)."""
+    bot = request.app.get("bot")
+    if bot is None:
+        return web.json_response(
+            {"error": "bot_unavailable"},
+            status=503,
+            headers=_cors_headers(),
+        )
+
+    tg_id = _auth_user(request)
+    if tg_id is None:
+        return web.json_response({"error": "unauthorized"}, status=401, headers=_cors_headers())
+
+    try:
+        data = await request.json()
+    except Exception:
+        return web.json_response(
+            {"error": "invalid_json"},
+            status=400,
+            headers=_cors_headers(),
+        )
+
+    if not isinstance(data, dict) or not data.get("name") or not data.get("phone"):
+        return web.json_response(
+            {"error": "validation"},
+            status=400,
+            headers=_cors_headers(),
+        )
+
+    from order_service import finalize_miniapp_order
+
+    redis = request.app["redis"]
+    try:
+        order_id, posiflora_ok = await finalize_miniapp_order(bot, data, tg_id, redis=redis)
+    except Exception:
+        logger.exception("Mini App order submit failed for tg_id=%s", tg_id)
+        return web.json_response(
+            {"error": "server_error"},
+            status=500,
+            headers=_cors_headers(),
+        )
+
+    return web.json_response(
+        {"order_id": order_id, "posiflora_ok": posiflora_ok},
+        headers=_cors_headers(),
+    )
+
+
 async def handle_api_order_legacy(request: web.Request) -> web.Response:
     """Совместимость со старым /api/order?order_id=."""
     redis = request.app["redis"]
@@ -177,27 +226,30 @@ async def handle_api_order_legacy(request: web.Request) -> web.Response:
     return await _respond_order_status(redis, tg_id, order_id)
 
 
-def create_api_app(redis) -> web.Application:
+def create_api_app(redis, bot=None) -> web.Application:
     app = web.Application()
     app["redis"] = redis
+    app["bot"] = bot
 
     app.router.add_route("OPTIONS", "/api/order-status/{order_id}", handle_options)
     app.router.add_route("OPTIONS", "/api/order/active", handle_options)
     app.router.add_route("OPTIONS", "/api/order", handle_options)
+    app.router.add_route("OPTIONS", "/api/order/submit", handle_options)
     app.router.add_route("OPTIONS", "/api/client/me", handle_options)
     app.router.add_route("OPTIONS", "/api/client/orders", handle_options)
 
     app.router.add_get("/api/order-status/{order_id}", handle_order_status)
     app.router.add_get("/api/order/active", handle_order_active)
     app.router.add_get("/api/order", handle_api_order_legacy)
+    app.router.add_post("/api/order/submit", handle_order_submit)
     app.router.add_get("/api/client/me", handle_client_me)
     app.router.add_get("/api/client/orders", handle_client_orders)
 
     return app
 
 
-async def start_webapp_server(redis, host: str, port: int) -> web.AppRunner:
-    app = create_api_app(redis)
+async def start_webapp_server(redis, host: str, port: int, bot=None) -> web.AppRunner:
+    app = create_api_app(redis, bot=bot)
     runner = web.AppRunner(app)
     await runner.setup()
     site = web.TCPSite(runner, host, port)
