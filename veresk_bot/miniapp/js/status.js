@@ -188,15 +188,23 @@ function renderOrderHistory(orders) {
   list.innerHTML = orders
     .map(
       (o) => `
-    <div class="history-item">
+    <button type="button" class="history-item" data-order-id="${o.order_id}">
       <div class="history-item-top">
         <span class="history-id">№${o.order_id}</span>
         <span class="history-badge">${o.status?.label || "—"}</span>
       </div>
       <div class="history-sub">🎁 ${o.recipient} · 📅 ${o.delivery_date}</div>
-    </div>`
+    </button>`
     )
     .join("");
+  list.querySelectorAll("[data-order-id]").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      const id = btn.getAttribute("data-order-id");
+      if (!id) return;
+      setOrderId(id);
+      if (typeof goTo === "function") goTo("status");
+    });
+  });
   section.classList.remove("hidden");
 }
 

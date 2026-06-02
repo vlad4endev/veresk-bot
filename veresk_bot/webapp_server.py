@@ -102,7 +102,7 @@ async def _respond_order_status(
     live = stored
     try:
         live = normalize_status(await get_order_status(order_id))
-        if live != stored:
+        if redis and live != stored:
             await update_order_status(redis, order_id, live)
     except Exception:
         logger.debug("Posiflora недоступна для #%s", order_id)
@@ -146,7 +146,7 @@ async def handle_order_active(request: web.Request) -> web.Response:
     live = stored
     try:
         live = normalize_status(await get_order_status(order_id))
-        if live != stored:
+        if redis and live != stored:
             await update_order_status(redis, order_id, live)
     except Exception:
         pass

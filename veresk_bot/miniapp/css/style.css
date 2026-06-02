@@ -306,11 +306,21 @@ body:has(.tg-guard:not(.hidden)) #app {
 }
 
 .history-item {
+  display: block;
+  width: 100%;
+  text-align: left;
+  font: inherit;
+  color: inherit;
+  cursor: pointer;
   background: var(--v-white);
   border: 1px solid rgba(255, 93, 168, 0.12);
   border-radius: 14px;
   padding: 12px 14px;
   box-shadow: var(--v-shadow);
+}
+
+.history-item + .history-item {
+  margin-top: 8px;
 }
 
 .history-item-top {

@@ -112,7 +112,7 @@ async def finalize_miniapp_order(
     if track_kb:
         await bot.send_message(
             client_tg_id,
-            "Нажмите кнопку ниже — там детали анкеты и этапы заказа 💜",
+            "Нажмите «Следить за заказом» — этапы и детали в приложении 💜",
             reply_markup=track_kb,
         )
 

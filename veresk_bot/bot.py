@@ -1,4 +1,5 @@
 import asyncio
+import json
 import logging
 import os
 import re
@@ -21,7 +22,7 @@ from aiogram.types import (
 )
 
 from app_context import set_redis
-from config import BOT_TOKEN, FLORIST_CHAT_ID, MINIAPP_URL, WEBAPP_HOST, WEBAPP_PORT
+from config import BOT_TOKEN, MINIAPP_URL, WEBAPP_HOST, WEBAPP_PORT
 
 try:
     from aiogram.fsm.storage.redis import RedisStorage
@@ -36,7 +37,13 @@ from notifications import router as notifications_router
 from order_service import submit_order
 from order_status import status_meta
 from poller import start_polling
-from webapp_buttons import tracking_keyboard
+from order_store import get_active_order_by_tg
+from webapp_buttons import (
+    launch_keyboard,
+    orders_list_keyboard,
+    setup_bot_menu_button,
+    tracking_keyboard,
+)
 from webapp_server import start_webapp_server
 
 logger = logging.getLogger(__name__)
@@ -217,13 +224,43 @@ async def begin_order_dialog(message: Message, state: FSMContext, intro: str) ->
     await state.set_state(OrderForm.name)
 
 
+async def _latest_order_id(tg_id: int) -> str | None:
+    redis = getattr(dp, "redis", None)
+    if redis:
+        order = await get_active_order_by_tg(redis, tg_id)
+        if order:
+            return str(order["order_id"])
+    orders = await get_orders_for_client(tg_id, limit=1)
+    if orders:
+        return str(orders[0]["posiflora_order_id"])
+    return None
+
+
 async def cmd_start(message: Message, state: FSMContext) -> None:
-    intro = (
-        "🌿 *Добро пожаловать в Veresk*\n"
-        "_trail of happiness_\n\n"
-        "Я помогу подобрать идеальный букет для вашего особенного момента."
+    """Открыть трекер статуса (Mini App). Заказ в чате — /order."""
+    await state.clear()
+    order_id = await _latest_order_id(message.from_user.id)
+    intro = "🌿 *Veresk*\n_trail of happiness_\n\n"
+    if order_id:
+        intro += (
+            f"Ваш заказ *№{order_id}* — нажмите кнопку ниже, "
+            "чтобы видеть этапы и детали в реальном времени."
+        )
+    else:
+        intro += (
+            "Здесь можно следить за заказом после оформления.\n"
+            "Новый букет — команда /order 🌸"
+        )
+
+    kb = launch_keyboard(order_id)
+    if kb:
+        await message.answer(intro, parse_mode=PARSE_MODE, reply_markup=kb)
+        return
+
+    await message.answer(
+        intro + "\n\n_Трекер временно недоступен — задайте MINIAPP_URL в настройках бота._",
+        parse_mode=PARSE_MODE,
     )
-    await begin_order_dialog(message, state, intro)
 
 
 async def cmd_order(message: Message, state: FSMContext) -> None:
@@ -252,7 +289,8 @@ async def cmd_orders(message: Message) -> None:
             f"  _{title}_"
         )
     lines.append("\n\n_Новый заказ: /order_")
-    await message.answer("".join(lines), parse_mode=PARSE_MODE)
+    kb = orders_list_keyboard(orders)
+    await message.answer("".join(lines), parse_mode=PARSE_MODE, reply_markup=kb)
 
 
 async def cmd_cancel(message: Message, state: FSMContext) -> None:
@@ -482,6 +520,37 @@ async def process_custom_relation(message: Message, state: FSMContext) -> None:
     await state.set_state(OrderForm.budget)
 
 
+async def on_miniapp_order(message: Message, bot: Bot) -> None:
+    """Заказ из Mini App через tg.sendData."""
+    raw = message.web_app_data.data if message.web_app_data else ""
+    try:
+        data = json.loads(raw)
+    except json.JSONDecodeError:
+        await message.answer(
+            "⚠️ Не удалось разобрать данные заказа. Попробуйте отправить ещё раз из приложения.",
+            parse_mode=PARSE_MODE,
+        )
+        return
+    if not isinstance(data, dict) or not data.get("name") or not data.get("phone"):
+        await message.answer(
+            "⚠️ В заявке не хватает имени или телефона.",
+            parse_mode=PARSE_MODE,
+        )
+        return
+
+    from order_service import finalize_miniapp_order
+
+    redis = getattr(dp, "redis", None)
+    try:
+        await finalize_miniapp_order(bot, data, message.from_user.id, redis=redis)
+    except Exception:
+        logger.exception("Mini App sendData failed for tg_id=%s", message.from_user.id)
+        await message.answer(
+            "⚠️ Не удалось принять заявку. Напишите /order или попробуйте снова из приложения.",
+            parse_mode=PARSE_MODE,
+        )
+
+
 async def process_budget(message: Message, state: FSMContext, bot: Bot) -> None:
     budget = message.text or ""
     if budget not in BUDGET_OPTIONS:
@@ -530,9 +599,7 @@ async def process_budget(message: Message, state: FSMContext, bot: Bot) -> None:
 
     track_kb = tracking_keyboard(order_id)
     if track_kb:
-        summary += (
-            "\n\n_Нажмите кнопку ниже — детали анкеты и этапы заказа 💜_"
-        )
+        summary += "\n\n_Нажмите «Следить за заказом» — этапы и детали в приложении 💜_"
 
     await message.answer(
         summary,
@@ -546,6 +613,7 @@ async def process_budget(message: Message, state: FSMContext, bot: Bot) -> None:
 
 def register_handlers(dp: Dispatcher) -> None:
     dp.message.register(cmd_start, CommandStart())
+    dp.message.register(on_miniapp_order, F.web_app_data)
     dp.message.register(cmd_order, Command("order"))
     dp.message.register(cmd_orders, Command("orders"))
     dp.message.register(cmd_cancel, Command("cancel"))
@@ -563,7 +631,7 @@ def register_handlers(dp: Dispatcher) -> None:
 
 
 BOT_COMMANDS = [
-    BotCommand(command="start", description="Заказать букет"),
+    BotCommand(command="start", description="Статус заказа"),
     BotCommand(command="order", description="Новый заказ"),
     BotCommand(command="orders", description="История ваших заказов"),
     BotCommand(command="cancel", description="Отменить текущую анкету"),
@@ -599,6 +667,7 @@ async def setup_menu_commands() -> None:
     for attempt in range(1, 4):
         try:
             await bot.set_my_commands(BOT_COMMANDS, request_timeout=90)
+            await setup_bot_menu_button(bot)
             logger.info("Меню команд бота обновлено")
             return
         except TelegramUnauthorizedError:
@@ -643,14 +712,16 @@ async def main() -> None:
         set_redis(redis)
         asyncio.create_task(start_polling(bot, redis))
         logger.info("🔄 Polling задача запущена")
-        if MINIAPP_URL:
-            await start_webapp_server(redis, WEBAPP_HOST, WEBAPP_PORT, bot=bot)
-        else:
-            logger.warning(
-                "⚠️ MINIAPP_URL не задан — API статусов отключён (задайте HTTPS-URL в .env)"
-            )
     else:
-        logger.warning("⚠️ Redis недоступен — polling и Mini App отключены")
+        logger.warning("⚠️ Redis недоступен — polling статусов отключён")
+
+    if MINIAPP_URL:
+        await start_webapp_server(redis, WEBAPP_HOST, WEBAPP_PORT, bot=bot)
+        logger.info("🌐 API трекера заказов запущен")
+    else:
+        logger.warning(
+            "⚠️ MINIAPP_URL не задан — трекер недоступен (задайте HTTPS-URL в .env)"
+        )
 
     await setup_menu_commands()
     await dp.start_polling(bot)
