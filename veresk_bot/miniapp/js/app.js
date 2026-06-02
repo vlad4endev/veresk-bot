@@ -9,14 +9,18 @@ if (tg) {
   tg.setHeaderColor("#402C60");
   tg.setBackgroundColor("#FAF7FF");
 
-  tg.BackButton.onClick(() => {
-    const current = getCurrentScreen();
-    if (current === "order" && window.VereskOrder?.getStep?.() > 1) {
-      window.VereskOrder.prevStep();
-      return;
-    }
-    if (current !== "home") goTo("home");
-  });
+  try {
+    tg.BackButton.onClick(() => {
+      const current = getCurrentScreen();
+      if (current === "order" && window.VereskOrder?.getStep?.() > 1) {
+        window.VereskOrder.prevStep();
+        return;
+      }
+      if (current !== "home") goTo("home");
+    });
+  } catch (e) {
+    console.warn("BackButton unavailable", e);
+  }
 }
 
 function getCurrentScreen() {
