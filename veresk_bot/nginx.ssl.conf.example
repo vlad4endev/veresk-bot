@@ -1,10 +1,18 @@
-# Основной конфиг: только порт 3005 (без 80/443 — не конфликтует с другими сервисами).
-# Замените YOUR_DOMAIN на домен или _ .
-# HTTPS: см. nginx.ssl.conf.example и docker-compose.ports в README.
+# Опционально: скопируйте в nginx.conf и добавьте в docker-compose порты 80:80, 443:443
+# и volume ./ssl:/etc/nginx/ssl:ro (fullchain.pem + privkey.pem).
 
 server {
-    listen 3005;
-    server_name _;
+    listen 80;
+    server_name YOUR_DOMAIN;
+    return 301 https://$host$request_uri;
+}
+
+server {
+    listen 443 ssl;
+    server_name YOUR_DOMAIN;
+
+    ssl_certificate     /etc/nginx/ssl/fullchain.pem;
+    ssl_certificate_key /etc/nginx/ssl/privkey.pem;
 
     location /miniapp/ {
         root /usr/share/nginx/html;
