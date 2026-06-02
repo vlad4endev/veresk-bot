@@ -27,12 +27,43 @@ html, body {
   overflow-x: hidden;
 }
 
+.tg-guard {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  z-index: 9999;
+  padding: 12px 16px;
+  background: linear-gradient(135deg, #402c60, #6b4e9a);
+  color: #fff;
+  font-size: 14px;
+  line-height: 1.45;
+  box-shadow: 0 4px 20px rgba(64, 44, 96, 0.35);
+}
+
+.tg-guard.hidden {
+  display: none;
+}
+
+.tg-guard-title {
+  font-weight: 600;
+  margin-bottom: 4px;
+}
+
+.tg-guard-text strong {
+  font-weight: 600;
+}
+
 #app {
   position: relative;
   max-width: 440px;
   margin: 0 auto;
   min-height: 100vh;
   overflow: hidden;
+}
+
+body:has(.tg-guard:not(.hidden)) #app {
+  padding-top: 88px;
 }
 
 /* Screens */

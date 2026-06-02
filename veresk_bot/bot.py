@@ -288,14 +288,6 @@ async def handle_miniapp_data(message: Message, bot: Bot) -> None:
 
     client_tg_id = message.from_user.id
     redis = getattr(dp, "redis", None)
-
-    await message.answer(
-        "✅ *Заявка принята!*\n\n"
-        "Флорист свяжется с вами в течение *15 минут* 🌷\n\n"
-        "_Спасибо, что выбираете Veresk_",
-        parse_mode=PARSE_MODE,
-    )
-
     await finalize_miniapp_order(bot, data, client_tg_id, redis=redis)
 
 

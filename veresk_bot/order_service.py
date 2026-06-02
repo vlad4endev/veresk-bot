@@ -84,6 +84,14 @@ async def finalize_miniapp_order(
     """Создать заказ из Mini App и уведомить клиента в чате."""
     from webapp_buttons import tracking_keyboard
 
+    await bot.send_message(
+        client_tg_id,
+        "✅ *Заявка принята!*\n\n"
+        "Флорист свяжется с вами в течение *15 минут* 🌷\n\n"
+        "_Спасибо, что выбираете Veresk_",
+        parse_mode="Markdown",
+    )
+
     order_id, posiflora_ok = await submit_order(bot, data, client_tg_id, redis=redis)
 
     if not posiflora_ok:

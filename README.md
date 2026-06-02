@@ -53,7 +53,7 @@ cp .env.example .env
 | `POSIFLORA_BASE_URL` | URL API (по умолчанию demo) |
 | `REDIS_URL` | Redis для FSM, polling и Mini App |
 | `MINIAPP_URL` | Публичный **HTTPS**-адрес Mini App (например `https://orders.veresk.ru/miniapp/`) |
-| `WEBAPP_PORT` | Порт API внутри контейнера `bot` (по умолчанию `8080`) |
+| `WEBAPP_PORT` | Порт API внутри контейнера `bot` (по умолчанию `3005`) |
 | `DATABASE_PATH` | Путь к SQLite (в Docker: `/app/data/veresk.db`, том `./data`) |
 
 **Как узнать `FLORIST_CHAT_ID`:** напишите боту [@userinfobot](https://t.me/userinfobot) из нужного чата или добавьте бота в группу и посмотрите `chat.id` в логах.
@@ -82,13 +82,28 @@ python bot.py
 
 1. В `nginx.conf` замените `YOUR_DOMAIN` на ваш домен.
 2. Положите сертификаты Let's Encrypt в `veresk_bot/ssl/` (`fullchain.pem`, `privkey.pem`).
-3. В `.env`: `MINIAPP_URL=https://ваш-домен/miniapp/`
+3. В `.env`: `MINIAPP_URL=https://ваш-домен/miniapp/` — **тот же URL**, что открывает Telegram (со слэшем в конце).
 4. `docker compose up -d --build`
-5. В [@BotFather](https://t.me/BotFather) → **Menu Button** → URL Mini App.
+5. В [@BotFather](https://t.me/BotFather) → ваш бот → **Bot Settings** → **Domain** — укажите домен без `https://` (например `orders.veresk.ru`).
+6. Кнопка меню слева в чате выставляется ботом автоматически из `MINIAPP_URL` при старте.
 
 Команды бота: `/start` — открыть приложение, `/order` — заказ в чате (как раньше).
 
-Заказ из Mini App уходит в бот через `tg.sendData()` → создаётся заказ в Posiflora. Статус на главной обновляется через `/api/order/active` (polling каждые 15 с).
+Заказ из Mini App уходит в бот через `tg.sendData()` или запасной `POST /api/order/submit` (с подписью `initData`). Статус на главной — `/api/order/active` (polling каждые 15 с).
+
+### Если Mini App «как обычный сайт»
+
+| Симптом | Причина |
+|--------|---------|
+| Нет профиля и истории заказов | Открыли URL в Safari/Chrome, а не в Telegram — `initData` пустой |
+| Заказ не доходит до бота | То же: вне Telegram нет `sendData` и авторизации API |
+| Всё пусто после деплоя | `MINIAPP_URL` не совпадает с реальным адресом или домен не добавлен в BotFather |
+| API 401 | Другой `BOT_TOKEN` на сервере, не тот бот, из которого открыли приложение |
+
+**Правильно:** Telegram → ваш бот → `/start` → «🌸 Открыть Veresk» или кнопка меню слева внизу.  
+**Неправильно:** вставить ссылку `https://.../miniapp/` в браузер.
+
+Для Mini App нужен **HTTPS** (не `http://`), кроме локальной отладки.
 
 ## Деплой на сервер
 

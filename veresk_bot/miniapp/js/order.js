@@ -15,12 +15,50 @@ const PROFILE_STEPS = 2;
 let currentStep = 1;
 let skipProfileSteps = false;
 
-function getInitData() {
-  return tg?.initData || "";
+function apiHeaders() {
+  if (window.VereskTelegram?.apiHeaders) {
+    const h = window.VereskTelegram.apiHeaders();
+    return { "X-Telegram-Init-Data": h["X-Telegram-Init-Data"] || "" };
+  }
+  return { "X-Telegram-Init-Data": window.tg?.initData || "" };
 }
 
-function apiHeaders() {
-  return { "X-Telegram-Init-Data": getInitData() };
+async function submitOrderToApi(payload) {
+  const resp = await fetch("/api/order/submit", {
+    method: "POST",
+    headers: window.VereskTelegram?.apiHeaders?.() || {
+      "Content-Type": "application/json",
+      ...apiHeaders(),
+    },
+    body: JSON.stringify(payload),
+  });
+  if (resp.status === 401) {
+    throw new Error("telegram_auth");
+  }
+  if (!resp.ok) {
+    throw new Error("submit_failed");
+  }
+  return resp.json();
+}
+
+async function deliverOrder(payload) {
+  const canSendData = typeof window.tg?.sendData === "function" && window.VereskTelegram?.hasAuth?.();
+
+  if (canSendData) {
+    try {
+      window.tg.sendData(JSON.stringify(payload));
+      return { via: "sendData" };
+    } catch (e) {
+      console.warn("sendData failed, fallback to API", e);
+    }
+  }
+
+  if (!window.VereskTelegram?.hasAuth?.()) {
+    throw new Error("telegram_auth");
+  }
+
+  const result = await submitOrderToApi(payload);
+  return { via: "api", ...result };
 }
 
 async function fetchClientProfile() {
@@ -266,19 +304,33 @@ function renderSummary() {
     .join("");
 }
 
-document.getElementById("btn-submit")?.addEventListener("click", () => {
+document.getElementById("btn-submit")?.addEventListener("click", async () => {
   if (!validateStep(TOTAL_STEPS)) return;
+
+  const btn = document.getElementById("btn-submit");
+  if (btn) btn.disabled = true;
 
   document.getElementById("done-name").textContent = orderData.name;
   renderSummary();
 
   try {
-    tg?.sendData(JSON.stringify(orderData));
+    const result = await deliverOrder({ ...orderData });
+    if (result.order_id && window.VereskStatus?.setOrderId) {
+      window.VereskStatus.setOrderId(result.order_id);
+    }
+    goTo("done");
   } catch (e) {
     console.error(e);
+    if (e.message === "telegram_auth") {
+      window.tg?.showAlert?.(
+        "Откройте приложение через бота: /start → «Открыть Veresk»"
+      );
+    } else {
+      window.tg?.showAlert?.("Не удалось отправить заказ. Попробуйте ещё раз.");
+    }
+  } finally {
+    if (btn) btn.disabled = false;
   }
-
-  goTo("done");
 });
 
 window.VereskOrder = { reset, prevStep, nextStep, getStep: () => currentStep };

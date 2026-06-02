@@ -1,13 +1,35 @@
 /* global VereskStatus, VereskOrder */
 
 const tg = window.Telegram?.WebApp;
+window.tg = tg;
+
 const SCREEN_ORDER = ["home", "order", "status", "done"];
+
+function hasTelegramAuth() {
+  return Boolean(tg?.initData);
+}
+
+function updateTelegramGuard() {
+  const guard = document.getElementById("tg-guard");
+  if (!guard) return;
+  guard.classList.toggle("hidden", hasTelegramAuth());
+}
+
+window.VereskTelegram = {
+  getInitData: () => tg?.initData || "",
+  apiHeaders: () => ({
+    "Content-Type": "application/json",
+    "X-Telegram-Init-Data": tg?.initData || "",
+  }),
+  hasAuth: hasTelegramAuth,
+};
 
 if (tg) {
   tg.ready();
   tg.expand();
   tg.setHeaderColor("#402C60");
   tg.setBackgroundColor("#FAF7FF");
+  updateTelegramGuard();
 
   try {
     tg.BackButton.onClick(() => {
@@ -21,6 +43,8 @@ if (tg) {
   } catch (e) {
     console.warn("BackButton unavailable", e);
   }
+} else {
+  document.addEventListener("DOMContentLoaded", updateTelegramGuard);
 }
 
 function getCurrentScreen() {

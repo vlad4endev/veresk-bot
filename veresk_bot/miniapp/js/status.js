@@ -12,12 +12,12 @@ let activeOrderId = null;
 let pollTimer = null;
 const POLL_MS = 15000;
 
-function getInitData() {
-  return tg?.initData || "";
-}
-
 function apiHeaders() {
-  return { "X-Telegram-Init-Data": getInitData() };
+  if (window.VereskTelegram?.apiHeaders) {
+    const h = window.VereskTelegram.apiHeaders();
+    return { "X-Telegram-Init-Data": h["X-Telegram-Init-Data"] || "" };
+  }
+  return { "X-Telegram-Init-Data": window.tg?.initData || "" };
 }
 
 function renderTimeline(containerId, steps) {
