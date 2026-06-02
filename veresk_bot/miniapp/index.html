@@ -20,27 +20,34 @@
     <!-- HOME -->
     <div id="screen-home" class="screen active">
       <div class="hero">
-        <div class="hero-glow" aria-hidden="true"></div>
         <div class="hero-deco" aria-hidden="true"></div>
-        <img
-          src="assets/logo-veresk.png?v=3"
-          alt="Veresk — Флористический салон"
-          class="hero-logo"
-          width="220"
-          height="218"
-          decoding="async"
-        >
-        <h1 class="hero-title">Ваш заказ</h1>
-        <p class="hero-desc">Статус и история в реальном времени</p>
+        <div class="hero-brand">
+          <div class="hero-logo-ring" aria-hidden="true"></div>
+          <img
+            src="assets/logo-veresk.png?v=4"
+            alt="Veresk — Флористический салон"
+            class="hero-logo"
+            width="168"
+            height="166"
+            decoding="async"
+          >
+        </div>
+        <div class="hero-message">
+          <p class="hero-eyebrow">Трекер заказа</p>
+          <h1 class="hero-title">Где сейчас ваш букет</h1>
+          <p class="hero-desc">
+            Ниже — этапы: от приёма заявки до передачи курьеру. Обновляется автоматически.
+          </p>
+        </div>
       </div>
 
       <div class="home-body">
         <p class="order-hint" id="order-hint">
-          Новый букет — напишите боту <strong>/order</strong>
+          Хотите новый букет? В чате с ботом отправьте <strong>/order</strong>
         </p>
 
         <div id="status-section">
-          <div class="section-label">Статус заказа</div>
+          <div class="section-label">Текущий заказ</div>
           <div class="status-card hidden" id="status-preview">
             <div class="status-card-head">
               <div>
@@ -52,7 +59,9 @@
             <div class="timeline" id="preview-timeline"></div>
             <button type="button" class="link-btn" id="btn-open-status">Подробнее ›</button>
           </div>
-          <p class="empty-status" id="status-empty">У вас пока нет активных заказов</p>
+          <p class="empty-status" id="status-empty">
+            Активных заказов нет. После оформления в боте здесь появятся этапы доставки.
+          </p>
         </div>
 
         <div id="history-section" class="hidden">
