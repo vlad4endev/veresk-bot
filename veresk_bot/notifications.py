@@ -4,6 +4,10 @@ import logging
 from datetime import datetime
 
 from aiogram import Bot, F, Router
+
+import app_context
+from order_store import update_order_status
+from webapp_buttons import tracking_keyboard
 from aiogram.types import (
     CallbackQuery,
     InlineKeyboardButton,
@@ -131,16 +135,20 @@ async def on_accept(callback: CallbackQuery, bot: Bot) -> None:
             parse_mode=PARSE_MODE,
         )
 
+    if app_context.redis_client:
+        await update_order_status(app_context.redis_client, order_id, "confirmed")
+
     try:
         await bot.send_message(
             chat_id=client_tg_id,
             text=(
                 "🌷 *Ваш заказ подтверждён!*\n\n"
                 "Флорист уже приступает к созданию вашего букета.\n"
-                "Если появятся вопросы — мы напишем вам здесь.\n\n"
+                "Статус можно смотреть в трекере заказа.\n\n"
                 "_Veresk · trail of happiness_"
             ),
             parse_mode=PARSE_MODE,
+            reply_markup=tracking_keyboard(order_id),
         )
     except Exception:
         logger.exception(
@@ -166,6 +174,9 @@ async def on_decline(callback: CallbackQuery, bot: Bot) -> None:
             parse_mode=PARSE_MODE,
         )
 
+    if app_context.redis_client:
+        await update_order_status(app_context.redis_client, order_id, "cancelled")
+
     try:
         await bot.send_message(
             chat_id=client_tg_id,
@@ -178,6 +189,7 @@ async def on_decline(callback: CallbackQuery, bot: Bot) -> None:
                 "_Veresk · trail of happiness_"
             ),
             parse_mode=PARSE_MODE,
+            reply_markup=tracking_keyboard(order_id),
         )
     except Exception:
         logger.exception(

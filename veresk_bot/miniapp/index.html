@@ -1,0 +1,226 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
+  <title>Veresk</title>
+  <link rel="stylesheet" href="css/style.css">
+  <link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,500;0,600;1,400;1,500;1,600&family=DM+Sans:wght@300;400;500&display=swap" rel="stylesheet">
+  <script src="https://telegram.org/js/telegram-web-app.js"></script>
+</head>
+<body>
+  <div id="app">
+    <!-- HOME -->
+    <div id="screen-home" class="screen active">
+      <div class="hero">
+        <div class="hero-deco" aria-hidden="true"></div>
+        <div class="hero-logo">
+          <svg class="hero-icon" width="40" height="40" viewBox="0 0 40 40" fill="none" aria-hidden="true">
+            <circle cx="20" cy="20" r="19" stroke="rgba(244,125,185,0.35)" stroke-width="1"/>
+            <path d="M20 8c-2 6-6 8-6 12a6 6 0 0 0 12 0c0-4-4-6-6-12z" fill="rgba(244,125,185,0.5)"/>
+            <path d="M14 28h12" stroke="rgba(255,255,255,0.4)" stroke-width="1"/>
+          </svg>
+          <div>
+            <div class="hero-brand">Veresk</div>
+            <div class="hero-tagline">trail of happiness</div>
+          </div>
+        </div>
+        <h1 class="hero-title">Букет для<br>особого момента</h1>
+        <p class="hero-desc">Создаём букеты с душой — для каждого события</p>
+      </div>
+
+      <div class="home-body">
+        <button type="button" class="cta-btn" id="btn-order">
+          <div class="cta-icon">💐</div>
+          <div class="cta-text">
+            <span class="cta-title">Заказать букет</span>
+            <span class="cta-sub">Флорист свяжется за 15 мин</span>
+          </div>
+          <span class="cta-arrow">›</span>
+        </button>
+
+        <div id="status-section">
+          <div class="section-label">Статус заказа</div>
+          <div class="status-card hidden" id="status-preview">
+            <div class="status-card-head">
+              <div>
+                <div class="order-id" id="preview-order-id">Заказ #—</div>
+                <div class="order-date" id="preview-order-sub">—</div>
+              </div>
+              <span class="status-badge" id="preview-badge">—</span>
+            </div>
+            <div class="timeline" id="preview-timeline"></div>
+            <button type="button" class="link-btn" id="btn-open-status">Подробнее ›</button>
+          </div>
+          <p class="empty-status" id="status-empty">У вас пока нет активных заказов</p>
+        </div>
+
+        <div id="history-section" class="hidden">
+          <div class="section-label">История заказов</div>
+          <div class="history-list" id="order-history-list"></div>
+        </div>
+
+        <div class="contacts-row">
+          <span class="contacts-emoji">📞</span>
+          <div>
+            <a class="contact-phone" href="tel:+79940049983">+7 994 004 99 83</a>
+            <div class="contact-sub">@verba_flowers · hello@verba.com</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ORDER -->
+    <div id="screen-order" class="screen">
+      <div class="screen-header">
+        <button type="button" class="back-btn" id="order-back" aria-label="Назад">‹</button>
+        <div>
+          <div class="header-title">Новый букет</div>
+          <div class="header-sub">trail of happiness</div>
+        </div>
+      </div>
+
+      <div class="progress-wrap">
+        <div class="progress-bar">
+          <div class="progress-fill" id="progress-fill" style="width: 16%"></div>
+        </div>
+        <div class="progress-text" id="progress-text">Шаг 1 из 6</div>
+      </div>
+
+      <div class="screen-body order-body">
+        <div class="order-step active" data-step="1">
+          <div class="field-group">
+            <label class="field-label" for="field-name">Ваше имя</label>
+            <input type="text" class="field-input" id="field-name" placeholder="Введите имя" autocomplete="name">
+          </div>
+        </div>
+
+        <div class="order-step" data-step="2">
+          <div class="field-group">
+            <label class="field-label">Телефон</label>
+            <button type="button" class="tg-phone-btn" id="btn-share-phone">📱 Поделиться номером</button>
+            <div class="or-divider"><span>или введите вручную</span></div>
+            <input type="tel" class="field-input" id="field-phone" placeholder="+7 (___) ___-__-__" autocomplete="tel">
+          </div>
+        </div>
+
+        <div class="order-step" data-step="3">
+          <div class="field-group">
+            <label class="field-label">Когда нужен букет?</label>
+            <div class="chips-wrap" data-field="date">
+              <div class="chip" data-value="Сегодня">Сегодня</div>
+              <div class="chip" data-value="Завтра">Завтра</div>
+              <div class="chip" data-value="Через 2–3 дня">Через 2–3 дня</div>
+              <div class="chip" data-value="Через неделю">Через неделю</div>
+              <div class="chip" data-value="Через 2 недели">Через 2 недели</div>
+              <div class="chip" data-value="Другая дата">Другая дата</div>
+            </div>
+            <input type="text" class="field-input hidden" id="field-custom-date" placeholder="ДД.ММ.ГГГГ">
+          </div>
+        </div>
+
+        <div class="order-step" data-step="4">
+          <div class="field-group">
+            <label class="field-label" for="field-recipient">Получатель</label>
+            <input type="text" class="field-input" id="field-recipient" placeholder="Имя получателя">
+          </div>
+        </div>
+
+        <div class="order-step" data-step="5">
+          <div class="field-group">
+            <label class="field-label">Повод</label>
+            <div class="chips-wrap" data-field="occasion">
+              <div class="chip" data-value="День рождения 🎂">День рождения 🎂</div>
+              <div class="chip" data-value="Годовщина 💍">Годовщина 💍</div>
+              <div class="chip" data-value="Свидание 💋">Свидание 💋</div>
+              <div class="chip" data-value="Просто так 🌷">Просто так 🌷</div>
+              <div class="chip" data-value="Выздоровление 🤍">Выздоровление 🤍</div>
+              <div class="chip" data-value="Другое">Другое</div>
+            </div>
+            <input type="text" class="field-input hidden" id="field-custom-occasion" placeholder="Опишите своими словами">
+          </div>
+        </div>
+
+        <div class="order-step" data-step="6">
+          <div class="field-group">
+            <label class="field-label">Кем приходится получатель?</label>
+            <div class="chips-wrap" data-field="relation">
+              <div class="chip" data-value="Девушка / Жена">Девушка / Жена</div>
+              <div class="chip" data-value="Мама">Мама</div>
+              <div class="chip" data-value="Дочь">Дочь</div>
+              <div class="chip" data-value="Подруга">Подруга</div>
+              <div class="chip" data-value="Коллега">Коллега</div>
+              <div class="chip" data-value="Другое">Другое</div>
+            </div>
+            <input type="text" class="field-input hidden" id="field-custom-relation" placeholder="Опишите своими словами">
+          </div>
+          <div class="field-group">
+            <label class="field-label">Бюджет</label>
+            <div class="budget-grid" data-field="budget">
+              <div class="budget-chip" data-value="до 5 000 ₽">до 5 000 ₽</div>
+              <div class="budget-chip" data-value="до 10 000 ₽">до 10 000 ₽</div>
+              <div class="budget-chip" data-value="до 15 000 ₽">до 15 000 ₽</div>
+              <div class="budget-chip" data-value="от 15 000 ₽">от 15 000 ₽</div>
+            </div>
+          </div>
+        </div>
+
+        <div class="order-nav">
+          <button type="button" class="nav-btn secondary hidden" id="btn-step-prev">Назад</button>
+          <button type="button" class="nav-btn" id="btn-step-next">Далее</button>
+        </div>
+        <button type="button" class="submit-btn hidden" id="btn-submit">Оформить заказ 🌸</button>
+      </div>
+    </div>
+
+    <!-- STATUS -->
+    <div id="screen-status" class="screen">
+      <div class="screen-header">
+        <button type="button" class="back-btn" id="status-back" aria-label="Назад">‹</button>
+        <div>
+          <div class="header-title">Заказ #<span id="status-order-id">—</span></div>
+          <div class="header-sub" id="status-order-sub">—</div>
+        </div>
+      </div>
+      <div class="screen-body">
+        <div class="detail-card">
+          <div class="detail-card-label">Детали заказа</div>
+          <div id="order-details-table" class="details-table"></div>
+        </div>
+        <div class="detail-card">
+          <div class="detail-card-label">История статусов</div>
+          <div class="timeline" id="status-timeline"></div>
+        </div>
+        <div class="contact-hint">
+          <div>
+            <div class="contact-hint-title">Вопросы по заказу?</div>
+            <div class="contact-hint-sub">@verba_flowers</div>
+          </div>
+          <div class="contact-hint-icon">💬</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- DONE -->
+    <div id="screen-done" class="screen">
+      <div class="done-wrap">
+        <div class="done-icon">🌸</div>
+        <div>
+          <h2 class="done-title">Спасибо, <span id="done-name">друг</span>!</h2>
+          <p class="done-desc">Флорист свяжется с вами<br>в течение 15 минут</p>
+        </div>
+        <div class="summary-card">
+          <div class="summary-label">Ваш заказ</div>
+          <div id="summary-rows"></div>
+        </div>
+        <button type="button" class="submit-btn" id="btn-go-status">Отслеживать заказ 🌸</button>
+        <button type="button" class="submit-btn secondary" id="btn-go-home">На главную</button>
+      </div>
+    </div>
+  </div>
+
+  <script src="js/app.js"></script>
+  <script src="js/order.js"></script>
+  <script src="js/status.js"></script>
+</body>
+</html>

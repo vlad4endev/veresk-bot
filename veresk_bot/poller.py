@@ -9,13 +9,16 @@ import logging
 
 from aiogram import Bot
 
+from client_db import update_order_status_db
 from config import POLL_INTERVAL
-from order_store import delete_order, get_all_orders, update_order_status
+from order_status import normalize_status
+from order_store import get_all_orders, update_order_status
 from posiflora import get_order_status
+from webapp_buttons import tracking_keyboard
 
 logger = logging.getLogger(__name__)
 
-# ── Финальные статусы — после них заказ удаляется из Redis ───────────────────
+# Финальные статусы — заказ остаётся в Redis до TTL (Mini App)
 FINAL_STATUSES = {"delivered", "cancelled", "returned"}
 
 # ── Тексты уведомлений клиенту по статусу ────────────────────────────────────
@@ -63,10 +66,10 @@ async def poll_once(bot: Bot, redis) -> None:
     for order in orders:
         order_id = order["order_id"]
         tg_id = order["tg_id"]
-        last_status = order["status"]
+        last_status = normalize_status(order["status"])
 
         try:
-            current_status = await get_order_status(order_id)
+            current_status = normalize_status(await get_order_status(order_id))
         except Exception:
             logger.exception("❌ Не удалось получить статус заказа #%s", order_id)
             continue
@@ -83,15 +86,17 @@ async def poll_once(bot: Bot, redis) -> None:
                     chat_id=tg_id,
                     text=msg,
                     parse_mode="Markdown",
+                    reply_markup=tracking_keyboard(order_id),
                 )
                 logger.info("✅ Клиент %s уведомлён: %s", tg_id, current_status)
             except Exception:
                 logger.exception("❌ Не удалось уведомить клиента %s", tg_id)
 
         await update_order_status(redis, order_id, current_status)
-
-        if current_status in FINAL_STATUSES:
-            await delete_order(redis, order_id)
+        try:
+            await update_order_status_db(order_id, current_status)
+        except Exception:
+            logger.debug("Не обновлён статус в SQLite для #%s", order_id)
 
 
 async def start_polling(bot: Bot, redis) -> None:

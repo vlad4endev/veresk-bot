@@ -17,6 +17,7 @@ build/
 
 # Логи и ОС
 logs/
+veresk_bot/data/
 *.log
 .DS_Store
 Thumbs.db

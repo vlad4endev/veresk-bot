@@ -1,0 +1,78 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+  <title>Veresk — ваш заказ</title>
+  <script src="https://telegram.org/js/telegram-web-app.js"></script>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,500;0,600;1,500&family=Manrope:wght@400;500;600;700&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="css/style.css" />
+</head>
+<body>
+  <div class="bg-glow" aria-hidden="true"></div>
+
+  <main class="app" id="app">
+    <header class="brand">
+      <div class="brand-mark">V</div>
+      <div class="brand-text">
+        <h1>Veresk</h1>
+        <p class="tagline">trail of happiness</p>
+      </div>
+    </header>
+
+    <section class="loader" id="loader">
+      <div class="loader-ring"></div>
+      <p>Загружаем ваш заказ…</p>
+    </section>
+
+    <section class="error hidden" id="error">
+      <p class="error-icon">🌿</p>
+      <h2>Не удалось открыть заказ</h2>
+      <p class="error-text" id="error-text"></p>
+    </section>
+
+    <section class="content hidden" id="content">
+      <div class="order-badge">
+        <span>Заказ</span>
+        <strong id="order-id">—</strong>
+      </div>
+
+      <article class="status-hero" id="status-hero">
+        <div class="status-icon" id="status-icon">📝</div>
+        <h2 id="status-label">Заявка принята</h2>
+        <p id="status-subtitle">Мы получили вашу анкету</p>
+        <div class="progress-track">
+          <div class="progress-fill" id="progress-fill"></div>
+        </div>
+        <p class="progress-pct"><span id="progress-pct">0</span>%</p>
+      </article>
+
+      <section class="timeline" id="timeline" aria-label="Ход выполнения заказа"></section>
+
+      <section class="details-card">
+        <h3>Детали букета</h3>
+        <dl class="details-list">
+          <div><dt>Получатель</dt><dd id="d-recipient">—</dd></div>
+          <div><dt>Дата</dt><dd id="d-date">—</dd></div>
+          <div><dt>Повод</dt><dd id="d-occasion">—</dd></div>
+          <div><dt>Бюджет</dt><dd id="d-budget">—</dd></div>
+        </dl>
+      </section>
+
+      <p class="live-hint">
+        <span class="pulse-dot"></span>
+        Обновляется в реальном времени
+      </p>
+    </section>
+
+    <footer class="footer">
+      <p>Veresk · trail of happiness</p>
+      <a href="tel:+79940049983">+7 994 004 99 83</a>
+    </footer>
+  </main>
+
+  <script src="js/app.js"></script>
+</body>
+</html>

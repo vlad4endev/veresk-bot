@@ -1,23 +1,31 @@
 import asyncio
+import json
 import logging
 import os
 import re
+from datetime import datetime
 from logging.handlers import RotatingFileHandler
 
 from aiogram import Bot, Dispatcher, F
+from aiogram.client.session.aiohttp import AiohttpSession
+from aiogram.exceptions import TelegramNetworkError, TelegramUnauthorizedError
 from aiogram.filters import Command, CommandStart
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.fsm.storage.memory import MemoryStorage
 from aiogram.types import (
     BotCommand,
+    InlineKeyboardButton,
+    InlineKeyboardMarkup,
     KeyboardButton,
     Message,
     ReplyKeyboardMarkup,
     ReplyKeyboardRemove,
+    WebAppInfo,
 )
 
-from config import BOT_TOKEN, FLORIST_CHAT_ID
+from app_context import set_redis
+from config import BOT_TOKEN, FLORIST_CHAT_ID, MINIAPP_URL, WEBAPP_HOST, WEBAPP_PORT
 
 try:
     from aiogram.fsm.storage.redis import RedisStorage
@@ -27,10 +35,13 @@ try:
 except ImportError:
     storage = MemoryStorage()
 
-from notifications import notify_florist, router as notifications_router
-from order_store import save_order
+from client_db import get_client, get_orders_for_client
+from notifications import router as notifications_router
+from order_service import submit_order
+from order_status import status_meta
 from poller import start_polling
-from posiflora import create_posiflora_order
+from webapp_buttons import tracking_keyboard
+from webapp_server import start_webapp_server
 
 logger = logging.getLogger(__name__)
 
@@ -87,6 +98,20 @@ BUDGET_OPTIONS = {
 
 def progress(step: int, total: int = 7) -> str:
     return "🟣" * step + "⚪️" * (total - step) + f"  {step}/{total}"
+
+
+async def form_progress(state: FSMContext, logical_step: int) -> str:
+    data = await state.get_data()
+    if data.get("returning"):
+        return progress(max(1, logical_step - 2), 5)
+    return progress(logical_step, 7)
+
+
+def _format_order_date(iso: str) -> str:
+    try:
+        return datetime.fromisoformat(iso).strftime("%d.%m.%Y")
+    except ValueError:
+        return iso[:10] if iso else "—"
 
 
 def kb_phone() -> ReplyKeyboardMarkup:
@@ -166,16 +191,124 @@ def kb_budget() -> ReplyKeyboardMarkup:
     )
 
 
+def miniapp_keyboard() -> InlineKeyboardMarkup | None:
+    if not MINIAPP_URL:
+        return None
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text="🌸 Открыть Veresk",
+                    web_app=WebAppInfo(url=MINIAPP_URL),
+                )
+            ]
+        ]
+    )
+
+
 async def cmd_start(message: Message, state: FSMContext) -> None:
     await state.clear()
-    await message.answer(
+    text = (
         "🌿 *Добро пожаловать в Veresk*\n"
         "_trail of happiness_\n\n"
-        "Я помогу подобрать идеальный букет для вашего особенного момента.\n\n"
+        "Нажмите кнопку, чтобы открыть приложение и заказать букет 🌸"
+    )
+    kb = miniapp_keyboard()
+    if not kb:
+        text += "\n\n_Или напишите /order для заказа в чате_"
+    await message.answer(text, parse_mode=PARSE_MODE, reply_markup=kb)
+
+
+async def cmd_order(message: Message, state: FSMContext) -> None:
+    """Заказ через диалог в чате (альтернатива Mini App)."""
+    await state.clear()
+    tg_id = message.from_user.id
+    client = await get_client(tg_id)
+
+    if client:
+        await state.update_data(
+            name=client["name"],
+            phone=client["phone"],
+            returning=True,
+        )
+        await message.answer(
+            "🌿 *Заказ букета в чате*\n"
+            "_trail of happiness_\n\n"
+            f"С возвращением, *{client['name']}* 🌸\n\n"
+            "Когда нужен букет?",
+            parse_mode=PARSE_MODE,
+            reply_markup=kb_date(),
+        )
+        await state.set_state(OrderForm.date)
+        return
+
+    await state.update_data(returning=False)
+    await message.answer(
+        "🌿 *Заказ букета в чате*\n"
+        "_trail of happiness_\n\n"
         "Как вас зовут?",
         parse_mode=PARSE_MODE,
     )
     await state.set_state(OrderForm.name)
+
+
+async def cmd_orders(message: Message) -> None:
+    """История заказов клиента."""
+    orders = await get_orders_for_client(message.from_user.id, limit=15)
+    if not orders:
+        await message.answer(
+            "📋 У вас пока нет заказов.\n\n"
+            "Нажмите /order или откройте приложение, чтобы оформить первый букет 🌸",
+            parse_mode=PARSE_MODE,
+        )
+        return
+
+    lines = ["📋 *Ваши заказы*\n"]
+    for o in orders:
+        title = status_meta(o.get("status", "new")).get("label", "—")
+        created = _format_order_date(o.get("created_at", ""))
+        lines.append(
+            f"\n• *№{o['posiflora_order_id']}* · {created}\n"
+            f"  🎁 {o['recipient']} · 📅 {o['delivery_date']}\n"
+            f"  _{title}_"
+        )
+    lines.append("\n\n_Новый заказ: /order_")
+    await message.answer("".join(lines), parse_mode=PARSE_MODE)
+
+
+async def handle_miniapp_data(message: Message, bot: Bot) -> None:
+    """Принимает JSON из Mini App и создаёт заказ."""
+    try:
+        data = json.loads(message.web_app_data.data)
+    except (json.JSONDecodeError, TypeError, AttributeError):
+        logger.error("Невалидный JSON из MiniApp")
+        await message.answer("⚠️ Не удалось обработать заказ. Попробуйте ещё раз.")
+        return
+
+    client_tg_id = message.from_user.id
+    redis = getattr(dp, "redis", None)
+
+    await message.answer(
+        "✅ *Заявка принята!*\n\n"
+        "Флорист свяжется с вами в течение *15 минут* 🌷\n\n"
+        "_Спасибо, что выбираете Veresk_",
+        parse_mode=PARSE_MODE,
+    )
+
+    order_id, posiflora_ok = await submit_order(bot, data, client_tg_id, redis=redis)
+    if not posiflora_ok:
+        await message.answer(
+            "⚠️ Заявка принята, но возникла задержка с CRM. "
+            "Флорист свяжется с вами вручную.",
+            parse_mode=PARSE_MODE,
+        )
+
+    track_kb = tracking_keyboard(order_id)
+    if track_kb:
+        await message.answer(
+            "Откройте трекер, чтобы следить за заказом в реальном времени 💜",
+            reply_markup=track_kb,
+        )
 
 
 async def cmd_cancel(message: Message, state: FSMContext) -> None:
@@ -202,7 +335,7 @@ async def process_name(message: Message, state: FSMContext) -> None:
 
     await state.update_data(name=name)
     await message.answer(
-        f"{progress(1)}\n\n"
+        f"{await form_progress(state, 1)}\n\n"
         f"Приятно познакомиться, *{name}* 🌸\n\n"
         "Укажите ваш номер телефона — флорист позвонит, чтобы уточнить детали букета 📞\n\n"
         "_Нажмите кнопку ниже или введите номер вручную_",
@@ -217,7 +350,7 @@ async def _save_phone_and_continue(
 ) -> None:
     await state.update_data(phone=phone)
     await message.answer(
-        f"{progress(2)}\n\n"
+        f"{await form_progress(state, 2)}\n\n"
         "Отлично! Флорист сможет с вами связаться ✅\n\n"
         "Когда нужен букет?",
         parse_mode=PARSE_MODE,
@@ -251,7 +384,7 @@ async def process_phone_text(message: Message, state: FSMContext) -> None:
 async def process_date(message: Message, state: FSMContext) -> None:
     if message.text == "Другая дата":
         await message.answer(
-            f"{progress(3)}\n\n"
+            f"{await form_progress(state, 3)}\n\n"
             "Введите дату в формате *ДД.ММ.ГГГГ* 📅\n"
             "_Например: 15.06.2025_",
             parse_mode=PARSE_MODE,
@@ -271,7 +404,7 @@ async def process_date(message: Message, state: FSMContext) -> None:
 
     await state.update_data(date=date_choice)
     await message.answer(
-        f"{progress(3)}\n\n"
+        f"{await form_progress(state, 3)}\n\n"
         "Как зовут счастливого получателя? 💌",
         reply_markup=ReplyKeyboardRemove(),
         parse_mode=PARSE_MODE,
@@ -291,7 +424,7 @@ async def process_custom_date(message: Message, state: FSMContext) -> None:
 
     await state.update_data(date=raw)
     await message.answer(
-        f"{progress(4)}\n\n"
+        f"{await form_progress(state, 3)}\n\n"
         "Как зовут счастливого получателя? 💌",
         parse_mode=PARSE_MODE,
         reply_markup=ReplyKeyboardRemove(),
@@ -310,7 +443,7 @@ async def process_recipient(message: Message, state: FSMContext) -> None:
 
     await state.update_data(recipient=recipient)
     await message.answer(
-        f"{progress(5)}\n\n"
+        f"{await form_progress(state, 4)}\n\n"
         "Какой особенный повод? ✨",
         reply_markup=kb_occasion(),
         parse_mode=PARSE_MODE,
@@ -321,7 +454,7 @@ async def process_recipient(message: Message, state: FSMContext) -> None:
 async def process_occasion(message: Message, state: FSMContext) -> None:
     if message.text == "Другое":
         await message.answer(
-            f"{progress(5)}\n\n"
+            f"{await form_progress(state, 5)}\n\n"
             "Опишите повод своими словами ✏️",
             parse_mode=PARSE_MODE,
             reply_markup=ReplyKeyboardRemove(),
@@ -342,7 +475,7 @@ async def process_occasion(message: Message, state: FSMContext) -> None:
     recipient = data["recipient"]
     await state.update_data(occasion=occasion)
     await message.answer(
-        f"{progress(6)}\n\n"
+        f"{await form_progress(state, 5)}\n\n"
         f"Кем приходится *{recipient}*? 🌺",
         reply_markup=kb_relation(),
         parse_mode=PARSE_MODE,
@@ -354,7 +487,7 @@ async def process_custom_occasion(message: Message, state: FSMContext) -> None:
     await state.update_data(occasion=(message.text or "").strip())
     data = await state.get_data()
     await message.answer(
-        f"{progress(5)}\n\n"
+        f"{await form_progress(state, 5)}\n\n"
         f"Кем приходится *{data['recipient']}*? 🌺",
         parse_mode=PARSE_MODE,
         reply_markup=kb_relation(),
@@ -365,7 +498,7 @@ async def process_custom_occasion(message: Message, state: FSMContext) -> None:
 async def process_relation(message: Message, state: FSMContext) -> None:
     if message.text == "Другое":
         await message.answer(
-            f"{progress(6)}\n\n"
+            f"{await form_progress(state, 6)}\n\n"
             "Опишите кем приходится получатель ✏️",
             parse_mode=PARSE_MODE,
             reply_markup=ReplyKeyboardRemove(),
@@ -384,7 +517,7 @@ async def process_relation(message: Message, state: FSMContext) -> None:
 
     await state.update_data(relation=relation)
     await message.answer(
-        f"{progress(6)}\n\n"
+        f"{await form_progress(state, 6)}\n\n"
         "Последний шаг! 🎀\n\n"
         "Какой бюджет на букет?",
         reply_markup=kb_budget(),
@@ -396,7 +529,7 @@ async def process_relation(message: Message, state: FSMContext) -> None:
 async def process_custom_relation(message: Message, state: FSMContext) -> None:
     await state.update_data(relation=(message.text or "").strip())
     await message.answer(
-        f"{progress(6)}\n\n"
+        f"{await form_progress(state, 6)}\n\n"
         "Последний шаг! 🎀\n\n"
         "Какой бюджет на букет?",
         parse_mode=PARSE_MODE,
@@ -427,7 +560,7 @@ async def process_budget(message: Message, state: FSMContext, bot: Bot) -> None:
     phone = data["phone"]
 
     summary = (
-        f"{progress(7)}\n\n"
+        f"{await form_progress(state, 7)}\n\n"
         "✅ *Заявка принята!*\n\n"
         "┌─────────────────────\n"
         f"│ 👤 Клиент:      *{name}*\n"
@@ -438,44 +571,27 @@ async def process_budget(message: Message, state: FSMContext, bot: Bot) -> None:
         f"│ 💜 Кто:         *{relation}*\n"
         f"│ 💰 Бюджет:      *{budget}*\n"
         "└─────────────────────\n\n"
-        "Наш флорист свяжется с вами в течение *15 минут* 🌷\n\n"
-        "_Спасибо, что выбираете Veresk_"
+        "Наш флорист свяжется с вами в течение *15 минут* 🌷"
     )
+    if MINIAPP_URL:
+        summary += (
+            "\n\n_Нажмите кнопку ниже — откроется трекер заказа "
+            "в реальном времени 💜_"
+        )
+    summary += "\n\n_Спасибо, что выбираете Veresk_"
 
+    redis = getattr(dp, "redis", None)
+    order_id, posiflora_ok = await submit_order(bot, data, client_tg_id, redis=redis)
+
+    track_kb = tracking_keyboard(order_id)
     await message.answer(
         summary,
-        reply_markup=ReplyKeyboardRemove(),
+        reply_markup=track_kb,
         parse_mode=PARSE_MODE,
     )
-
-    order_id = "—"
-    posiflora_ok = True
-    try:
-        order_id = await create_posiflora_order(
-            customer_name=name,
-            phone=phone,
-            recipient=recipient,
-            occasion=occasion,
-            relation=relation,
-            budget=budget,
-            delivery_date=date,
-            telegram_id=client_tg_id,
-        )
-        logger.info("✅ Заказ Posiflora: #%s", order_id)
-
-        if hasattr(dp, "redis") and dp.redis:
-            await save_order(dp.redis, order_id, client_tg_id, status="new")
-    except Exception:
-        logger.exception("❌ Ошибка Posiflora")
-        posiflora_ok = False
-
-    await notify_florist(
-        bot=bot,
-        florist_chat_id=FLORIST_CHAT_ID,
-        data=data,
-        order_id=str(order_id),
-        client_tg_id=client_tg_id,
-        posiflora_ok=posiflora_ok,
+    await message.answer(
+        "🌷",
+        reply_markup=ReplyKeyboardRemove(),
     )
 
     await state.clear()
@@ -483,6 +599,9 @@ async def process_budget(message: Message, state: FSMContext, bot: Bot) -> None:
 
 def register_handlers(dp: Dispatcher) -> None:
     dp.message.register(cmd_start, CommandStart())
+    dp.message.register(cmd_order, Command("order"))
+    dp.message.register(cmd_orders, Command("orders"))
+    dp.message.register(handle_miniapp_data, F.web_app_data)
     dp.message.register(cmd_cancel, Command("cancel"))
     dp.message.register(process_name, OrderForm.name)
     dp.message.register(process_phone_contact, OrderForm.phone, F.contact)
@@ -497,10 +616,58 @@ def register_handlers(dp: Dispatcher) -> None:
     dp.message.register(process_budget, OrderForm.budget)
 
 
-bot = Bot(token=BOT_TOKEN)
+BOT_COMMANDS = [
+    BotCommand(command="start", description="Открыть приложение Veresk"),
+    BotCommand(command="order", description="Заказать букет в чате"),
+    BotCommand(command="orders", description="История ваших заказов"),
+    BotCommand(command="cancel", description="Отменить текущую анкету"),
+]
+
+bot = Bot(token=BOT_TOKEN, session=AiohttpSession(timeout=120))
 dp = Dispatcher(storage=storage)
 dp.include_router(notifications_router)
 register_handlers(dp)
+
+
+async def validate_bot_token() -> None:
+    """Проверка BOT_TOKEN до запуска polling."""
+    try:
+        me = await bot.get_me(request_timeout=90)
+    except TelegramUnauthorizedError:
+        logger.error(
+            "BOT_TOKEN неверный или отозван. Откройте @BotFather → /mybots → ваш бот → "
+            "API Token, скопируйте токен в .env на сервере (без кавычек и пробелов)."
+        )
+        await bot.session.close()
+        raise SystemExit(1) from None
+    except TelegramNetworkError as exc:
+        logger.error("Не удалось связаться с Telegram API: %s", exc)
+        await bot.session.close()
+        raise SystemExit(1) from None
+
+    logger.info("Бот авторизован: @%s (id=%s)", me.username, me.id)
+
+
+async def setup_menu_commands() -> None:
+    """Регистрация /start и /cancel в меню Telegram. Сбой сети не останавливает бота."""
+    for attempt in range(1, 4):
+        try:
+            await bot.set_my_commands(BOT_COMMANDS, request_timeout=90)
+            logger.info("Меню команд бота обновлено")
+            return
+        except TelegramUnauthorizedError:
+            raise
+        except TelegramNetworkError as exc:
+            logger.warning(
+                "Не удалось обновить меню команд (попытка %s/3): %s",
+                attempt,
+                exc,
+            )
+            if attempt < 3:
+                await asyncio.sleep(3 * attempt)
+    logger.warning(
+        "Меню команд не обновлено — бот продолжит работу; проверьте доступ к api.telegram.org"
+    )
 
 
 async def main() -> None:
@@ -518,20 +685,28 @@ async def main() -> None:
             ),
         ],
     )
+    await validate_bot_token()
+
+    from client_db import init_db
+
+    await init_db()
+
     redis = getattr(dp.storage, "redis", None)
     if redis:
         dp.redis = redis
+        set_redis(redis)
         asyncio.create_task(start_polling(bot, redis))
         logger.info("🔄 Polling задача запущена")
+        if MINIAPP_URL:
+            await start_webapp_server(redis, WEBAPP_HOST, WEBAPP_PORT)
+        else:
+            logger.warning(
+                "⚠️ MINIAPP_URL не задан — API статусов отключён (задайте HTTPS-URL в .env)"
+            )
     else:
-        logger.warning("⚠️ Redis недоступен — polling отключён")
+        logger.warning("⚠️ Redis недоступен — polling и Mini App отключены")
 
-    await bot.set_my_commands(
-        [
-            BotCommand(command="start", description="Начать заказ букета"),
-            BotCommand(command="cancel", description="Отменить текущую анкету"),
-        ]
-    )
+    await setup_menu_commands()
     await dp.start_polling(bot)
 
 

@@ -1,5 +1,6 @@
 import os
 import sys
+from pathlib import Path
 
 from dotenv import load_dotenv
 
@@ -14,10 +15,31 @@ def _require(name: str) -> str:
     return value.strip()
 
 
-BOT_TOKEN = _require("BOT_TOKEN")
+def _normalize_token(value: str) -> str:
+    token = value.strip().strip('"').strip("'")
+    if ":" not in token:
+        print(
+            "Ошибка: BOT_TOKEN должен быть вида 123456789:ABCdef... (получите у @BotFather)",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+    return token
+
+
+BOT_TOKEN = _normalize_token(_require("BOT_TOKEN"))
 FLORIST_CHAT_ID = int(os.getenv("FLORIST_CHAT_ID", "0"))
 POSIFLORA_USERNAME = _require("POSIFLORA_USERNAME")
 POSIFLORA_PASSWORD = _require("POSIFLORA_PASSWORD")
 POSIFLORA_STORE_ID = _require("POSIFLORA_STORE_ID")
 POSIFLORA_BASE_URL = os.getenv("POSIFLORA_BASE_URL", "https://demo.posiflora.com/api").strip()
 POLL_INTERVAL = int(os.getenv("POLL_INTERVAL", "60"))  # секунды между проверками
+
+# Mini App (HTTPS, путь /miniapp/)
+_raw_miniapp = os.getenv("MINIAPP_URL", os.getenv("WEBAPP_URL", "")).strip()
+MINIAPP_URL = _raw_miniapp if _raw_miniapp.endswith("/") else f"{_raw_miniapp}/" if _raw_miniapp else ""
+WEBAPP_URL = MINIAPP_URL.rstrip("/")  # обратная совместимость
+WEBAPP_HOST = os.getenv("WEBAPP_HOST", "0.0.0.0")
+WEBAPP_PORT = int(os.getenv("WEBAPP_PORT", "3005"))
+
+_default_db = Path(__file__).resolve().parent / "data" / "veresk.db"
+DATABASE_PATH = os.getenv("DATABASE_PATH", str(_default_db))
