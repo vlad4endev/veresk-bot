@@ -142,6 +142,7 @@ body:has(.tg-guard:not(.hidden)) #app {
   background: rgba(255, 93, 168, 0.28);
   filter: blur(2px);
   pointer-events: none;
+  z-index: 0;
 }
 
 .hero::after {
@@ -153,6 +154,7 @@ body:has(.tg-guard:not(.hidden)) #app {
   height: 48px;
   background: var(--v-cream);
   border-radius: 50% 50% 0 0 / 100% 100% 0 0;
+  z-index: 1;
 }
 
 .hero-deco {
@@ -164,21 +166,39 @@ body:has(.tg-guard:not(.hidden)) #app {
   border-radius: 50%;
   background: radial-gradient(circle, rgba(255, 125, 191, 0.45) 0%, rgba(255, 93, 168, 0.12) 55%, transparent 72%);
   pointer-events: none;
+  z-index: 0;
 }
 
 .hero-logo {
   display: flex;
   justify-content: center;
-  margin-bottom: 16px;
+  margin-bottom: 18px;
   position: relative;
-  z-index: 1;
+  z-index: 10;
+}
+
+.hero-logo-badge {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: min(156px, 40vw);
+  height: min(156px, 40vw);
+  border-radius: 50%;
+  background: linear-gradient(165deg, #ffffff 0%, #faf8fc 55%, #f5f0fa 100%);
+  padding: 14px;
+  box-shadow:
+    0 12px 40px rgba(64, 44, 96, 0.28),
+    0 4px 12px rgba(255, 93, 168, 0.15),
+    inset 0 1px 0 rgba(255, 255, 255, 1),
+    inset 0 -1px 0 rgba(64, 44, 96, 0.06);
+  border: 1px solid rgba(255, 255, 255, 0.95);
 }
 
 .hero-logo-img {
   display: block;
-  width: min(168px, 72vw);
-  height: auto;
-  filter: drop-shadow(0 10px 28px rgba(0, 0, 0, 0.35));
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
 }
 
 .hero-title {
@@ -189,7 +209,7 @@ body:has(.tg-guard:not(.hidden)) #app {
   line-height: 1.2;
   margin-bottom: 8px;
   position: relative;
-  z-index: 1;
+  z-index: 5;
   text-align: center;
   color: #fff;
   text-shadow: 0 2px 12px rgba(255, 93, 168, 0.35);
@@ -201,7 +221,7 @@ body:has(.tg-guard:not(.hidden)) #app {
   opacity: 0.95;
   line-height: 1.45;
   position: relative;
-  z-index: 1;
+  z-index: 5;
   text-align: center;
   color: var(--v-pink-mid);
 }
