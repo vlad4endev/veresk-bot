@@ -44,8 +44,9 @@ function goTo(screenName) {
 
   document.getElementById(`screen-${screenName}`).classList.add("active");
 
-  if (tg) {
-    tg.BackButton.show(screenName !== "home");
+  if (tg?.BackButton) {
+    if (screenName !== "home") tg.BackButton.show();
+    else tg.BackButton.hide();
   }
 
   if (screenName === "status" && window.VereskStatus) {
