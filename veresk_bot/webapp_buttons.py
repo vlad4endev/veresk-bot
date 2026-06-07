@@ -1,4 +1,4 @@
-"""Кнопки открытия Mini App (трекер статуса заказа)."""
+"""Inline-кнопки открытия Telegram Mini App (трекер статуса)."""
 
 from __future__ import annotations
 
@@ -10,9 +10,7 @@ from aiogram.exceptions import TelegramAPIError, TelegramNetworkError
 from aiogram.types import (
     InlineKeyboardButton,
     InlineKeyboardMarkup,
-    KeyboardButton,
-    MenuButtonWebApp,
-    ReplyKeyboardMarkup,
+    MenuButtonDefault,
     WebAppInfo,
 )
 
@@ -22,7 +20,6 @@ logger = logging.getLogger(__name__)
 
 TRACKER_OPEN_LABEL = "📋 Статус заказа"
 TRACKER_FOLLOW_LABEL = "📋 Следить за заказом"
-MENU_BUTTON_TEXT = "📋 Статус заказа"
 
 
 def miniapp_url(order_id: str | None = None) -> str | None:
@@ -34,7 +31,7 @@ def miniapp_url(order_id: str | None = None) -> str | None:
 
 
 def status_keyboard(order_id: str | None = None) -> InlineKeyboardMarkup | None:
-    """Кнопка Web App: главная со статусом или экран конкретного заказа."""
+    """Inline Web App: главная со статусом или экран конкретного заказа."""
     url = miniapp_url(order_id)
     if not url:
         return None
@@ -56,26 +53,8 @@ def launch_keyboard(order_id: str | None = None) -> InlineKeyboardMarkup | None:
     return status_keyboard(order_id)
 
 
-def tracker_reply_keyboard(order_id: str | None = None) -> ReplyKeyboardMarkup | None:
-    """
-    Кнопка внизу чата (Web App) — работает у любого клиента,
-    не зависит от FLORIST_CHAT_ID.
-    """
-    url = miniapp_url(order_id)
-    if not url:
-        return None
-    label = TRACKER_FOLLOW_LABEL if order_id else TRACKER_OPEN_LABEL
-    return ReplyKeyboardMarkup(
-        keyboard=[
-            [KeyboardButton(text=label, web_app=WebAppInfo(url=url))],
-        ],
-        resize_keyboard=True,
-        is_persistent=True,
-    )
-
-
 def orders_list_keyboard(orders: list[dict[str, Any]]) -> InlineKeyboardMarkup | None:
-    """Кнопки трекера для каждого заказа в /orders."""
+    """Inline-кнопки трекера для каждого заказа в /orders."""
     rows: list[list[InlineKeyboardButton]] = []
     for o in orders[:8]:
         oid = str(o.get("posiflora_order_id", "")).strip()
@@ -97,27 +76,13 @@ def orders_list_keyboard(orders: list[dict[str, Any]]) -> InlineKeyboardMarkup |
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
-async def setup_bot_menu_button(bot: Bot) -> None:
-    """Кнопка меню слева внизу — трекер для всех пользователей."""
-    url = miniapp_url()
-    if not url:
-        logger.warning("MINIAPP_URL не задан — кнопка меню Mini App не установлена")
-        return
+async def reset_bot_menu_button(bot: Bot) -> None:
+    """Убрать Web App из кнопки меню — открытие только через inline."""
     try:
         await bot.set_chat_menu_button(
-            menu_button=MenuButtonWebApp(
-                text=MENU_BUTTON_TEXT,
-                web_app=WebAppInfo(url=url),
-            ),
+            menu_button=MenuButtonDefault(),
             request_timeout=90,
         )
-        logger.info("Кнопка меню трекера заказа установлена")
-    except TelegramAPIError as exc:
-        logger.error(
-            "Кнопка меню Mini App не установлена: %s. "
-            "Проверьте MINIAPP_URL (HTTPS), домен в @BotFather → Domain, "
-            "и что URL совпадает с публичным адресом miniapp.",
-            exc,
-        )
-    except TelegramNetworkError as exc:
-        logger.warning("Не удалось установить кнопку меню Mini App: %s", exc)
+        logger.info("Кнопка меню сброшена (Mini App только inline)")
+    except (TelegramAPIError, TelegramNetworkError) as exc:
+        logger.warning("Не удалось сбросить кнопку меню: %s", exc)
