@@ -2,7 +2,6 @@ import asyncio
 import json
 import logging
 import os
-import re
 from datetime import datetime
 from logging.handlers import RotatingFileHandler
 
@@ -32,18 +31,15 @@ try:
 except ImportError:
     storage = MemoryStorage()
 
-from client_db import get_client, get_orders_for_client
+from client_db import get_orders_for_client
 from notifications import router as notifications_router
-from order_service import submit_order
 from order_status import status_meta
 from poller import start_polling
 from order_store import get_active_order_by_tg
 from webapp_buttons import (
     launch_keyboard,
     orders_list_keyboard,
-    setup_bot_menu_button,
-    tracker_reply_keyboard,
-    tracking_keyboard,
+    reset_bot_menu_button,
 )
 from webapp_server import start_webapp_server
 
@@ -52,128 +48,139 @@ logger = logging.getLogger(__name__)
 PARSE_MODE = "Markdown"
 
 
-class OrderForm(StatesGroup):
+class ProfileForm(StatesGroup):
+    # Блок 1 — Кто вы
     name = State()
     phone = State()
-    date = State()
-    custom_date = State()
-    recipient = State()
-    occasion = State()
-    custom_occasion = State()
-    relation = State()
-    custom_relation = State()
+    city = State()
+
+    # Блок 2 — Важные люди
+    recipients = State()
+    bday_months = State()
+    special_dates = State()
+
+    # Блок 3 — Предпочтения в цветах
+    fav_flowers = State()
+    fav_colors = State()
+    fav_style = State()
+
+    # Блок 4 — Бюджет и частота
     budget = State()
+    frequency = State()
+
+    # Блок 5 — Доставка
+    delivery = State()
+    delivery_time = State()
+
+    # Блок 6 — Источник
+    source = State()
+    promo_consent = State()
 
 
-DATE_OPTIONS = {
-    "Сегодня",
-    "Завтра",
-    "Через 2–3 дня",
-    "Через неделю",
-    "Через 2 недели",
-    "Другая дата",
-}
-
-OCCASION_OPTIONS = {
-    "День рождения 🎂",
-    "Годовщина 💍",
-    "Свидание 💋",
-    "Просто так 🌷",
-    "Выздоровление 🤍",
-    "Другое",
-}
-
-RELATION_OPTIONS = {
-    "Девушка / Жена",
-    "Мама",
-    "Дочь",
-    "Подруга",
-    "Коллега",
-    "Другое",
-}
-
-BUDGET_OPTIONS = {
-    "до 5 000 ₽",
-    "до 10 000 ₽",
-    "до 15 000 ₽",
-    "от 15 000 ₽",
-}
+BLOCK_NAMES = [
+    "Кто вы",
+    "Важные люди",
+    "Предпочтения",
+    "Бюджет",
+    "Доставка",
+    "Завершение",
+]
 
 
-def progress(step: int, total: int = 7) -> str:
-    return "🟣" * step + "⚪️" * (total - step) + f"  {step}/{total}"
-
-
-async def form_progress(state: FSMContext, logical_step: int) -> str:
-    data = await state.get_data()
-    if data.get("returning"):
-        return progress(max(1, logical_step - 2), 5)
-    return progress(logical_step, 7)
-
-
-def _format_order_date(iso: str) -> str:
-    try:
-        return datetime.fromisoformat(iso).strftime("%d.%m.%Y")
-    except ValueError:
-        return iso[:10] if iso else "—"
+def progress(block: int) -> str:
+    done = "🟣" * block
+    empty = "⚪️" * (6 - block)
+    return f"{done}{empty}  Блок {block}/6 · {BLOCK_NAMES[block - 1]}"
 
 
 def kb_phone() -> ReplyKeyboardMarkup:
     return ReplyKeyboardMarkup(
         keyboard=[
-            [KeyboardButton(text="📱 Поделиться номером", request_contact=True)],
+            [KeyboardButton(text="Поделиться номером", request_contact=True)],
         ],
         resize_keyboard=True,
         one_time_keyboard=True,
     )
 
 
-def kb_date() -> ReplyKeyboardMarkup:
+def kb_recipients() -> ReplyKeyboardMarkup:
     return ReplyKeyboardMarkup(
         keyboard=[
-            [KeyboardButton(text="Сегодня"), KeyboardButton(text="Завтра")],
-            [
-                KeyboardButton(text="Через 2–3 дня"),
-                KeyboardButton(text="Через неделю"),
-            ],
-            [
-                KeyboardButton(text="Через 2 недели"),
-                KeyboardButton(text="Другая дата"),
-            ],
-        ],
-        resize_keyboard=True,
-    )
-
-
-def kb_occasion() -> ReplyKeyboardMarkup:
-    return ReplyKeyboardMarkup(
-        keyboard=[
-            [
-                KeyboardButton(text="День рождения 🎂"),
-                KeyboardButton(text="Годовщина 💍"),
-            ],
-            [
-                KeyboardButton(text="Свидание 💋"),
-                KeyboardButton(text="Просто так 🌷"),
-            ],
-            [
-                KeyboardButton(text="Выздоровление 🤍"),
-                KeyboardButton(text="Другое"),
-            ],
-        ],
-        resize_keyboard=True,
-    )
-
-
-def kb_relation() -> ReplyKeyboardMarkup:
-    return ReplyKeyboardMarkup(
-        keyboard=[
-            [
-                KeyboardButton(text="Девушка / Жена"),
-                KeyboardButton(text="Мама"),
-            ],
+            [KeyboardButton(text="Девушка / Жена"), KeyboardButton(text="Мама")],
             [KeyboardButton(text="Дочь"), KeyboardButton(text="Подруга")],
-            [KeyboardButton(text="Коллега"), KeyboardButton(text="Другое")],
+            [KeyboardButton(text="Коллеги"), KeyboardButton(text="Все понемногу")],
+        ],
+        resize_keyboard=True,
+    )
+
+
+def kb_months() -> ReplyKeyboardMarkup:
+    return ReplyKeyboardMarkup(
+        keyboard=[
+            [
+                KeyboardButton(text="Январь"),
+                KeyboardButton(text="Февраль"),
+                KeyboardButton(text="Март"),
+            ],
+            [
+                KeyboardButton(text="Апрель"),
+                KeyboardButton(text="Май"),
+                KeyboardButton(text="Июнь"),
+            ],
+            [
+                KeyboardButton(text="Июль"),
+                KeyboardButton(text="Август"),
+                KeyboardButton(text="Сентябрь"),
+            ],
+            [
+                KeyboardButton(text="Октябрь"),
+                KeyboardButton(text="Ноябрь"),
+                KeyboardButton(text="Декабрь"),
+            ],
+            [KeyboardButton(text="Не знаю / нет")],
+        ],
+        resize_keyboard=True,
+    )
+
+
+def kb_flowers() -> ReplyKeyboardMarkup:
+    return ReplyKeyboardMarkup(
+        keyboard=[
+            [KeyboardButton(text="Розы"), KeyboardButton(text="Пионы")],
+            [KeyboardButton(text="Тюльпаны"), KeyboardButton(text="Хризантемы")],
+            [KeyboardButton(text="Полевые"), KeyboardButton(text="Орхидеи")],
+            [KeyboardButton(text="Без предпочтений")],
+        ],
+        resize_keyboard=True,
+    )
+
+
+def kb_colors() -> ReplyKeyboardMarkup:
+    return ReplyKeyboardMarkup(
+        keyboard=[
+            [
+                KeyboardButton(text="Нежные пастельные"),
+                KeyboardButton(text="Яркие"),
+            ],
+            [
+                KeyboardButton(text="Белые / кремовые"),
+                KeyboardButton(text="Красные"),
+            ],
+            [
+                KeyboardButton(text="Смешанные"),
+                KeyboardButton(text="Без разницы"),
+            ],
+        ],
+        resize_keyboard=True,
+    )
+
+
+def kb_style() -> ReplyKeyboardMarkup:
+    return ReplyKeyboardMarkup(
+        keyboard=[
+            [KeyboardButton(text="Классика"), KeyboardButton(text="Минимализм")],
+            [KeyboardButton(text="Полевой"), KeyboardButton(text="Авторский")],
+            [KeyboardButton(text="Без разницы")],
         ],
         resize_keyboard=True,
     )
@@ -182,51 +189,516 @@ def kb_relation() -> ReplyKeyboardMarkup:
 def kb_budget() -> ReplyKeyboardMarkup:
     return ReplyKeyboardMarkup(
         keyboard=[
+            [KeyboardButton(text="до 3 000 ₽"), KeyboardButton(text="до 5 000 ₽")],
+            [KeyboardButton(text="до 10 000 ₽"), KeyboardButton(text="до 15 000 ₽")],
+            [KeyboardButton(text="от 15 000 ₽")],
+        ],
+        resize_keyboard=True,
+    )
+
+
+def kb_frequency() -> ReplyKeyboardMarkup:
+    return ReplyKeyboardMarkup(
+        keyboard=[
+            [KeyboardButton(text="Раз в месяц и чаще")],
+            [KeyboardButton(text="По праздникам")],
+            [KeyboardButton(text="Несколько раз в год")],
+            [KeyboardButton(text="Редко, по особым случаям")],
+        ],
+        resize_keyboard=True,
+    )
+
+
+def kb_delivery() -> ReplyKeyboardMarkup:
+    return ReplyKeyboardMarkup(
+        keyboard=[
+            [KeyboardButton(text="Доставка"), KeyboardButton(text="Самовывоз")],
+            [KeyboardButton(text="По-разному")],
+        ],
+        resize_keyboard=True,
+    )
+
+
+def kb_delivery_time() -> ReplyKeyboardMarkup:
+    return ReplyKeyboardMarkup(
+        keyboard=[
             [
-                KeyboardButton(text="до 5 000 ₽"),
-                KeyboardButton(text="до 10 000 ₽"),
+                KeyboardButton(text="Утро (9:00–12:00)"),
+                KeyboardButton(text="День (12:00–18:00)"),
             ],
             [
-                KeyboardButton(text="до 15 000 ₽"),
-                KeyboardButton(text="от 15 000 ₽"),
+                KeyboardButton(text="Вечер (18:00–21:00)"),
+                KeyboardButton(text="Без разницы"),
             ],
         ],
         resize_keyboard=True,
     )
 
 
-async def begin_order_dialog(message: Message, state: FSMContext, intro: str) -> None:
-    """Анкета заказа в чате (кнопки клавиатуры)."""
-    await state.clear()
-    await message.answer(
-        "Переходим к оформлению заказа 🌸",
-        reply_markup=ReplyKeyboardRemove(),
+def kb_source() -> ReplyKeyboardMarkup:
+    return ReplyKeyboardMarkup(
+        keyboard=[
+            [KeyboardButton(text="Instagram"), KeyboardButton(text="Рекомендация")],
+            [KeyboardButton(text="Google / поиск"), KeyboardButton(text="Telegram")],
+            [KeyboardButton(text="Увидел вывеску"), KeyboardButton(text="Другое")],
+        ],
+        resize_keyboard=True,
     )
-    tg_id = message.from_user.id
-    client = await get_client(tg_id)
 
-    if client:
-        await state.update_data(
-            name=client["name"],
-            phone=client["phone"],
-            returning=True,
-        )
-        await message.answer(
-            f"{intro}\n\n"
-            f"С возвращением, *{client['name']}* 🌸\n\n"
-            "Когда нужен букет?",
-            parse_mode=PARSE_MODE,
-            reply_markup=kb_date(),
-        )
-        await state.set_state(OrderForm.date)
-        return
 
-    await state.update_data(returning=False)
-    await message.answer(
-        f"{intro}\n\nКак вас зовут?",
-        parse_mode=PARSE_MODE,
+def kb_consent() -> ReplyKeyboardMarkup:
+    return ReplyKeyboardMarkup(
+        keyboard=[
+            [KeyboardButton(text="Да, хочу получать акции и новинки")],
+            [KeyboardButton(text="Нет, не нужно")],
+        ],
+        resize_keyboard=True,
     )
-    await state.set_state(OrderForm.name)
+
+
+# ═══════════════════════════════════════════════════════════
+# ВРЕМЕННО ОТКЛЮЧЕНО — старый сценарий заказа букета
+# Раскомментировать когда вернёмся к нему
+# ═══════════════════════════════════════════════════════════
+#
+# class OrderForm(StatesGroup):
+#     name = State()
+#     phone = State()
+#     date = State()
+#     custom_date = State()
+#     recipient = State()
+#     occasion = State()
+#     custom_occasion = State()
+#     relation = State()
+#     custom_relation = State()
+#     budget = State()
+#
+#
+# DATE_OPTIONS = {
+#     "Сегодня",
+#     "Завтра",
+#     "Через 2–3 дня",
+#     "Через неделю",
+#     "Через 2 недели",
+#     "Другая дата",
+# }
+#
+# OCCASION_OPTIONS = {
+#     "День рождения 🎂",
+#     "Годовщина 💍",
+#     "Свидание 💋",
+#     "Просто так 🌷",
+#     "Выздоровление 🤍",
+#     "Другое",
+# }
+#
+# RELATION_OPTIONS = {
+#     "Девушка / Жена",
+#     "Мама",
+#     "Дочь",
+#     "Подруга",
+#     "Коллега",
+#     "Другое",
+# }
+#
+# BUDGET_OPTIONS = {
+#     "до 5 000 ₽",
+#     "до 10 000 ₽",
+#     "до 15 000 ₽",
+#     "от 15 000 ₽",
+# }
+#
+#
+# def progress(step: int, total: int = 7) -> str:
+#     return "🟣" * step + "⚪️" * (total - step) + f"  {step}/{total}"
+#
+#
+# async def form_progress(state: FSMContext, logical_step: int) -> str:
+#     data = await state.get_data()
+#     if data.get("returning"):
+#         return progress(max(1, logical_step - 2), 5)
+#     return progress(logical_step, 7)
+#
+#
+# def kb_date() -> ReplyKeyboardMarkup:
+#     return ReplyKeyboardMarkup(
+#         keyboard=[
+#             [KeyboardButton(text="Сегодня"), KeyboardButton(text="Завтра")],
+#             [
+#                 KeyboardButton(text="Через 2–3 дня"),
+#                 KeyboardButton(text="Через неделю"),
+#             ],
+#             [
+#                 KeyboardButton(text="Через 2 недели"),
+#                 KeyboardButton(text="Другая дата"),
+#             ],
+#         ],
+#         resize_keyboard=True,
+#     )
+#
+#
+# def kb_occasion() -> ReplyKeyboardMarkup:
+#     return ReplyKeyboardMarkup(
+#         keyboard=[
+#             [
+#                 KeyboardButton(text="День рождения 🎂"),
+#                 KeyboardButton(text="Годовщина 💍"),
+#             ],
+#             [
+#                 KeyboardButton(text="Свидание 💋"),
+#                 KeyboardButton(text="Просто так 🌷"),
+#             ],
+#             [
+#                 KeyboardButton(text="Выздоровление 🤍"),
+#                 KeyboardButton(text="Другое"),
+#             ],
+#         ],
+#         resize_keyboard=True,
+#     )
+#
+#
+# def kb_relation() -> ReplyKeyboardMarkup:
+#     return ReplyKeyboardMarkup(
+#         keyboard=[
+#             [
+#                 KeyboardButton(text="Девушка / Жена"),
+#                 KeyboardButton(text="Мама"),
+#             ],
+#             [KeyboardButton(text="Дочь"), KeyboardButton(text="Подруга")],
+#             [KeyboardButton(text="Коллега"), KeyboardButton(text="Другое")],
+#         ],
+#         resize_keyboard=True,
+#     )
+#
+#
+# def kb_budget() -> ReplyKeyboardMarkup:
+#     return ReplyKeyboardMarkup(
+#         keyboard=[
+#             [
+#                 KeyboardButton(text="до 5 000 ₽"),
+#                 KeyboardButton(text="до 10 000 ₽"),
+#             ],
+#             [
+#                 KeyboardButton(text="до 15 000 ₽"),
+#                 KeyboardButton(text="от 15 000 ₽"),
+#             ],
+#         ],
+#         resize_keyboard=True,
+#     )
+#
+#
+# async def begin_order_dialog(message: Message, state: FSMContext, intro: str) -> None:
+#     """Анкета заказа в чате (кнопки клавиатуры)."""
+#     await state.clear()
+#     await message.answer(
+#         "Переходим к оформлению заказа 🌸",
+#         reply_markup=ReplyKeyboardRemove(),
+#     )
+#     tg_id = message.from_user.id
+#     client = await get_client(tg_id)
+#
+#     if client:
+#         await state.update_data(
+#             name=client["name"],
+#             phone=client["phone"],
+#             returning=True,
+#         )
+#         await message.answer(
+#             f"{intro}\n\n"
+#             f"С возвращением, *{client['name']}* 🌸\n\n"
+#             "Когда нужен букет?",
+#             parse_mode=PARSE_MODE,
+#             reply_markup=kb_date(),
+#         )
+#         await state.set_state(OrderForm.date)
+#         return
+#
+#     await state.update_data(returning=False)
+#     await message.answer(
+#         f"{intro}\n\nКак вас зовут?",
+#         parse_mode=PARSE_MODE,
+#     )
+#     await state.set_state(OrderForm.name)
+#
+#
+# async def process_name(message: Message, state: FSMContext) -> None:
+#     name = (message.text or "").strip()
+#     if not name:
+#         await message.answer("Пожалуйста, введите ваше имя.", parse_mode=PARSE_MODE)
+#         return
+#
+#     await state.update_data(name=name)
+#     await message.answer(
+#         f"{await form_progress(state, 1)}\n\n"
+#         f"Приятно познакомиться, *{name}* 🌸\n\n"
+#         "Укажите ваш номер телефона — флорист позвонит, чтобы уточнить детали букета 📞\n\n"
+#         "_Нажмите кнопку ниже или введите номер вручную_",
+#         parse_mode=PARSE_MODE,
+#         reply_markup=kb_phone(),
+#     )
+#     await state.set_state(OrderForm.phone)
+#
+#
+# async def _save_phone_and_continue(
+#     message: Message, state: FSMContext, phone: str
+# ) -> None:
+#     await state.update_data(phone=phone)
+#     await message.answer(
+#         f"{await form_progress(state, 2)}\n\n"
+#         "Отлично! Флорист сможет с вами связаться ✅\n\n"
+#         "Когда нужен букет?",
+#         parse_mode=PARSE_MODE,
+#         reply_markup=kb_date(),
+#     )
+#     await state.set_state(OrderForm.date)
+#
+#
+# async def process_phone_contact(message: Message, state: FSMContext) -> None:
+#     if not message.contact:
+#         return
+#     phone = message.contact.phone_number
+#     if not phone.startswith("+"):
+#         phone = "+" + phone
+#     await _save_phone_and_continue(message, state, phone)
+#
+#
+# async def process_phone_text(message: Message, state: FSMContext) -> None:
+#     raw = (message.text or "").strip()
+#     digits = "".join(c for c in raw if c.isdigit() or c == "+")
+#     if len(digits) < 10:
+#         await message.answer(
+#             "⚠️ Пожалуйста, введите корректный номер телефона\n"
+#             "Например: *+7 999 123-45-67*",
+#             parse_mode=PARSE_MODE,
+#         )
+#         return
+#     await _save_phone_and_continue(message, state, digits)
+#
+#
+# async def process_date(message: Message, state: FSMContext) -> None:
+#     if message.text == "Другая дата":
+#         await message.answer(
+#             f"{await form_progress(state, 3)}\n\n"
+#             "Введите дату в формате *ДД.ММ.ГГГГ* 📅\n"
+#             "_Например: 15.06.2025_",
+#             parse_mode=PARSE_MODE,
+#             reply_markup=ReplyKeyboardRemove(),
+#         )
+#         await state.set_state(OrderForm.custom_date)
+#         return
+#
+#     date_choice = message.text or ""
+#     if date_choice not in DATE_OPTIONS:
+#         await message.answer(
+#             "Выберите дату из кнопок ниже 👇",
+#             reply_markup=kb_date(),
+#             parse_mode=PARSE_MODE,
+#         )
+#         return
+#
+#     await state.update_data(date=date_choice)
+#     await message.answer(
+#         f"{await form_progress(state, 3)}\n\n"
+#         "Как зовут счастливого получателя? 💌",
+#         reply_markup=ReplyKeyboardRemove(),
+#         parse_mode=PARSE_MODE,
+#     )
+#     await state.set_state(OrderForm.recipient)
+#
+#
+# async def process_custom_date(message: Message, state: FSMContext) -> None:
+#     raw = (message.text or "").strip()
+#     if not re.match(r"^\d{2}\.\d{2}\.\d{4}$", raw):
+#         await message.answer(
+#             "⚠️ Пожалуйста, введите дату в формате *ДД.ММ.ГГГГ*\n"
+#             "_Например: 15.06.2025_",
+#             parse_mode=PARSE_MODE,
+#         )
+#         return
+#
+#     await state.update_data(date=raw)
+#     await message.answer(
+#         f"{await form_progress(state, 3)}\n\n"
+#         "Как зовут счастливого получателя? 💌",
+#         parse_mode=PARSE_MODE,
+#         reply_markup=ReplyKeyboardRemove(),
+#     )
+#     await state.set_state(OrderForm.recipient)
+#
+#
+# async def process_recipient(message: Message, state: FSMContext) -> None:
+#     recipient = (message.text or "").strip()
+#     if not recipient:
+#         await message.answer(
+#             "Пожалуйста, введите имя получателя.",
+#             parse_mode=PARSE_MODE,
+#         )
+#         return
+#
+#     await state.update_data(recipient=recipient)
+#     await message.answer(
+#         f"{await form_progress(state, 4)}\n\n"
+#         "Какой особенный повод? ✨",
+#         reply_markup=kb_occasion(),
+#         parse_mode=PARSE_MODE,
+#     )
+#     await state.set_state(OrderForm.occasion)
+#
+#
+# async def process_occasion(message: Message, state: FSMContext) -> None:
+#     if message.text == "Другое":
+#         await message.answer(
+#             f"{await form_progress(state, 5)}\n\n"
+#             "Опишите повод своими словами ✏️",
+#             parse_mode=PARSE_MODE,
+#             reply_markup=ReplyKeyboardRemove(),
+#         )
+#         await state.set_state(OrderForm.custom_occasion)
+#         return
+#
+#     occasion = message.text or ""
+#     if occasion not in OCCASION_OPTIONS:
+#         await message.answer(
+#             "Выберите повод из кнопок ниже 👇",
+#             reply_markup=kb_occasion(),
+#             parse_mode=PARSE_MODE,
+#         )
+#         return
+#
+#     data = await state.get_data()
+#     recipient = data["recipient"]
+#     await state.update_data(occasion=occasion)
+#     await message.answer(
+#         f"{await form_progress(state, 5)}\n\n"
+#         f"Кем приходится *{recipient}*? 🌺",
+#         reply_markup=kb_relation(),
+#         parse_mode=PARSE_MODE,
+#     )
+#     await state.set_state(OrderForm.relation)
+#
+#
+# async def process_custom_occasion(message: Message, state: FSMContext) -> None:
+#     await state.update_data(occasion=(message.text or "").strip())
+#     data = await state.get_data()
+#     await message.answer(
+#         f"{await form_progress(state, 5)}\n\n"
+#         f"Кем приходится *{data['recipient']}*? 🌺",
+#         parse_mode=PARSE_MODE,
+#         reply_markup=kb_relation(),
+#     )
+#     await state.set_state(OrderForm.relation)
+#
+#
+# async def process_relation(message: Message, state: FSMContext) -> None:
+#     if message.text == "Другое":
+#         await message.answer(
+#             f"{await form_progress(state, 6)}\n\n"
+#             "Опишите кем приходится получатель ✏️",
+#             parse_mode=PARSE_MODE,
+#             reply_markup=ReplyKeyboardRemove(),
+#         )
+#         await state.set_state(OrderForm.custom_relation)
+#         return
+#
+#     relation = message.text or ""
+#     if relation not in RELATION_OPTIONS:
+#         await message.answer(
+#             "Выберите вариант из кнопок ниже 👇",
+#             reply_markup=kb_relation(),
+#             parse_mode=PARSE_MODE,
+#         )
+#         return
+#
+#     await state.update_data(relation=relation)
+#     await message.answer(
+#         f"{await form_progress(state, 6)}\n\n"
+#         "Последний шаг! 🎀\n\n"
+#         "Какой бюджет на букет?",
+#         reply_markup=kb_budget(),
+#         parse_mode=PARSE_MODE,
+#     )
+#     await state.set_state(OrderForm.budget)
+#
+#
+# async def process_custom_relation(message: Message, state: FSMContext) -> None:
+#     await state.update_data(relation=(message.text or "").strip())
+#     await message.answer(
+#         f"{await form_progress(state, 6)}\n\n"
+#         "Последний шаг! 🎀\n\n"
+#         "Какой бюджет на букет?",
+#         parse_mode=PARSE_MODE,
+#         reply_markup=kb_budget(),
+#     )
+#     await state.set_state(OrderForm.budget)
+#
+#
+# async def process_budget(message: Message, state: FSMContext, bot: Bot) -> None:
+#     budget = message.text or ""
+#     if budget not in BUDGET_OPTIONS:
+#         await message.answer(
+#             "Выберите бюджет из кнопок ниже 👇",
+#             reply_markup=kb_budget(),
+#             parse_mode=PARSE_MODE,
+#         )
+#         return
+#
+#     await state.update_data(budget=budget)
+#     data = await state.get_data()
+#     client_tg_id = message.from_user.id
+#     name = data["name"]
+#     date = data["date"]
+#     recipient = data["recipient"]
+#     occasion = data["occasion"]
+#     relation = data["relation"]
+#
+#     phone = data["phone"]
+#
+#     summary = (
+#         f"{await form_progress(state, 7)}\n\n"
+#         "✅ *Заявка принята!*\n\n"
+#         "┌─────────────────────\n"
+#         f"│ 👤 Клиент:      *{name}*\n"
+#         f"│ 📞 Телефон:     *{phone}*\n"
+#         f"│ 📅 Дата:        *{date}*\n"
+#         f"│ 🎁 Получатель:  *{recipient}*\n"
+#         f"│ 🎉 Повод:       *{occasion}*\n"
+#         f"│ 💜 Кто:         *{relation}*\n"
+#         f"│ 💰 Бюджет:      *{budget}*\n"
+#         "└─────────────────────\n\n"
+#         "Наш флорист свяжется с вами в течение *15 минут* 🌷"
+#     )
+#     summary += "\n\n_Спасибо, что выбираете Veresk_"
+#
+#     redis = getattr(dp, "redis", None)
+#     order_id, posiflora_ok = await submit_order(bot, data, client_tg_id, redis=redis)
+#
+#     if not posiflora_ok:
+#         summary += (
+#             "\n\n⚠️ _Заявка принята, но возникла задержка с CRM. "
+#             "Флорист свяжется с вами вручную._"
+#         )
+#
+#     track_kb = tracking_keyboard(order_id)
+#     if track_kb:
+#         summary += "\n\n_Нажмите «Следить за заказом» — этапы и детали в приложении 💜_"
+#
+#     await message.answer(
+#         summary,
+#         parse_mode=PARSE_MODE,
+#         reply_markup=track_kb or ReplyKeyboardRemove(),
+#     )
+#
+#     await message.answer("🌷", reply_markup=ReplyKeyboardRemove())
+#     await state.clear()
+#
+# ═══════════════════════════════════════════════════════════
+
+
+def _format_order_date(iso: str) -> str:
+    try:
+        return datetime.fromisoformat(iso).strftime("%d.%m.%Y")
+    except ValueError:
+        return iso[:10] if iso else "—"
 
 
 async def _latest_order_id(tg_id: int) -> str | None:
@@ -246,11 +718,9 @@ async def _send_tracker_invite(
     intro: str,
     order_id: str | None = None,
 ) -> None:
-    """Сообщение + inline и reply-кнопки Web App (для любого tg_id)."""
+    """Сообщение с inline-кнопкой Web App."""
     inline_kb = launch_keyboard(order_id)
-    reply_kb = tracker_reply_keyboard(order_id)
-
-    if not inline_kb and not reply_kb:
+    if not inline_kb:
         await message.answer(
             intro
             + "\n\n_Трекер недоступен: на сервере не задан MINIAPP_URL (HTTPS)._",
@@ -264,21 +734,26 @@ async def _send_tracker_invite(
         parse_mode=PARSE_MODE,
         reply_markup=inline_kb,
     )
-    if reply_kb:
-        await message.answer(
-            "👇 *Откройте трекер* — кнопка внизу экрана "
-            "(работает для всех клиентов, не только флориста).",
-            parse_mode=PARSE_MODE,
-            reply_markup=reply_kb,
-        )
 
 
 async def cmd_start(message: Message, state: FSMContext) -> None:
-    """Открыть трекер статуса (Mini App). Заказ в чате — /order."""
+    await state.clear()
+    await message.answer(
+        "🌸 *Добро пожаловать в Veresk*\n"
+        "_флористический салон · trail of happiness_\n\n"
+        "Расскажите немного о себе — это поможет нам подбирать "
+        "идеальные букеты и напоминать о важных датах ваших близких.\n\n"
+        "Как вас зовут?",
+        parse_mode=PARSE_MODE,
+        reply_markup=ReplyKeyboardRemove(),
+    )
+    await state.set_state(ProfileForm.name)
+
+
+async def cmd_status(message: Message, state: FSMContext) -> None:
+    """Трекер статуса заказа (Mini App)."""
     await state.clear()
     uid = message.from_user.id
-    logger.info("/start tg_id=%s (@%s)", uid, message.from_user.username)
-
     order_id = await _latest_order_id(uid)
     intro = "🌿 *Veresk*\n_trail of happiness_\n\n"
     if order_id:
@@ -289,20 +764,18 @@ async def cmd_start(message: Message, state: FSMContext) -> None:
     else:
         intro += (
             "Следите за заказом после оформления.\n"
-            "Новый букет — /order 🌸"
+            "Профильная анкета — /start 🌸"
         )
-
     await _send_tracker_invite(message, intro, order_id)
 
 
-async def cmd_status(message: Message, state: FSMContext) -> None:
-    """Тот же трекер, что /start."""
-    await cmd_start(message, state)
-
-
 async def cmd_order(message: Message, state: FSMContext) -> None:
-    intro = "🌿 *Заказ букета*\n_trail of happiness_"
-    await begin_order_dialog(message, state, intro)
+    await message.answer(
+        "Сейчас основной сценарий — профильная анкета.\n"
+        "Напишите /start 🌸",
+        parse_mode=PARSE_MODE,
+        reply_markup=ReplyKeyboardRemove(),
+    )
 
 
 async def cmd_orders(message: Message) -> None:
@@ -312,7 +785,7 @@ async def cmd_orders(message: Message) -> None:
         await _send_tracker_invite(
             message,
             "📋 У вас пока нет заказов.\n\n"
-            "Оформите букет: /order",
+            "Заполните профиль: /start",
         )
         return
 
@@ -325,7 +798,7 @@ async def cmd_orders(message: Message) -> None:
             f"  🎁 {o['recipient']} · 📅 {o['delivery_date']}\n"
             f"  _{title}_"
         )
-    lines.append("\n\n_Новый заказ: /order_")
+    lines.append("\n\n_Профиль: /start_")
     kb = orders_list_keyboard(orders)
     await message.answer("".join(lines), parse_mode=PARSE_MODE, reply_markup=kb)
 
@@ -346,215 +819,226 @@ async def cmd_cancel(message: Message, state: FSMContext) -> None:
     )
 
 
-async def process_name(message: Message, state: FSMContext) -> None:
+async def step_name(message: Message, state: FSMContext) -> None:
     name = (message.text or "").strip()
-    if not name:
-        await message.answer("Пожалуйста, введите ваше имя.", parse_mode=PARSE_MODE)
-        return
-
     await state.update_data(name=name)
     await message.answer(
-        f"{await form_progress(state, 1)}\n\n"
-        f"Приятно познакомиться, *{name}* 🌸\n\n"
-        "Укажите ваш номер телефона — флорист позвонит, чтобы уточнить детали букета 📞\n\n"
-        "_Нажмите кнопку ниже или введите номер вручную_",
+        f"{progress(1)}\n\n"
+        f"Приятно познакомиться, *{name}*!\n\n"
+        "Укажите номер телефона — нажмите кнопку или введите вручную:",
         parse_mode=PARSE_MODE,
         reply_markup=kb_phone(),
     )
-    await state.set_state(OrderForm.phone)
+    await state.set_state(ProfileForm.phone)
 
 
-async def _save_phone_and_continue(
-    message: Message, state: FSMContext, phone: str
-) -> None:
-    await state.update_data(phone=phone)
-    await message.answer(
-        f"{await form_progress(state, 2)}\n\n"
-        "Отлично! Флорист сможет с вами связаться ✅\n\n"
-        "Когда нужен букет?",
-        parse_mode=PARSE_MODE,
-        reply_markup=kb_date(),
-    )
-    await state.set_state(OrderForm.date)
-
-
-async def process_phone_contact(message: Message, state: FSMContext) -> None:
-    if not message.contact:
-        return
+async def step_phone_contact(message: Message, state: FSMContext) -> None:
     phone = message.contact.phone_number
     if not phone.startswith("+"):
         phone = "+" + phone
-    await _save_phone_and_continue(message, state, phone)
+    await _phone_done(message, state, phone)
 
 
-async def process_phone_text(message: Message, state: FSMContext) -> None:
+async def step_phone_text(message: Message, state: FSMContext) -> None:
     raw = (message.text or "").strip()
     digits = "".join(c for c in raw if c.isdigit() or c == "+")
     if len(digits) < 10:
         await message.answer(
-            "⚠️ Пожалуйста, введите корректный номер телефона\n"
-            "Например: *+7 999 123-45-67*",
+            "Введите корректный номер.\nНапример: *+7 999 123-45-67*",
             parse_mode=PARSE_MODE,
         )
         return
-    await _save_phone_and_continue(message, state, digits)
+    await _phone_done(message, state, digits)
 
 
-async def process_date(message: Message, state: FSMContext) -> None:
-    if message.text == "Другая дата":
-        await message.answer(
-            f"{await form_progress(state, 3)}\n\n"
-            "Введите дату в формате *ДД.ММ.ГГГГ* 📅\n"
-            "_Например: 15.06.2025_",
-            parse_mode=PARSE_MODE,
-            reply_markup=ReplyKeyboardRemove(),
-        )
-        await state.set_state(OrderForm.custom_date)
-        return
-
-    date_choice = message.text or ""
-    if date_choice not in DATE_OPTIONS:
-        await message.answer(
-            "Выберите дату из кнопок ниже 👇",
-            reply_markup=kb_date(),
-            parse_mode=PARSE_MODE,
-        )
-        return
-
-    await state.update_data(date=date_choice)
+async def _phone_done(message: Message, state: FSMContext, phone: str) -> None:
+    await state.update_data(phone=phone)
     await message.answer(
-        f"{await form_progress(state, 3)}\n\n"
-        "Как зовут счастливого получателя? 💌",
-        reply_markup=ReplyKeyboardRemove(),
-        parse_mode=PARSE_MODE,
-    )
-    await state.set_state(OrderForm.recipient)
-
-
-async def process_custom_date(message: Message, state: FSMContext) -> None:
-    raw = (message.text or "").strip()
-    if not re.match(r"^\d{2}\.\d{2}\.\d{4}$", raw):
-        await message.answer(
-            "⚠️ Пожалуйста, введите дату в формате *ДД.ММ.ГГГГ*\n"
-            "_Например: 15.06.2025_",
-            parse_mode=PARSE_MODE,
-        )
-        return
-
-    await state.update_data(date=raw)
-    await message.answer(
-        f"{await form_progress(state, 3)}\n\n"
-        "Как зовут счастливого получателя? 💌",
+        f"{progress(1)}\n\nИз какого вы города или района?",
         parse_mode=PARSE_MODE,
         reply_markup=ReplyKeyboardRemove(),
     )
-    await state.set_state(OrderForm.recipient)
+    await state.set_state(ProfileForm.city)
 
 
-async def process_recipient(message: Message, state: FSMContext) -> None:
-    recipient = (message.text or "").strip()
-    if not recipient:
-        await message.answer(
-            "Пожалуйста, введите имя получателя.",
-            parse_mode=PARSE_MODE,
-        )
-        return
-
-    await state.update_data(recipient=recipient)
+async def step_city(message: Message, state: FSMContext) -> None:
+    await state.update_data(city=(message.text or "").strip())
     await message.answer(
-        f"{await form_progress(state, 4)}\n\n"
-        "Какой особенный повод? ✨",
-        reply_markup=kb_occasion(),
+        f"{progress(2)}\n\n"
+        "*Кому вы чаще всего дарите цветы?*",
         parse_mode=PARSE_MODE,
+        reply_markup=kb_recipients(),
     )
-    await state.set_state(OrderForm.occasion)
+    await state.set_state(ProfileForm.recipients)
 
 
-async def process_occasion(message: Message, state: FSMContext) -> None:
-    if message.text == "Другое":
-        await message.answer(
-            f"{await form_progress(state, 5)}\n\n"
-            "Опишите повод своими словами ✏️",
-            parse_mode=PARSE_MODE,
-            reply_markup=ReplyKeyboardRemove(),
-        )
-        await state.set_state(OrderForm.custom_occasion)
-        return
-
-    occasion = message.text or ""
-    if occasion not in OCCASION_OPTIONS:
-        await message.answer(
-            "Выберите повод из кнопок ниже 👇",
-            reply_markup=kb_occasion(),
-            parse_mode=PARSE_MODE,
-        )
-        return
-
-    data = await state.get_data()
-    recipient = data["recipient"]
-    await state.update_data(occasion=occasion)
+async def step_recipients(message: Message, state: FSMContext) -> None:
+    await state.update_data(recipients=(message.text or "").strip())
     await message.answer(
-        f"{await form_progress(state, 5)}\n\n"
-        f"Кем приходится *{recipient}*? 🌺",
-        reply_markup=kb_relation(),
+        f"{progress(2)}\n\n"
+        "*В каком месяце у них день рождения?*\n\n"
+        "_Можно написать несколько через запятую_",
         parse_mode=PARSE_MODE,
+        reply_markup=kb_months(),
     )
-    await state.set_state(OrderForm.relation)
+    await state.set_state(ProfileForm.bday_months)
 
 
-async def process_custom_occasion(message: Message, state: FSMContext) -> None:
-    await state.update_data(occasion=(message.text or "").strip())
-    data = await state.get_data()
+async def step_bday(message: Message, state: FSMContext) -> None:
+    await state.update_data(bday_months=(message.text or "").strip())
     await message.answer(
-        f"{await form_progress(state, 5)}\n\n"
-        f"Кем приходится *{data['recipient']}*? 🌺",
+        f"{progress(2)}\n\n"
+        "Есть ли годовщина или другая особая дата?\n\n"
+        "_Напишите месяц или «нет»_",
         parse_mode=PARSE_MODE,
-        reply_markup=kb_relation(),
+        reply_markup=ReplyKeyboardRemove(),
     )
-    await state.set_state(OrderForm.relation)
+    await state.set_state(ProfileForm.special_dates)
 
 
-async def process_relation(message: Message, state: FSMContext) -> None:
-    if message.text == "Другое":
-        await message.answer(
-            f"{await form_progress(state, 6)}\n\n"
-            "Опишите кем приходится получатель ✏️",
-            parse_mode=PARSE_MODE,
-            reply_markup=ReplyKeyboardRemove(),
-        )
-        await state.set_state(OrderForm.custom_relation)
-        return
-
-    relation = message.text or ""
-    if relation not in RELATION_OPTIONS:
-        await message.answer(
-            "Выберите вариант из кнопок ниже 👇",
-            reply_markup=kb_relation(),
-            parse_mode=PARSE_MODE,
-        )
-        return
-
-    await state.update_data(relation=relation)
+async def step_special(message: Message, state: FSMContext) -> None:
+    await state.update_data(special_dates=(message.text or "").strip())
     await message.answer(
-        f"{await form_progress(state, 6)}\n\n"
-        "Последний шаг! 🎀\n\n"
-        "Какой бюджет на букет?",
-        reply_markup=kb_budget(),
+        f"{progress(3)}\n\n"
+        "*Какие цветы нравятся больше всего?*",
         parse_mode=PARSE_MODE,
+        reply_markup=kb_flowers(),
     )
-    await state.set_state(OrderForm.budget)
+    await state.set_state(ProfileForm.fav_flowers)
 
 
-async def process_custom_relation(message: Message, state: FSMContext) -> None:
-    await state.update_data(relation=(message.text or "").strip())
+async def step_flowers(message: Message, state: FSMContext) -> None:
+    await state.update_data(fav_flowers=(message.text or "").strip())
     await message.answer(
-        f"{await form_progress(state, 6)}\n\n"
-        "Последний шаг! 🎀\n\n"
-        "Какой бюджет на букет?",
+        f"{progress(3)}\n\n"
+        "*Предпочтительные цвета букета?*",
+        parse_mode=PARSE_MODE,
+        reply_markup=kb_colors(),
+    )
+    await state.set_state(ProfileForm.fav_colors)
+
+
+async def step_colors(message: Message, state: FSMContext) -> None:
+    await state.update_data(fav_colors=(message.text or "").strip())
+    await message.answer(
+        f"{progress(3)}\n\n"
+        "*Стиль букета?*",
+        parse_mode=PARSE_MODE,
+        reply_markup=kb_style(),
+    )
+    await state.set_state(ProfileForm.fav_style)
+
+
+async def step_style(message: Message, state: FSMContext) -> None:
+    await state.update_data(fav_style=(message.text or "").strip())
+    await message.answer(
+        f"{progress(4)}\n\n"
+        "*Комфортный бюджет на букет?*",
         parse_mode=PARSE_MODE,
         reply_markup=kb_budget(),
     )
-    await state.set_state(OrderForm.budget)
+    await state.set_state(ProfileForm.budget)
+
+
+async def step_budget(message: Message, state: FSMContext) -> None:
+    await state.update_data(budget=(message.text or "").strip())
+    await message.answer(
+        f"{progress(4)}\n\n"
+        "*Как часто вы дарите цветы?*",
+        parse_mode=PARSE_MODE,
+        reply_markup=kb_frequency(),
+    )
+    await state.set_state(ProfileForm.frequency)
+
+
+async def step_frequency(message: Message, state: FSMContext) -> None:
+    await state.update_data(frequency=(message.text or "").strip())
+    await message.answer(
+        f"{progress(5)}\n\n"
+        "*Как удобнее получать букет?*",
+        parse_mode=PARSE_MODE,
+        reply_markup=kb_delivery(),
+    )
+    await state.set_state(ProfileForm.delivery)
+
+
+async def step_delivery(message: Message, state: FSMContext) -> None:
+    await state.update_data(delivery=(message.text or "").strip())
+    await message.answer(
+        f"{progress(5)}\n\n"
+        "*Удобное время получения?*",
+        parse_mode=PARSE_MODE,
+        reply_markup=kb_delivery_time(),
+    )
+    await state.set_state(ProfileForm.delivery_time)
+
+
+async def step_delivery_time(message: Message, state: FSMContext) -> None:
+    await state.update_data(delivery_time=(message.text or "").strip())
+    await message.answer(
+        f"{progress(6)}\n\n"
+        "*Как вы узнали о Veresk?*",
+        parse_mode=PARSE_MODE,
+        reply_markup=kb_source(),
+    )
+    await state.set_state(ProfileForm.source)
+
+
+async def step_source(message: Message, state: FSMContext) -> None:
+    await state.update_data(source=(message.text or "").strip())
+    await message.answer(
+        f"{progress(6)}\n\n"
+        "Последний вопрос!\n\n"
+        "*Хотите получать уведомления об акциях и новинках?*",
+        parse_mode=PARSE_MODE,
+        reply_markup=kb_consent(),
+    )
+    await state.set_state(ProfileForm.promo_consent)
+
+
+async def step_consent(message: Message, state: FSMContext) -> None:
+    await state.update_data(promo_consent=(message.text or "").strip())
+    data = await state.get_data()
+    tg_id = message.from_user.id
+
+    logger.info(
+        f"PROFILE tg_id={tg_id} | "
+        f"name={data.get('name')} | "
+        f"phone={data.get('phone')} | "
+        f"city={data.get('city')} | "
+        f"recipients={data.get('recipients')} | "
+        f"bday={data.get('bday_months')} | "
+        f"flowers={data.get('fav_flowers')} | "
+        f"colors={data.get('fav_colors')} | "
+        f"style={data.get('fav_style')} | "
+        f"budget={data.get('budget')} | "
+        f"frequency={data.get('frequency')} | "
+        f"delivery={data.get('delivery')} | "
+        f"delivery_time={data.get('delivery_time')} | "
+        f"source={data.get('source')} | "
+        f"promo={data.get('promo_consent')}"
+    )
+
+    await message.answer(
+        "🟣🟣🟣🟣🟣🟣  6/6\n\n"
+        "✅ *Профиль сохранён!*\n\n"
+        "┌─────────────────────\n"
+        f"│ 👤 Имя:         *{data.get('name')}*\n"
+        f"│ 📞 Телефон:     *{data.get('phone')}*\n"
+        f"│ 🏙 Город:        *{data.get('city')}*\n"
+        f"│ 🌸 Цветы:       *{data.get('fav_flowers')}*\n"
+        f"│ 🎨 Цвета:       *{data.get('fav_colors')}*\n"
+        f"│ 💰 Бюджет:      *{data.get('budget')}*\n"
+        f"│ 🎂 ДР близких:  *{data.get('bday_months')}*\n"
+        "└─────────────────────\n\n"
+        "Теперь мы сможем предлагать именно то, что вам понравится, "
+        "и напоминать о важных датах ваших близких.\n\n"
+        "_Спасибо, что выбираете Veresk · trail of happiness_",
+        parse_mode=PARSE_MODE,
+        reply_markup=ReplyKeyboardRemove(),
+    )
+
+    await state.clear()
 
 
 async def on_miniapp_order(message: Message, bot: Bot) -> None:
@@ -583,76 +1067,9 @@ async def on_miniapp_order(message: Message, bot: Bot) -> None:
     except Exception:
         logger.exception("Mini App sendData failed for tg_id=%s", message.from_user.id)
         await message.answer(
-            "⚠️ Не удалось принять заявку. Напишите /order или попробуйте снова из приложения.",
+            "⚠️ Не удалось принять заявку. Напишите /start или попробуйте снова из приложения.",
             parse_mode=PARSE_MODE,
         )
-
-
-async def process_budget(message: Message, state: FSMContext, bot: Bot) -> None:
-    budget = message.text or ""
-    if budget not in BUDGET_OPTIONS:
-        await message.answer(
-            "Выберите бюджет из кнопок ниже 👇",
-            reply_markup=kb_budget(),
-            parse_mode=PARSE_MODE,
-        )
-        return
-
-    await state.update_data(budget=budget)
-    data = await state.get_data()
-    client_tg_id = message.from_user.id
-    name = data["name"]
-    date = data["date"]
-    recipient = data["recipient"]
-    occasion = data["occasion"]
-    relation = data["relation"]
-
-    phone = data["phone"]
-
-    summary = (
-        f"{await form_progress(state, 7)}\n\n"
-        "✅ *Заявка принята!*\n\n"
-        "┌─────────────────────\n"
-        f"│ 👤 Клиент:      *{name}*\n"
-        f"│ 📞 Телефон:     *{phone}*\n"
-        f"│ 📅 Дата:        *{date}*\n"
-        f"│ 🎁 Получатель:  *{recipient}*\n"
-        f"│ 🎉 Повод:       *{occasion}*\n"
-        f"│ 💜 Кто:         *{relation}*\n"
-        f"│ 💰 Бюджет:      *{budget}*\n"
-        "└─────────────────────\n\n"
-        "Наш флорист свяжется с вами в течение *15 минут* 🌷"
-    )
-    summary += "\n\n_Спасибо, что выбираете Veresk_"
-
-    redis = getattr(dp, "redis", None)
-    order_id, posiflora_ok = await submit_order(bot, data, client_tg_id, redis=redis)
-
-    if not posiflora_ok:
-        summary += (
-            "\n\n⚠️ _Заявка принята, но возникла задержка с CRM. "
-            "Флорист свяжется с вами вручную._"
-        )
-
-    track_kb = tracking_keyboard(order_id)
-    if track_kb:
-        summary += "\n\n_Нажмите «Следить за заказом» — этапы и детали в приложении 💜_"
-
-    await message.answer(
-        summary,
-        parse_mode=PARSE_MODE,
-        reply_markup=track_kb or ReplyKeyboardRemove(),
-    )
-
-    track_reply = tracker_reply_keyboard(order_id)
-    if track_reply:
-        await message.answer(
-            "👇 Или откройте трекер кнопкой внизу:",
-            reply_markup=track_reply,
-        )
-    else:
-        await message.answer("🌷", reply_markup=ReplyKeyboardRemove())
-    await state.clear()
 
 
 def register_handlers(dp: Dispatcher) -> None:
@@ -662,17 +1079,22 @@ def register_handlers(dp: Dispatcher) -> None:
     dp.message.register(cmd_order, Command("order"))
     dp.message.register(cmd_orders, Command("orders"))
     dp.message.register(cmd_cancel, Command("cancel"))
-    dp.message.register(process_name, OrderForm.name)
-    dp.message.register(process_phone_contact, OrderForm.phone, F.contact)
-    dp.message.register(process_phone_text, OrderForm.phone, F.text)
-    dp.message.register(process_date, OrderForm.date)
-    dp.message.register(process_custom_date, OrderForm.custom_date)
-    dp.message.register(process_recipient, OrderForm.recipient)
-    dp.message.register(process_occasion, OrderForm.occasion)
-    dp.message.register(process_custom_occasion, OrderForm.custom_occasion)
-    dp.message.register(process_relation, OrderForm.relation)
-    dp.message.register(process_custom_relation, OrderForm.custom_relation)
-    dp.message.register(process_budget, OrderForm.budget)
+    dp.message.register(step_name, ProfileForm.name)
+    dp.message.register(step_phone_contact, ProfileForm.phone, F.contact)
+    dp.message.register(step_phone_text, ProfileForm.phone, F.text)
+    dp.message.register(step_city, ProfileForm.city)
+    dp.message.register(step_recipients, ProfileForm.recipients)
+    dp.message.register(step_bday, ProfileForm.bday_months)
+    dp.message.register(step_special, ProfileForm.special_dates)
+    dp.message.register(step_flowers, ProfileForm.fav_flowers)
+    dp.message.register(step_colors, ProfileForm.fav_colors)
+    dp.message.register(step_style, ProfileForm.fav_style)
+    dp.message.register(step_budget, ProfileForm.budget)
+    dp.message.register(step_frequency, ProfileForm.frequency)
+    dp.message.register(step_delivery, ProfileForm.delivery)
+    dp.message.register(step_delivery_time, ProfileForm.delivery_time)
+    dp.message.register(step_source, ProfileForm.source)
+    dp.message.register(step_consent, ProfileForm.promo_consent)
 
 
 BOT_COMMANDS = [
@@ -713,7 +1135,7 @@ async def setup_menu_commands() -> None:
     for attempt in range(1, 4):
         try:
             await bot.set_my_commands(BOT_COMMANDS, request_timeout=90)
-            await setup_bot_menu_button(bot)
+            await reset_bot_menu_button(bot)
             logger.info("Меню команд бота обновлено")
             return
         except TelegramUnauthorizedError:
