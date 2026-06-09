@@ -2,7 +2,8 @@ import asyncio
 import json
 import logging
 import os
-from datetime import datetime
+import re
+from datetime import datetime, timedelta
 from logging.handlers import RotatingFileHandler
 
 from aiogram import Bot, Dispatcher, F
@@ -84,6 +85,32 @@ def _choice_keyboard(rows: list[list[str]]) -> ReplyKeyboardMarkup:
     return ReplyKeyboardMarkup(keyboard=keyboard, resize_keyboard=True)
 
 
+def _format_date(day) -> str:
+    return day.strftime("%d.%m.%Y")
+
+
+def resolve_important_date(text: str) -> str | None:
+    """Проверяет ввод и возвращает дату в формате ДД.ММ.ГГГГ."""
+    raw = text.strip()
+    if not raw:
+        return None
+
+    today = datetime.now().date()
+    aliases = {"сегодня": 0, "завтра": 1}
+    alias = aliases.get(raw.lower())
+    if alias is not None:
+        return _format_date(today + timedelta(days=alias))
+
+    if re.match(r"^\d{2}\.\d{2}\.\d{4}$", raw):
+        try:
+            datetime.strptime(raw, "%d.%m.%Y")
+        except ValueError:
+            return None
+        return raw
+
+    return None
+
+
 def kb_phone() -> ReplyKeyboardMarkup:
     return ReplyKeyboardMarkup(
         keyboard=[
@@ -109,11 +136,12 @@ def kb_relation() -> ReplyKeyboardMarkup:
 
 
 def kb_budget() -> ReplyKeyboardMarkup:
-    return _choice_keyboard(
-        [
-            ["до 5 000 ₽", "до 10 000 ₽"],
-            ["до 15 000 ₽", "более 15 000 ₽"],
-        ]
+    return ReplyKeyboardMarkup(
+        keyboard=[
+            [KeyboardButton(text="до 5 000 ₽"), KeyboardButton(text="до 10 000 ₽")],
+            [KeyboardButton(text="до 15 000 ₽"), KeyboardButton(text="более 15 000 ₽")],
+        ],
+        resize_keyboard=True,
     )
 
 
@@ -730,11 +758,23 @@ async def _phone_done(message: Message, state: FSMContext, phone: str) -> None:
     await message.answer(
         f"{progress(2)}\n\n"
         "Укажите *важную дату* 📅\n\n"
-        "_Например: 15.06.2025 или «завтра»_",
+        "Введите дату в формате *ДД.ММ.ГГГГ*\n"
+        "_Например: 15.06.2025_",
         parse_mode=PARSE_MODE,
         reply_markup=ReplyKeyboardRemove(),
     )
     await state.set_state(ProfileForm.important_date)
+
+
+async def _ask_occasion(message: Message, state: FSMContext) -> None:
+    await message.answer(
+        f"{progress(3)}\n\n"
+        "*Какой повод?*\n\n"
+        "_Выберите вариант или нажмите «Свой вариант»_",
+        parse_mode=PARSE_MODE,
+        reply_markup=kb_occasion(),
+    )
+    await state.set_state(ProfileForm.occasion)
 
 
 async def _ask_relation(message: Message, state: FSMContext) -> None:
@@ -752,7 +792,7 @@ async def _ask_budget(message: Message, state: FSMContext) -> None:
     await message.answer(
         f"{progress(5)}\n\n"
         "*Уровень бюджета букета?*\n\n"
-        "_Выберите вариант или нажмите «Свой вариант»_",
+        "_Выберите вариант из кнопок ниже_",
         parse_mode=PARSE_MODE,
         reply_markup=kb_budget(),
     )
@@ -841,22 +881,18 @@ async def _handle_choice_step(
 
 
 async def step_important_date(message: Message, state: FSMContext) -> None:
-    important_date = (message.text or "").strip()
-    if not important_date:
-        await message.answer(
-            "Пожалуйста, укажите важную дату.",
-            parse_mode=PARSE_MODE,
-        )
+    text = (message.text or "").strip()
+    resolved = resolve_important_date(text)
+    if resolved:
+        await state.update_data(important_date=resolved)
+        await _ask_occasion(message, state)
         return
-    await state.update_data(important_date=important_date)
+
     await message.answer(
-        f"{progress(3)}\n\n"
-        "*Какой повод?*\n\n"
-        "_Выберите вариант или нажмите «Свой вариант»_",
+        "⚠️ Введите корректную дату в формате *ДД.ММ.ГГГГ*\n"
+        "_Например: 15.06.2025_",
         parse_mode=PARSE_MODE,
-        reply_markup=kb_occasion(),
     )
-    await state.set_state(ProfileForm.occasion)
 
 
 async def step_occasion(message: Message, state: FSMContext) -> None:
@@ -882,14 +918,16 @@ async def step_relation(message: Message, state: FSMContext) -> None:
 
 
 async def step_budget(message: Message, state: FSMContext) -> None:
-    await _handle_choice_step(
-        message,
-        state,
-        field="budget",
-        presets=BUDGET_PRESETS,
-        keyboard=kb_budget,
-        on_done=_ask_source,
-    )
+    budget = (message.text or "").strip()
+    if budget not in BUDGET_PRESETS:
+        await message.answer(
+            "Выберите бюджет из кнопок ниже 👇",
+            reply_markup=kb_budget(),
+            parse_mode=PARSE_MODE,
+        )
+        return
+    await state.update_data(budget=budget, awaiting_custom_budget=False)
+    await _ask_source(message, state)
 
 
 async def step_source(message: Message, state: FSMContext) -> None:
