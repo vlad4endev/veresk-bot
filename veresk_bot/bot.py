@@ -60,9 +60,28 @@ class ProfileForm(StatesGroup):
 
 FORM_STEPS = 7
 
+CUSTOM_OPTION = "✏️ Свой вариант"
+
+OCCASION_PRESETS = {"День рождения 🎂", "Годовщина 💍"}
+RELATION_PRESETS = {"Девушка", "Супруга", "Мама", "Дочь", "Коллега"}
+BUDGET_PRESETS = {"до 5 000 ₽", "до 10 000 ₽", "до 15 000 ₽", "более 15 000 ₽"}
+SOURCE_PRESETS = {
+    "Instagram",
+    "Рекомендация",
+    "Google / поиск",
+    "Telegram",
+    "Увидел вывеску",
+}
+
 
 def progress(step: int, total: int = FORM_STEPS) -> str:
     return "🟣" * step + "⚪️" * (total - step) + f"  {step}/{total}"
+
+
+def _choice_keyboard(rows: list[list[str]]) -> ReplyKeyboardMarkup:
+    keyboard = [[KeyboardButton(text=text) for text in row] for row in rows]
+    keyboard.append([KeyboardButton(text=CUSTOM_OPTION)])
+    return ReplyKeyboardMarkup(keyboard=keyboard, resize_keyboard=True)
 
 
 def kb_phone() -> ReplyKeyboardMarkup:
@@ -76,46 +95,35 @@ def kb_phone() -> ReplyKeyboardMarkup:
 
 
 def kb_occasion() -> ReplyKeyboardMarkup:
-    return ReplyKeyboardMarkup(
-        keyboard=[
-            [
-                KeyboardButton(text="День рождения 🎂"),
-                KeyboardButton(text="Годовщина 💍"),
-            ],
-        ],
-        resize_keyboard=True,
-    )
+    return _choice_keyboard([["День рождения 🎂", "Годовщина 💍"]])
 
 
 def kb_relation() -> ReplyKeyboardMarkup:
-    return ReplyKeyboardMarkup(
-        keyboard=[
-            [KeyboardButton(text="Девушка"), KeyboardButton(text="Супруга")],
-            [KeyboardButton(text="Мама"), KeyboardButton(text="Дочь")],
-            [KeyboardButton(text="Коллега")],
-        ],
-        resize_keyboard=True,
+    return _choice_keyboard(
+        [
+            ["Девушка", "Супруга"],
+            ["Мама", "Дочь"],
+            ["Коллега"],
+        ]
     )
 
 
 def kb_budget() -> ReplyKeyboardMarkup:
-    return ReplyKeyboardMarkup(
-        keyboard=[
-            [KeyboardButton(text="до 5 000 ₽"), KeyboardButton(text="до 10 000 ₽")],
-            [KeyboardButton(text="до 15 000 ₽"), KeyboardButton(text="более 15 000 ₽")],
-        ],
-        resize_keyboard=True,
+    return _choice_keyboard(
+        [
+            ["до 5 000 ₽", "до 10 000 ₽"],
+            ["до 15 000 ₽", "более 15 000 ₽"],
+        ]
     )
 
 
 def kb_source() -> ReplyKeyboardMarkup:
-    return ReplyKeyboardMarkup(
-        keyboard=[
-            [KeyboardButton(text="Instagram"), KeyboardButton(text="Рекомендация")],
-            [KeyboardButton(text="Google / поиск"), KeyboardButton(text="Telegram")],
-            [KeyboardButton(text="Увидел вывеску"), KeyboardButton(text="Другое")],
-        ],
-        resize_keyboard=True,
+    return _choice_keyboard(
+        [
+            ["Instagram", "Рекомендация"],
+            ["Google / поиск", "Telegram"],
+            ["Увидел вывеску"],
+        ]
     )
 
 
@@ -729,95 +737,40 @@ async def _phone_done(message: Message, state: FSMContext, phone: str) -> None:
     await state.set_state(ProfileForm.important_date)
 
 
-async def step_important_date(message: Message, state: FSMContext) -> None:
-    important_date = (message.text or "").strip()
-    if not important_date:
-        await message.answer(
-            "Пожалуйста, укажите важную дату.",
-            parse_mode=PARSE_MODE,
-        )
-        return
-    await state.update_data(important_date=important_date)
-    await message.answer(
-        f"{progress(3)}\n\n"
-        "*Какой повод?*\n\n"
-        "_Можно выбрать кнопку или написать свой вариант_",
-        parse_mode=PARSE_MODE,
-        reply_markup=kb_occasion(),
-    )
-    await state.set_state(ProfileForm.occasion)
-
-
-async def step_occasion(message: Message, state: FSMContext) -> None:
-    occasion = (message.text or "").strip()
-    if not occasion:
-        await message.answer(
-            "Выберите кнопку ниже или напишите свой вариант 👇",
-            reply_markup=kb_occasion(),
-            parse_mode=PARSE_MODE,
-        )
-        return
-    await state.update_data(occasion=occasion)
+async def _ask_relation(message: Message, state: FSMContext) -> None:
     await message.answer(
         f"{progress(4)}\n\n"
         "*Кем приходится получатель?* 🌺\n\n"
-        "_Можно выбрать кнопку или написать свой вариант_",
+        "_Выберите вариант или нажмите «Свой вариант»_",
         parse_mode=PARSE_MODE,
         reply_markup=kb_relation(),
     )
     await state.set_state(ProfileForm.relation)
 
 
-async def step_relation(message: Message, state: FSMContext) -> None:
-    relation = (message.text or "").strip()
-    if not relation:
-        await message.answer(
-            "Выберите кнопку ниже или напишите свой вариант 👇",
-            reply_markup=kb_relation(),
-            parse_mode=PARSE_MODE,
-        )
-        return
-    await state.update_data(relation=relation)
+async def _ask_budget(message: Message, state: FSMContext) -> None:
     await message.answer(
         f"{progress(5)}\n\n"
         "*Уровень бюджета букета?*\n\n"
-        "_Можно выбрать кнопку или написать свой вариант_",
+        "_Выберите вариант или нажмите «Свой вариант»_",
         parse_mode=PARSE_MODE,
         reply_markup=kb_budget(),
     )
     await state.set_state(ProfileForm.budget)
 
 
-async def step_budget(message: Message, state: FSMContext) -> None:
-    budget = (message.text or "").strip()
-    if not budget:
-        await message.answer(
-            "Выберите кнопку ниже или напишите свой вариант 👇",
-            reply_markup=kb_budget(),
-            parse_mode=PARSE_MODE,
-        )
-        return
-    await state.update_data(budget=budget)
+async def _ask_source(message: Message, state: FSMContext) -> None:
     await message.answer(
         f"{progress(6)}\n\n"
         "*Откуда вы узнали о нас?*\n\n"
-        "_Можно выбрать кнопку или написать свой вариант_",
+        "_Выберите вариант или нажмите «Свой вариант»_",
         parse_mode=PARSE_MODE,
         reply_markup=kb_source(),
     )
     await state.set_state(ProfileForm.source)
 
 
-async def step_source(message: Message, state: FSMContext) -> None:
-    source = (message.text or "").strip()
-    if not source:
-        await message.answer(
-            "Выберите кнопку ниже или напишите свой вариант 👇",
-            reply_markup=kb_source(),
-            parse_mode=PARSE_MODE,
-        )
-        return
-    await state.update_data(source=source)
+async def _finish_survey(message: Message, state: FSMContext) -> None:
     data = await state.get_data()
     tg_id = message.from_user.id
 
@@ -839,8 +792,115 @@ async def step_source(message: Message, state: FSMContext) -> None:
         parse_mode=PARSE_MODE,
         reply_markup=ReplyKeyboardRemove(),
     )
-
     await state.clear()
+
+
+async def _handle_choice_step(
+    message: Message,
+    state: FSMContext,
+    *,
+    field: str,
+    presets: set[str],
+    keyboard,
+    on_done,
+) -> None:
+    text = (message.text or "").strip()
+    awaiting_key = f"awaiting_custom_{field}"
+    data = await state.get_data()
+
+    if text == CUSTOM_OPTION:
+        await state.update_data(**{awaiting_key: True})
+        await message.answer(
+            "Напишите свой вариант:",
+            parse_mode=PARSE_MODE,
+            reply_markup=ReplyKeyboardRemove(),
+        )
+        return
+
+    if data.get(awaiting_key):
+        if not text:
+            await message.answer(
+                "Пожалуйста, введите текст.",
+                parse_mode=PARSE_MODE,
+            )
+            return
+        await state.update_data(**{field: text, awaiting_key: False})
+        await on_done(message, state)
+        return
+
+    if text in presets:
+        await state.update_data(**{field: text, awaiting_key: False})
+        await on_done(message, state)
+        return
+
+    await message.answer(
+        "Выберите вариант из кнопок или нажмите «Свой вариант» 👇",
+        reply_markup=keyboard(),
+        parse_mode=PARSE_MODE,
+    )
+
+
+async def step_important_date(message: Message, state: FSMContext) -> None:
+    important_date = (message.text or "").strip()
+    if not important_date:
+        await message.answer(
+            "Пожалуйста, укажите важную дату.",
+            parse_mode=PARSE_MODE,
+        )
+        return
+    await state.update_data(important_date=important_date)
+    await message.answer(
+        f"{progress(3)}\n\n"
+        "*Какой повод?*\n\n"
+        "_Выберите вариант или нажмите «Свой вариант»_",
+        parse_mode=PARSE_MODE,
+        reply_markup=kb_occasion(),
+    )
+    await state.set_state(ProfileForm.occasion)
+
+
+async def step_occasion(message: Message, state: FSMContext) -> None:
+    await _handle_choice_step(
+        message,
+        state,
+        field="occasion",
+        presets=OCCASION_PRESETS,
+        keyboard=kb_occasion,
+        on_done=_ask_relation,
+    )
+
+
+async def step_relation(message: Message, state: FSMContext) -> None:
+    await _handle_choice_step(
+        message,
+        state,
+        field="relation",
+        presets=RELATION_PRESETS,
+        keyboard=kb_relation,
+        on_done=_ask_budget,
+    )
+
+
+async def step_budget(message: Message, state: FSMContext) -> None:
+    await _handle_choice_step(
+        message,
+        state,
+        field="budget",
+        presets=BUDGET_PRESETS,
+        keyboard=kb_budget,
+        on_done=_ask_source,
+    )
+
+
+async def step_source(message: Message, state: FSMContext) -> None:
+    await _handle_choice_step(
+        message,
+        state,
+        field="source",
+        presets=SOURCE_PRESETS,
+        keyboard=kb_source,
+        on_done=_finish_survey,
+    )
 
 
 async def on_miniapp_order(message: Message, bot: Bot) -> None:
