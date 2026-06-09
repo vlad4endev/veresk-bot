@@ -49,48 +49,41 @@ PARSE_MODE = "Markdown"
 
 
 class ProfileForm(StatesGroup):
-    # Блок 1 — Кто вы
     name = State()
     phone = State()
-    city = State()
-
-    # Блок 2 — Важные люди
-    recipients = State()
-    bday_months = State()
-    special_dates = State()
-
-    # Блок 3 — Предпочтения в цветах
-    fav_flowers = State()
-    fav_colors = State()
-    fav_style = State()
-
-    # Блок 4 — Бюджет и частота
+    important_date = State()
+    occasion = State()
+    relation = State()
     budget = State()
-    frequency = State()
-
-    # Блок 5 — Доставка
-    delivery = State()
-    delivery_time = State()
-
-    # Блок 6 — Источник
     source = State()
-    promo_consent = State()
 
 
-BLOCK_NAMES = [
-    "Кто вы",
-    "Важные люди",
-    "Предпочтения",
-    "Бюджет",
-    "Доставка",
-    "Завершение",
-]
+FORM_STEPS = 7
 
 
-def progress(block: int) -> str:
-    done = "🟣" * block
-    empty = "⚪️" * (6 - block)
-    return f"{done}{empty}  Блок {block}/6 · {BLOCK_NAMES[block - 1]}"
+OCCASION_OPTIONS = {
+    "День рождения 🎂",
+    "Годовщина 💍",
+}
+
+RELATION_OPTIONS = {
+    "Девушка",
+    "Супруга",
+    "Мама",
+    "Дочь",
+    "Коллега",
+}
+
+BUDGET_OPTIONS = {
+    "до 5 000 ₽",
+    "до 10 000 ₽",
+    "до 15 000 ₽",
+    "более 15 000 ₽",
+}
+
+
+def progress(step: int, total: int = FORM_STEPS) -> str:
+    return "🟣" * step + "⚪️" * (total - step) + f"  {step}/{total}"
 
 
 def kb_phone() -> ReplyKeyboardMarkup:
@@ -103,84 +96,24 @@ def kb_phone() -> ReplyKeyboardMarkup:
     )
 
 
-def kb_recipients() -> ReplyKeyboardMarkup:
-    return ReplyKeyboardMarkup(
-        keyboard=[
-            [KeyboardButton(text="Девушка / Жена"), KeyboardButton(text="Мама")],
-            [KeyboardButton(text="Дочь"), KeyboardButton(text="Подруга")],
-            [KeyboardButton(text="Коллеги"), KeyboardButton(text="Все понемногу")],
-        ],
-        resize_keyboard=True,
-    )
-
-
-def kb_months() -> ReplyKeyboardMarkup:
+def kb_occasion() -> ReplyKeyboardMarkup:
     return ReplyKeyboardMarkup(
         keyboard=[
             [
-                KeyboardButton(text="Январь"),
-                KeyboardButton(text="Февраль"),
-                KeyboardButton(text="Март"),
-            ],
-            [
-                KeyboardButton(text="Апрель"),
-                KeyboardButton(text="Май"),
-                KeyboardButton(text="Июнь"),
-            ],
-            [
-                KeyboardButton(text="Июль"),
-                KeyboardButton(text="Август"),
-                KeyboardButton(text="Сентябрь"),
-            ],
-            [
-                KeyboardButton(text="Октябрь"),
-                KeyboardButton(text="Ноябрь"),
-                KeyboardButton(text="Декабрь"),
-            ],
-            [KeyboardButton(text="Не знаю / нет")],
-        ],
-        resize_keyboard=True,
-    )
-
-
-def kb_flowers() -> ReplyKeyboardMarkup:
-    return ReplyKeyboardMarkup(
-        keyboard=[
-            [KeyboardButton(text="Розы"), KeyboardButton(text="Пионы")],
-            [KeyboardButton(text="Тюльпаны"), KeyboardButton(text="Хризантемы")],
-            [KeyboardButton(text="Полевые"), KeyboardButton(text="Орхидеи")],
-            [KeyboardButton(text="Без предпочтений")],
-        ],
-        resize_keyboard=True,
-    )
-
-
-def kb_colors() -> ReplyKeyboardMarkup:
-    return ReplyKeyboardMarkup(
-        keyboard=[
-            [
-                KeyboardButton(text="Нежные пастельные"),
-                KeyboardButton(text="Яркие"),
-            ],
-            [
-                KeyboardButton(text="Белые / кремовые"),
-                KeyboardButton(text="Красные"),
-            ],
-            [
-                KeyboardButton(text="Смешанные"),
-                KeyboardButton(text="Без разницы"),
+                KeyboardButton(text="День рождения 🎂"),
+                KeyboardButton(text="Годовщина 💍"),
             ],
         ],
         resize_keyboard=True,
     )
 
 
-def kb_style() -> ReplyKeyboardMarkup:
+def kb_relation() -> ReplyKeyboardMarkup:
     return ReplyKeyboardMarkup(
         keyboard=[
-            [KeyboardButton(text="Классика"), KeyboardButton(text="Минимализм")],
-            [KeyboardButton(text="Полевой"), KeyboardButton(text="Авторский")],
-            [KeyboardButton(text="Без разницы")],
+            [KeyboardButton(text="Девушка"), KeyboardButton(text="Супруга")],
+            [KeyboardButton(text="Мама"), KeyboardButton(text="Дочь")],
+            [KeyboardButton(text="Коллега")],
         ],
         resize_keyboard=True,
     )
@@ -189,47 +122,8 @@ def kb_style() -> ReplyKeyboardMarkup:
 def kb_budget() -> ReplyKeyboardMarkup:
     return ReplyKeyboardMarkup(
         keyboard=[
-            [KeyboardButton(text="до 3 000 ₽"), KeyboardButton(text="до 5 000 ₽")],
-            [KeyboardButton(text="до 10 000 ₽"), KeyboardButton(text="до 15 000 ₽")],
-            [KeyboardButton(text="от 15 000 ₽")],
-        ],
-        resize_keyboard=True,
-    )
-
-
-def kb_frequency() -> ReplyKeyboardMarkup:
-    return ReplyKeyboardMarkup(
-        keyboard=[
-            [KeyboardButton(text="Раз в месяц и чаще")],
-            [KeyboardButton(text="По праздникам")],
-            [KeyboardButton(text="Несколько раз в год")],
-            [KeyboardButton(text="Редко, по особым случаям")],
-        ],
-        resize_keyboard=True,
-    )
-
-
-def kb_delivery() -> ReplyKeyboardMarkup:
-    return ReplyKeyboardMarkup(
-        keyboard=[
-            [KeyboardButton(text="Доставка"), KeyboardButton(text="Самовывоз")],
-            [KeyboardButton(text="По-разному")],
-        ],
-        resize_keyboard=True,
-    )
-
-
-def kb_delivery_time() -> ReplyKeyboardMarkup:
-    return ReplyKeyboardMarkup(
-        keyboard=[
-            [
-                KeyboardButton(text="Утро (9:00–12:00)"),
-                KeyboardButton(text="День (12:00–18:00)"),
-            ],
-            [
-                KeyboardButton(text="Вечер (18:00–21:00)"),
-                KeyboardButton(text="Без разницы"),
-            ],
+            [KeyboardButton(text="до 5 000 ₽"), KeyboardButton(text="до 10 000 ₽")],
+            [KeyboardButton(text="до 15 000 ₽"), KeyboardButton(text="более 15 000 ₽")],
         ],
         resize_keyboard=True,
     )
@@ -241,16 +135,6 @@ def kb_source() -> ReplyKeyboardMarkup:
             [KeyboardButton(text="Instagram"), KeyboardButton(text="Рекомендация")],
             [KeyboardButton(text="Google / поиск"), KeyboardButton(text="Telegram")],
             [KeyboardButton(text="Увидел вывеску"), KeyboardButton(text="Другое")],
-        ],
-        resize_keyboard=True,
-    )
-
-
-def kb_consent() -> ReplyKeyboardMarkup:
-    return ReplyKeyboardMarkup(
-        keyboard=[
-            [KeyboardButton(text="Да, хочу получать акции и новинки")],
-            [KeyboardButton(text="Нет, не нужно")],
         ],
         resize_keyboard=True,
     )
@@ -741,8 +625,8 @@ async def cmd_start(message: Message, state: FSMContext) -> None:
     await message.answer(
         "🌸 *Добро пожаловать в Veresk*\n"
         "_флористический салон · trail of happiness_\n\n"
-        "Расскажите немного о себе — это поможет нам подбирать "
-        "идеальные букеты и напоминать о важных датах ваших близких.\n\n"
+        "Заполните короткую анкету — это поможет нам подобрать "
+        "идеальный букет для вашего повода.\n\n"
         "Как вас зовут?",
         parse_mode=PARSE_MODE,
         reply_markup=ReplyKeyboardRemove(),
@@ -821,6 +705,9 @@ async def cmd_cancel(message: Message, state: FSMContext) -> None:
 
 async def step_name(message: Message, state: FSMContext) -> None:
     name = (message.text or "").strip()
+    if not name:
+        await message.answer("Пожалуйста, введите ваше имя.", parse_mode=PARSE_MODE)
+        return
     await state.update_data(name=name)
     await message.answer(
         f"{progress(1)}\n\n"
@@ -854,86 +741,65 @@ async def step_phone_text(message: Message, state: FSMContext) -> None:
 async def _phone_done(message: Message, state: FSMContext, phone: str) -> None:
     await state.update_data(phone=phone)
     await message.answer(
-        f"{progress(1)}\n\nИз какого вы города или района?",
+        f"{progress(2)}\n\n"
+        "Укажите *важную дату* 📅\n\n"
+        "_Например: 15.06.2025 или «завтра»_",
         parse_mode=PARSE_MODE,
         reply_markup=ReplyKeyboardRemove(),
     )
-    await state.set_state(ProfileForm.city)
+    await state.set_state(ProfileForm.important_date)
 
 
-async def step_city(message: Message, state: FSMContext) -> None:
-    await state.update_data(city=(message.text or "").strip())
-    await message.answer(
-        f"{progress(2)}\n\n"
-        "*Кому вы чаще всего дарите цветы?*",
-        parse_mode=PARSE_MODE,
-        reply_markup=kb_recipients(),
-    )
-    await state.set_state(ProfileForm.recipients)
-
-
-async def step_recipients(message: Message, state: FSMContext) -> None:
-    await state.update_data(recipients=(message.text or "").strip())
-    await message.answer(
-        f"{progress(2)}\n\n"
-        "*В каком месяце у них день рождения?*\n\n"
-        "_Можно написать несколько через запятую_",
-        parse_mode=PARSE_MODE,
-        reply_markup=kb_months(),
-    )
-    await state.set_state(ProfileForm.bday_months)
-
-
-async def step_bday(message: Message, state: FSMContext) -> None:
-    await state.update_data(bday_months=(message.text or "").strip())
-    await message.answer(
-        f"{progress(2)}\n\n"
-        "Есть ли годовщина или другая особая дата?\n\n"
-        "_Напишите месяц или «нет»_",
-        parse_mode=PARSE_MODE,
-        reply_markup=ReplyKeyboardRemove(),
-    )
-    await state.set_state(ProfileForm.special_dates)
-
-
-async def step_special(message: Message, state: FSMContext) -> None:
-    await state.update_data(special_dates=(message.text or "").strip())
+async def step_important_date(message: Message, state: FSMContext) -> None:
+    important_date = (message.text or "").strip()
+    if not important_date:
+        await message.answer(
+            "Пожалуйста, укажите важную дату.",
+            parse_mode=PARSE_MODE,
+        )
+        return
+    await state.update_data(important_date=important_date)
     await message.answer(
         f"{progress(3)}\n\n"
-        "*Какие цветы нравятся больше всего?*",
+        "*Какой повод?*",
         parse_mode=PARSE_MODE,
-        reply_markup=kb_flowers(),
+        reply_markup=kb_occasion(),
     )
-    await state.set_state(ProfileForm.fav_flowers)
+    await state.set_state(ProfileForm.occasion)
 
 
-async def step_flowers(message: Message, state: FSMContext) -> None:
-    await state.update_data(fav_flowers=(message.text or "").strip())
-    await message.answer(
-        f"{progress(3)}\n\n"
-        "*Предпочтительные цвета букета?*",
-        parse_mode=PARSE_MODE,
-        reply_markup=kb_colors(),
-    )
-    await state.set_state(ProfileForm.fav_colors)
-
-
-async def step_colors(message: Message, state: FSMContext) -> None:
-    await state.update_data(fav_colors=(message.text or "").strip())
-    await message.answer(
-        f"{progress(3)}\n\n"
-        "*Стиль букета?*",
-        parse_mode=PARSE_MODE,
-        reply_markup=kb_style(),
-    )
-    await state.set_state(ProfileForm.fav_style)
-
-
-async def step_style(message: Message, state: FSMContext) -> None:
-    await state.update_data(fav_style=(message.text or "").strip())
+async def step_occasion(message: Message, state: FSMContext) -> None:
+    occasion = message.text or ""
+    if occasion not in OCCASION_OPTIONS:
+        await message.answer(
+            "Выберите повод из кнопок ниже 👇",
+            reply_markup=kb_occasion(),
+            parse_mode=PARSE_MODE,
+        )
+        return
+    await state.update_data(occasion=occasion)
     await message.answer(
         f"{progress(4)}\n\n"
-        "*Комфортный бюджет на букет?*",
+        "*Кем приходится получатель?* 🌺",
+        parse_mode=PARSE_MODE,
+        reply_markup=kb_relation(),
+    )
+    await state.set_state(ProfileForm.relation)
+
+
+async def step_relation(message: Message, state: FSMContext) -> None:
+    relation = message.text or ""
+    if relation not in RELATION_OPTIONS:
+        await message.answer(
+            "Выберите вариант из кнопок ниже 👇",
+            reply_markup=kb_relation(),
+            parse_mode=PARSE_MODE,
+        )
+        return
+    await state.update_data(relation=relation)
+    await message.answer(
+        f"{progress(5)}\n\n"
+        "*Уровень бюджета букета?*",
         parse_mode=PARSE_MODE,
         reply_markup=kb_budget(),
     )
@@ -941,43 +807,18 @@ async def step_style(message: Message, state: FSMContext) -> None:
 
 
 async def step_budget(message: Message, state: FSMContext) -> None:
-    await state.update_data(budget=(message.text or "").strip())
-    await message.answer(
-        f"{progress(4)}\n\n"
-        "*Как часто вы дарите цветы?*",
-        parse_mode=PARSE_MODE,
-        reply_markup=kb_frequency(),
-    )
-    await state.set_state(ProfileForm.frequency)
-
-
-async def step_frequency(message: Message, state: FSMContext) -> None:
-    await state.update_data(frequency=(message.text or "").strip())
-    await message.answer(
-        f"{progress(5)}\n\n"
-        "*Как удобнее получать букет?*",
-        parse_mode=PARSE_MODE,
-        reply_markup=kb_delivery(),
-    )
-    await state.set_state(ProfileForm.delivery)
-
-
-async def step_delivery(message: Message, state: FSMContext) -> None:
-    await state.update_data(delivery=(message.text or "").strip())
-    await message.answer(
-        f"{progress(5)}\n\n"
-        "*Удобное время получения?*",
-        parse_mode=PARSE_MODE,
-        reply_markup=kb_delivery_time(),
-    )
-    await state.set_state(ProfileForm.delivery_time)
-
-
-async def step_delivery_time(message: Message, state: FSMContext) -> None:
-    await state.update_data(delivery_time=(message.text or "").strip())
+    budget = message.text or ""
+    if budget not in BUDGET_OPTIONS:
+        await message.answer(
+            "Выберите бюджет из кнопок ниже 👇",
+            reply_markup=kb_budget(),
+            parse_mode=PARSE_MODE,
+        )
+        return
+    await state.update_data(budget=budget)
     await message.answer(
         f"{progress(6)}\n\n"
-        "*Как вы узнали о Veresk?*",
+        "*Откуда вы узнали о нас?*",
         parse_mode=PARSE_MODE,
         reply_markup=kb_source(),
     )
@@ -985,19 +826,15 @@ async def step_delivery_time(message: Message, state: FSMContext) -> None:
 
 
 async def step_source(message: Message, state: FSMContext) -> None:
-    await state.update_data(source=(message.text or "").strip())
-    await message.answer(
-        f"{progress(6)}\n\n"
-        "Последний вопрос!\n\n"
-        "*Хотите получать уведомления об акциях и новинках?*",
-        parse_mode=PARSE_MODE,
-        reply_markup=kb_consent(),
-    )
-    await state.set_state(ProfileForm.promo_consent)
-
-
-async def step_consent(message: Message, state: FSMContext) -> None:
-    await state.update_data(promo_consent=(message.text or "").strip())
+    source = (message.text or "").strip()
+    if not source:
+        await message.answer(
+            "Выберите вариант из кнопок ниже или напишите свой 👇",
+            reply_markup=kb_source(),
+            parse_mode=PARSE_MODE,
+        )
+        return
+    await state.update_data(source=source)
     data = await state.get_data()
     tg_id = message.from_user.id
 
@@ -1005,34 +842,26 @@ async def step_consent(message: Message, state: FSMContext) -> None:
         f"PROFILE tg_id={tg_id} | "
         f"name={data.get('name')} | "
         f"phone={data.get('phone')} | "
-        f"city={data.get('city')} | "
-        f"recipients={data.get('recipients')} | "
-        f"bday={data.get('bday_months')} | "
-        f"flowers={data.get('fav_flowers')} | "
-        f"colors={data.get('fav_colors')} | "
-        f"style={data.get('fav_style')} | "
+        f"important_date={data.get('important_date')} | "
+        f"occasion={data.get('occasion')} | "
+        f"relation={data.get('relation')} | "
         f"budget={data.get('budget')} | "
-        f"frequency={data.get('frequency')} | "
-        f"delivery={data.get('delivery')} | "
-        f"delivery_time={data.get('delivery_time')} | "
-        f"source={data.get('source')} | "
-        f"promo={data.get('promo_consent')}"
+        f"source={data.get('source')}"
     )
 
     await message.answer(
-        "🟣🟣🟣🟣🟣🟣  6/6\n\n"
-        "✅ *Профиль сохранён!*\n\n"
+        f"{progress(7)}\n\n"
+        "✅ *Анкета принята!*\n\n"
         "┌─────────────────────\n"
         f"│ 👤 Имя:         *{data.get('name')}*\n"
         f"│ 📞 Телефон:     *{data.get('phone')}*\n"
-        f"│ 🏙 Город:        *{data.get('city')}*\n"
-        f"│ 🌸 Цветы:       *{data.get('fav_flowers')}*\n"
-        f"│ 🎨 Цвета:       *{data.get('fav_colors')}*\n"
+        f"│ 📅 Важная дата: *{data.get('important_date')}*\n"
+        f"│ 🎉 Повод:       *{data.get('occasion')}*\n"
+        f"│ 💜 Кто:         *{data.get('relation')}*\n"
         f"│ 💰 Бюджет:      *{data.get('budget')}*\n"
-        f"│ 🎂 ДР близких:  *{data.get('bday_months')}*\n"
+        f"│ 📣 Источник:    *{data.get('source')}*\n"
         "└─────────────────────\n\n"
-        "Теперь мы сможем предлагать именно то, что вам понравится, "
-        "и напоминать о важных датах ваших близких.\n\n"
+        "Наш флорист свяжется с вами в течение *15 минут* 🌷\n\n"
         "_Спасибо, что выбираете Veresk · trail of happiness_",
         parse_mode=PARSE_MODE,
         reply_markup=ReplyKeyboardRemove(),
@@ -1082,19 +911,11 @@ def register_handlers(dp: Dispatcher) -> None:
     dp.message.register(step_name, ProfileForm.name)
     dp.message.register(step_phone_contact, ProfileForm.phone, F.contact)
     dp.message.register(step_phone_text, ProfileForm.phone, F.text)
-    dp.message.register(step_city, ProfileForm.city)
-    dp.message.register(step_recipients, ProfileForm.recipients)
-    dp.message.register(step_bday, ProfileForm.bday_months)
-    dp.message.register(step_special, ProfileForm.special_dates)
-    dp.message.register(step_flowers, ProfileForm.fav_flowers)
-    dp.message.register(step_colors, ProfileForm.fav_colors)
-    dp.message.register(step_style, ProfileForm.fav_style)
+    dp.message.register(step_important_date, ProfileForm.important_date)
+    dp.message.register(step_occasion, ProfileForm.occasion)
+    dp.message.register(step_relation, ProfileForm.relation)
     dp.message.register(step_budget, ProfileForm.budget)
-    dp.message.register(step_frequency, ProfileForm.frequency)
-    dp.message.register(step_delivery, ProfileForm.delivery)
-    dp.message.register(step_delivery_time, ProfileForm.delivery_time)
     dp.message.register(step_source, ProfileForm.source)
-    dp.message.register(step_consent, ProfileForm.promo_consent)
 
 
 BOT_COMMANDS = [
