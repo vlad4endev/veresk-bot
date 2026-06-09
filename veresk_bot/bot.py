@@ -61,27 +61,6 @@ class ProfileForm(StatesGroup):
 FORM_STEPS = 7
 
 
-OCCASION_OPTIONS = {
-    "День рождения 🎂",
-    "Годовщина 💍",
-}
-
-RELATION_OPTIONS = {
-    "Девушка",
-    "Супруга",
-    "Мама",
-    "Дочь",
-    "Коллега",
-}
-
-BUDGET_OPTIONS = {
-    "до 5 000 ₽",
-    "до 10 000 ₽",
-    "до 15 000 ₽",
-    "более 15 000 ₽",
-}
-
-
 def progress(step: int, total: int = FORM_STEPS) -> str:
     return "🟣" * step + "⚪️" * (total - step) + f"  {step}/{total}"
 
@@ -761,7 +740,8 @@ async def step_important_date(message: Message, state: FSMContext) -> None:
     await state.update_data(important_date=important_date)
     await message.answer(
         f"{progress(3)}\n\n"
-        "*Какой повод?*",
+        "*Какой повод?*\n\n"
+        "_Можно выбрать кнопку или написать свой вариант_",
         parse_mode=PARSE_MODE,
         reply_markup=kb_occasion(),
     )
@@ -769,10 +749,10 @@ async def step_important_date(message: Message, state: FSMContext) -> None:
 
 
 async def step_occasion(message: Message, state: FSMContext) -> None:
-    occasion = message.text or ""
-    if occasion not in OCCASION_OPTIONS:
+    occasion = (message.text or "").strip()
+    if not occasion:
         await message.answer(
-            "Выберите повод из кнопок ниже 👇",
+            "Выберите кнопку ниже или напишите свой вариант 👇",
             reply_markup=kb_occasion(),
             parse_mode=PARSE_MODE,
         )
@@ -780,7 +760,8 @@ async def step_occasion(message: Message, state: FSMContext) -> None:
     await state.update_data(occasion=occasion)
     await message.answer(
         f"{progress(4)}\n\n"
-        "*Кем приходится получатель?* 🌺",
+        "*Кем приходится получатель?* 🌺\n\n"
+        "_Можно выбрать кнопку или написать свой вариант_",
         parse_mode=PARSE_MODE,
         reply_markup=kb_relation(),
     )
@@ -788,10 +769,10 @@ async def step_occasion(message: Message, state: FSMContext) -> None:
 
 
 async def step_relation(message: Message, state: FSMContext) -> None:
-    relation = message.text or ""
-    if relation not in RELATION_OPTIONS:
+    relation = (message.text or "").strip()
+    if not relation:
         await message.answer(
-            "Выберите вариант из кнопок ниже 👇",
+            "Выберите кнопку ниже или напишите свой вариант 👇",
             reply_markup=kb_relation(),
             parse_mode=PARSE_MODE,
         )
@@ -799,7 +780,8 @@ async def step_relation(message: Message, state: FSMContext) -> None:
     await state.update_data(relation=relation)
     await message.answer(
         f"{progress(5)}\n\n"
-        "*Уровень бюджета букета?*",
+        "*Уровень бюджета букета?*\n\n"
+        "_Можно выбрать кнопку или написать свой вариант_",
         parse_mode=PARSE_MODE,
         reply_markup=kb_budget(),
     )
@@ -807,10 +789,10 @@ async def step_relation(message: Message, state: FSMContext) -> None:
 
 
 async def step_budget(message: Message, state: FSMContext) -> None:
-    budget = message.text or ""
-    if budget not in BUDGET_OPTIONS:
+    budget = (message.text or "").strip()
+    if not budget:
         await message.answer(
-            "Выберите бюджет из кнопок ниже 👇",
+            "Выберите кнопку ниже или напишите свой вариант 👇",
             reply_markup=kb_budget(),
             parse_mode=PARSE_MODE,
         )
@@ -818,7 +800,8 @@ async def step_budget(message: Message, state: FSMContext) -> None:
     await state.update_data(budget=budget)
     await message.answer(
         f"{progress(6)}\n\n"
-        "*Откуда вы узнали о нас?*",
+        "*Откуда вы узнали о нас?*\n\n"
+        "_Можно выбрать кнопку или написать свой вариант_",
         parse_mode=PARSE_MODE,
         reply_markup=kb_source(),
     )
@@ -829,7 +812,7 @@ async def step_source(message: Message, state: FSMContext) -> None:
     source = (message.text or "").strip()
     if not source:
         await message.answer(
-            "Выберите вариант из кнопок ниже или напишите свой 👇",
+            "Выберите кнопку ниже или напишите свой вариант 👇",
             reply_markup=kb_source(),
             parse_mode=PARSE_MODE,
         )
@@ -851,16 +834,6 @@ async def step_source(message: Message, state: FSMContext) -> None:
 
     await message.answer(
         f"{progress(7)}\n\n"
-        "✅ *Анкета принята!*\n\n"
-        "┌─────────────────────\n"
-        f"│ 👤 Имя:         *{data.get('name')}*\n"
-        f"│ 📞 Телефон:     *{data.get('phone')}*\n"
-        f"│ 📅 Важная дата: *{data.get('important_date')}*\n"
-        f"│ 🎉 Повод:       *{data.get('occasion')}*\n"
-        f"│ 💜 Кто:         *{data.get('relation')}*\n"
-        f"│ 💰 Бюджет:      *{data.get('budget')}*\n"
-        f"│ 📣 Источник:    *{data.get('source')}*\n"
-        "└─────────────────────\n\n"
         "Спасибо, что ответили на все вопросы! 🌷\n\n"
         "_Спасибо, что выбираете Veresk · trail of happiness_",
         parse_mode=PARSE_MODE,
