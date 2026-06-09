@@ -861,7 +861,7 @@ async def step_source(message: Message, state: FSMContext) -> None:
         f"│ 💰 Бюджет:      *{data.get('budget')}*\n"
         f"│ 📣 Источник:    *{data.get('source')}*\n"
         "└─────────────────────\n\n"
-        "Наш флорист свяжется с вами в течение *15 минут* 🌷\n\n"
+        "Спасибо, что ответили на все вопросы! 🌷\n\n"
         "_Спасибо, что выбираете Veresk · trail of happiness_",
         parse_mode=PARSE_MODE,
         reply_markup=ReplyKeyboardRemove(),
