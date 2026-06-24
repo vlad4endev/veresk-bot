@@ -22,7 +22,7 @@ from aiogram.types import (
 )
 
 from app_context import set_redis
-from config import BOT_TOKEN, MINIAPP_URL, WEBAPP_HOST, WEBAPP_PORT
+from config import BOT_TOKEN, FLORIST_CHAT_ID, MINIAPP_URL, WEBAPP_HOST, WEBAPP_PORT
 
 try:
     from aiogram.fsm.storage.redis import RedisStorage
@@ -32,7 +32,8 @@ try:
 except ImportError:
     storage = MemoryStorage()
 
-from client_db import get_orders_for_client
+from client_db import get_orders_for_client, save_client_profile
+from notifications import notify_florist_profile
 from notifications import router as notifications_router
 from order_status import status_meta
 from poller import start_polling
@@ -55,6 +56,7 @@ class ProfileForm(StatesGroup):
     important_date = State()
     occasion = State()
     relation = State()
+    add_more_dates = State()
     budget = State()
     source = State()
 
@@ -62,6 +64,8 @@ class ProfileForm(StatesGroup):
 FORM_STEPS = 7
 
 CUSTOM_OPTION = "✏️ Свой вариант"
+ADD_MORE_YES = "➕ Добавить ещё дату"
+ADD_MORE_NO = "✅ Больше нет"
 
 OCCASION_PRESETS = {"День рождения 🎂", "Годовщина 💍"}
 RELATION_PRESETS = {"Девушка", "Супруга", "Мама", "Дочь", "Коллега"}
@@ -153,6 +157,25 @@ def kb_source() -> ReplyKeyboardMarkup:
             ["Увидел вывеску"],
         ]
     )
+
+
+def kb_add_more_dates() -> ReplyKeyboardMarkup:
+    return ReplyKeyboardMarkup(
+        keyboard=[
+            [KeyboardButton(text=ADD_MORE_YES)],
+            [KeyboardButton(text=ADD_MORE_NO)],
+        ],
+        resize_keyboard=True,
+    )
+
+
+def _format_events_lines(events: list[dict]) -> str:
+    lines = []
+    for i, event in enumerate(events, start=1):
+        lines.append(
+            f"│ {i}. 📅 *{event['date']}* · {event['occasion']} · {event['relation']}"
+        )
+    return "\n".join(lines)
 
 
 # ═══════════════════════════════════════════════════════════
@@ -637,6 +660,7 @@ async def _send_tracker_invite(
 
 async def cmd_start(message: Message, state: FSMContext) -> None:
     await state.clear()
+    await state.update_data(events=[])
     await message.answer(
         "🌸 *Добро пожаловать в Veresk*\n"
         "_флористический салон · trail of happiness_\n\n"
@@ -768,7 +792,7 @@ async def _phone_done(message: Message, state: FSMContext, phone: str) -> None:
 
 async def _ask_occasion(message: Message, state: FSMContext) -> None:
     await message.answer(
-        f"{progress(3)}\n\n"
+        f"{progress(4)}\n\n"
         "*Какой повод?*\n\n"
         "_Выберите вариант или нажмите «Свой вариант»_",
         parse_mode=PARSE_MODE,
@@ -779,7 +803,7 @@ async def _ask_occasion(message: Message, state: FSMContext) -> None:
 
 async def _ask_relation(message: Message, state: FSMContext) -> None:
     await message.answer(
-        f"{progress(4)}\n\n"
+        f"{progress(5)}\n\n"
         "*Кем приходится получатель?* 🌺\n\n"
         "_Выберите вариант или нажмите «Свой вариант»_",
         parse_mode=PARSE_MODE,
@@ -788,9 +812,32 @@ async def _ask_relation(message: Message, state: FSMContext) -> None:
     await state.set_state(ProfileForm.relation)
 
 
+async def _save_event_and_ask_more(message: Message, state: FSMContext) -> None:
+    data = await state.get_data()
+    events = list(data.get("events", []))
+    events.append(
+        {
+            "date": data["important_date"],
+            "occasion": data["occasion"],
+            "relation": data["relation"],
+        }
+    )
+    await state.update_data(events=events)
+    count = len(events)
+    await message.answer(
+        f"Событие сохранено ✅\n"
+        f"📅 *{data['important_date']}* · {data['occasion']} · {data['relation']}\n\n"
+        f"Всего важных дат: *{count}*\n\n"
+        "Хотите добавить ещё одну важную дату?",
+        parse_mode=PARSE_MODE,
+        reply_markup=kb_add_more_dates(),
+    )
+    await state.set_state(ProfileForm.add_more_dates)
+
+
 async def _ask_budget(message: Message, state: FSMContext) -> None:
     await message.answer(
-        f"{progress(5)}\n\n"
+        f"{progress(6)}\n\n"
         "*Уровень бюджета букета?*\n\n"
         "_Выберите вариант из кнопок ниже_",
         parse_mode=PARSE_MODE,
@@ -801,7 +848,7 @@ async def _ask_budget(message: Message, state: FSMContext) -> None:
 
 async def _ask_source(message: Message, state: FSMContext) -> None:
     await message.answer(
-        f"{progress(6)}\n\n"
+        f"{progress(7)}\n\n"
         "*Откуда вы узнали о нас?*\n\n"
         "_Выберите вариант или нажмите «Свой вариант»_",
         parse_mode=PARSE_MODE,
@@ -813,20 +860,42 @@ async def _ask_source(message: Message, state: FSMContext) -> None:
 async def _finish_survey(message: Message, state: FSMContext) -> None:
     data = await state.get_data()
     tg_id = message.from_user.id
+    events = list(data.get("events", []))
+
+    profile = {
+        "name": data.get("name", ""),
+        "phone": data.get("phone", ""),
+        "budget": data.get("budget", ""),
+        "source": data.get("source", ""),
+        "events": events,
+    }
 
     logger.info(
-        f"PROFILE tg_id={tg_id} | "
-        f"name={data.get('name')} | "
-        f"phone={data.get('phone')} | "
-        f"important_date={data.get('important_date')} | "
-        f"occasion={data.get('occasion')} | "
-        f"relation={data.get('relation')} | "
-        f"budget={data.get('budget')} | "
-        f"source={data.get('source')}"
+        "PROFILE tg_id=%s | name=%s | phone=%s | budget=%s | source=%s | events=%s",
+        tg_id,
+        profile["name"],
+        profile["phone"],
+        profile["budget"],
+        profile["source"],
+        json.dumps(events, ensure_ascii=False),
     )
 
+    await save_client_profile(tg_id, profile)
+    await notify_florist_profile(message.bot, FLORIST_CHAT_ID, profile, tg_id)
+
+    events_block = _format_events_lines(events)
     await message.answer(
         f"{progress(7)}\n\n"
+        "✅ *Анкета сохранена!*\n\n"
+        "┌─────────────────────\n"
+        f"│ 👤 Клиент:  *{profile['name']}*\n"
+        f"│ 📞 Телефон: *{profile['phone']}*\n"
+        f"│ 💰 Бюджет:  *{profile['budget']}*\n"
+        f"│ 📣 Источник: *{profile['source']}*\n"
+        "│\n"
+        "│ *Важные даты:*\n"
+        f"{events_block}\n"
+        "└─────────────────────\n\n"
         "Спасибо, что ответили на все вопросы! 🌷\n\n"
         "_Спасибо, что выбираете Veresk · trail of happiness_",
         parse_mode=PARSE_MODE,
@@ -885,12 +954,46 @@ async def step_important_date(message: Message, state: FSMContext) -> None:
     resolved = resolve_important_date(text)
     if resolved:
         await state.update_data(important_date=resolved)
+        data = await state.get_data()
+        event_num = len(data.get("events", [])) + 1
+        if event_num > 1:
+            await message.answer(
+                f"Дата *{resolved}* принята ✅\n\n"
+                f"*Событие {event_num}* — какой повод?",
+                parse_mode=PARSE_MODE,
+            )
         await _ask_occasion(message, state)
         return
 
     await message.answer(
         "⚠️ Введите корректную дату в формате *ДД.ММ.ГГГГ*\n"
         "_Например: 15.06.2025_",
+        parse_mode=PARSE_MODE,
+    )
+
+
+async def step_add_more_dates(message: Message, state: FSMContext) -> None:
+    text = (message.text or "").strip()
+    if text == ADD_MORE_YES:
+        data = await state.get_data()
+        next_num = len(data.get("events", [])) + 1
+        await message.answer(
+            f"Укажите *важную дату* для события {next_num} 📅\n\n"
+            "Введите дату в формате *ДД.ММ.ГГГГ*\n"
+            "_Например: 15.06.2025_",
+            parse_mode=PARSE_MODE,
+            reply_markup=ReplyKeyboardRemove(),
+        )
+        await state.set_state(ProfileForm.important_date)
+        return
+
+    if text == ADD_MORE_NO:
+        await _ask_budget(message, state)
+        return
+
+    await message.answer(
+        "Выберите: добавить ещё дату или завершить 👇",
+        reply_markup=kb_add_more_dates(),
         parse_mode=PARSE_MODE,
     )
 
@@ -913,7 +1016,7 @@ async def step_relation(message: Message, state: FSMContext) -> None:
         field="relation",
         presets=RELATION_PRESETS,
         keyboard=kb_relation,
-        on_done=_ask_budget,
+        on_done=_save_event_and_ask_more,
     )
 
 
@@ -985,6 +1088,7 @@ def register_handlers(dp: Dispatcher) -> None:
     dp.message.register(step_important_date, ProfileForm.important_date)
     dp.message.register(step_occasion, ProfileForm.occasion)
     dp.message.register(step_relation, ProfileForm.relation)
+    dp.message.register(step_add_more_dates, ProfileForm.add_more_dates)
     dp.message.register(step_budget, ProfileForm.budget)
     dp.message.register(step_source, ProfileForm.source)
 

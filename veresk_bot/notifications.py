@@ -80,6 +80,76 @@ def florist_message(
     return text
 
 
+def profile_message(data: dict, client_tg_id: int) -> str:
+    now = datetime.now().strftime("%d.%m.%Y %H:%M")
+    events = data.get("events") or []
+    events_lines = []
+    for i, event in enumerate(events, start=1):
+        events_lines.append(
+            f"│ {i}. 📅 *{event.get('date', '—')}* · "
+            f"{event.get('occasion', '—')} · {event.get('relation', '—')}"
+        )
+    events_block = "\n".join(events_lines) if events_lines else "│ — нет дат"
+
+    return (
+        "🌸 *Новая анкета — Veresk*\n"
+        f"_trail of happiness · {now}_\n\n"
+        "┌─────────────────────\n"
+        f"│ 👤 Клиент:      *{data['name']}*\n"
+        f"│ 📞 Телефон:     `{data.get('phone', '—')}`\n"
+        f"│ 📱 Telegram:    [написать](tg://user?id={client_tg_id})\n"
+        f"│ 💰 Бюджет:      *{data.get('budget', '—')}*\n"
+        f"│ 📣 Источник:    *{data.get('source', '—')}*\n"
+        "│\n"
+        "│ *Важные даты:*\n"
+        f"{events_block}\n"
+        "└─────────────────────"
+    )
+
+
+def profile_keyboard(client_tg_id: int, phone: str) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text=f"📞 Позвонить {phone}",
+                    url=f"tel:{phone}",
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    text="💬 Написать в Telegram",
+                    url=f"tg://user?id={client_tg_id}",
+                )
+            ],
+        ]
+    )
+
+
+async def notify_florist_profile(
+    bot: Bot,
+    florist_chat_id: int,
+    data: dict,
+    client_tg_id: int,
+) -> None:
+    if not florist_chat_id:
+        logger.warning("FLORIST_CHAT_ID не задан — уведомление об анкете пропущено")
+        return
+    phone = data.get("phone", "—")
+    try:
+        await bot.send_message(
+            chat_id=florist_chat_id,
+            text=profile_message(data, client_tg_id),
+            parse_mode=PARSE_MODE,
+            reply_markup=profile_keyboard(client_tg_id, phone),
+        )
+        logger.info("🔔 Флорист уведомлён об анкете tg_id=%s", client_tg_id)
+    except Exception:
+        logger.exception(
+            "❌ Не удалось уведомить флориста об анкете chat_id=%s", florist_chat_id
+        )
+
+
 async def notify_florist(
     bot: Bot,
     florist_chat_id: int,

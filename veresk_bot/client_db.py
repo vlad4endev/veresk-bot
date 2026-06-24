@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import sqlite3
 from datetime import datetime
@@ -44,6 +45,18 @@ CREATE TABLE IF NOT EXISTS orders (
 
 CREATE INDEX IF NOT EXISTS idx_orders_tg_created
     ON orders (tg_id, created_at DESC);
+
+CREATE TABLE IF NOT EXISTS profiles (
+    tg_id INTEGER PRIMARY KEY,
+    name TEXT NOT NULL,
+    phone TEXT NOT NULL,
+    budget TEXT NOT NULL,
+    source TEXT NOT NULL,
+    events_json TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    FOREIGN KEY (tg_id) REFERENCES clients (tg_id)
+);
 """
 
 
@@ -176,6 +189,77 @@ async def save_client_and_order(
         budget=str(data.get("budget", "")),
     )
     logger.info("Клиент %s и заказ #%s сохранены в БД", tg_id, posiflora_order_id)
+
+
+async def save_client_profile(tg_id: int, profile: dict[str, Any]) -> None:
+    """Сохранить анкету клиента (все события в одной карточке)."""
+    name = str(profile.get("name", "")).strip()
+    phone = str(profile.get("phone", "")).strip()
+    budget = str(profile.get("budget", "")).strip()
+    source = str(profile.get("source", "")).strip()
+    events = profile.get("events") or []
+    if not name or not phone:
+        logger.warning("Пропуск сохранения анкеты: нет имени или телефона (tg_id=%s)", tg_id)
+        return
+
+    now = _now()
+    events_json = json.dumps(events, ensure_ascii=False)
+
+    def _save() -> None:
+        with _connect() as db:
+            db.execute(
+                """
+                INSERT INTO clients (tg_id, name, phone, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?)
+                ON CONFLICT(tg_id) DO UPDATE SET
+                    name = excluded.name,
+                    phone = excluded.phone,
+                    updated_at = excluded.updated_at
+                """,
+                (tg_id, name, phone, now, now),
+            )
+            db.execute(
+                """
+                INSERT INTO profiles (
+                    tg_id, name, phone, budget, source, events_json, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(tg_id) DO UPDATE SET
+                    name = excluded.name,
+                    phone = excluded.phone,
+                    budget = excluded.budget,
+                    source = excluded.source,
+                    events_json = excluded.events_json,
+                    updated_at = excluded.updated_at
+                """,
+                (tg_id, name, phone, budget, source, events_json, now, now),
+            )
+            db.commit()
+
+    await _run_db(_save)
+    logger.info("Анкета клиента %s сохранена (%s событий)", tg_id, len(events))
+
+
+async def get_client_profile(tg_id: int) -> dict[str, Any] | None:
+    def _get() -> dict[str, Any] | None:
+        with _connect() as db:
+            row = db.execute(
+                """
+                SELECT tg_id, name, phone, budget, source, events_json, created_at, updated_at
+                FROM profiles
+                WHERE tg_id = ?
+                """,
+                (tg_id,),
+            ).fetchone()
+        if not row:
+            return None
+        data = dict(row)
+        try:
+            data["events"] = json.loads(data.pop("events_json", "[]"))
+        except json.JSONDecodeError:
+            data["events"] = []
+        return data
+
+    return await _run_db(_get)
 
 
 async def get_order_by_posiflora_id(
