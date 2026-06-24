@@ -1,7 +1,7 @@
 :root {
   --purple-deep: #2a1f3d;
-  --purple: #6b4e9b;
-  --purple-light: #9b7ec8;
+  --purple: #432C5F;
+  --purple-light: #6B4F8F;
   --gold: #c9a87c;
   --cream: #faf7f2;
   --cream-dark: #f0ebe3;
@@ -298,23 +298,24 @@ body {
 .timeline-step.done .step-marker {
   background: var(--purple);
   border-color: var(--purple-light);
-  box-shadow: 0 4px 14px rgba(107, 78, 155, 0.35);
+  box-shadow: 0 4px 14px rgba(67, 44, 95, 0.35);
 }
 
 .timeline-step.active .step-marker {
-  background: #fff;
-  border-color: var(--purple);
-  box-shadow: 0 0 0 4px rgba(107, 78, 155, 0.2);
+  background: var(--purple);
+  color: #fff;
+  border-color: var(--purple-light);
+  box-shadow: 0 0 0 4px rgba(67, 44, 95, 0.2);
   animation: pulse-ring 2s ease infinite;
 }
 
 @keyframes pulse-ring {
   0%,
   100% {
-    box-shadow: 0 0 0 4px rgba(107, 78, 155, 0.2);
+    box-shadow: 0 0 0 4px rgba(67, 44, 95, 0.2);
   }
   50% {
-    box-shadow: 0 0 0 8px rgba(107, 78, 155, 0.08);
+    box-shadow: 0 0 0 8px rgba(67, 44, 95, 0.08);
   }
 }
 
