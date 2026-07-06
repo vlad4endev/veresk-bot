@@ -21,6 +21,7 @@ from aiogram.types import (
     ReplyKeyboardMarkup,
     ReplyKeyboardRemove,
 )
+from aiogram.utils.chat_action import ChatActionSender
 
 from app_context import set_redis
 from config import BOT_TOKEN, FLORIST_CHAT_ID, MINIAPP_URL, WEBAPP_HOST, WEBAPP_PORT
@@ -880,32 +881,42 @@ async def _finish_survey(message: Message, state: FSMContext) -> None:
         json.dumps(events, ensure_ascii=False),
     )
 
-    await save_client_profile(tg_id, profile)
+    status_msg = await message.answer(
+        f"{progress(7)}\n\n"
+        "⏳ *Сохраняем анкету…*\n\n"
+        "_Подождите несколько секунд — мы передаём ваши ответы флористу._",
+        parse_mode=PARSE_MODE,
+        reply_markup=ReplyKeyboardRemove(),
+    )
 
     posiflora_ok = False
     posiflora_meta: dict[str, Any] = {}
-    try:
-        from posiflora import sync_survey_profile_to_posiflora
 
-        posiflora_meta = await sync_survey_profile_to_posiflora(profile, tg_id)
-        posiflora_ok = bool(posiflora_meta.get("posiflora_ok"))
-        logger.info(
-            "Posiflora анкета: customer=%s, событий %s/%s",
-            posiflora_meta.get("customer_id"),
-            posiflora_meta.get("events_synced"),
-            posiflora_meta.get("events_total"),
+    async with ChatActionSender.typing(bot=message.bot, chat_id=message.chat.id):
+        await save_client_profile(tg_id, profile)
+
+        try:
+            from posiflora import sync_survey_profile_to_posiflora
+
+            posiflora_meta = await sync_survey_profile_to_posiflora(profile, tg_id)
+            posiflora_ok = bool(posiflora_meta.get("posiflora_ok"))
+            logger.info(
+                "Posiflora анкета: customer=%s, событий %s/%s",
+                posiflora_meta.get("customer_id"),
+                posiflora_meta.get("events_synced"),
+                posiflora_meta.get("events_total"),
+            )
+        except Exception:
+            logger.exception("❌ Ошибка синхронизации анкеты с Posiflora (tg_id=%s)", tg_id)
+
+        await notify_florist_profile(
+            message.bot,
+            FLORIST_CHAT_ID,
+            profile,
+            tg_id,
+            posiflora_ok=posiflora_ok,
+            posiflora_meta=posiflora_meta,
         )
-    except Exception:
-        logger.exception("❌ Ошибка синхронизации анкеты с Posiflora (tg_id=%s)", tg_id)
-
-    await notify_florist_profile(
-        message.bot,
-        FLORIST_CHAT_ID,
-        profile,
-        tg_id,
-        posiflora_ok=posiflora_ok,
-        posiflora_meta=posiflora_meta,
-    )
 
     events_block = _format_events_lines(events)
     posiflora_note = ""
@@ -929,7 +940,7 @@ async def _finish_survey(message: Message, state: FSMContext) -> None:
             "Даты добавлены как праздники в CRM\\._"
         )
 
-    await message.answer(
+    final_text = (
         f"{progress(7)}\n\n"
         "✅ *Анкета сохранена!*\n\n"
         "┌─────────────────────\n"
@@ -943,10 +954,15 @@ async def _finish_survey(message: Message, state: FSMContext) -> None:
         "└─────────────────────\n\n"
         "Спасибо, что ответили на все вопросы! 🌷\n\n"
         "_Спасибо, что выбираете Veresk · trail of happiness_"
-        f"{posiflora_note}",
-        parse_mode=PARSE_MODE,
-        reply_markup=ReplyKeyboardRemove(),
+        f"{posiflora_note}"
     )
+
+    try:
+        await status_msg.edit_text(final_text, parse_mode=PARSE_MODE)
+    except Exception:
+        logger.debug("edit_text финала анкеты не удался, отправляем новым сообщением", exc_info=True)
+        await message.answer(final_text, parse_mode=PARSE_MODE)
+
     await state.clear()
 
 

@@ -203,27 +203,6 @@ def _build_profile_notes(
     return "\n".join(lines)
 
 
-def _build_survey_preference_titles(profile: dict[str, Any]) -> list[str]:
-    """
-    Предпочтения клиента для relationships.customerPreferences.
-
-    Бюджет — отдельное предпочтение с суммой, каждая важная дата — своё.
-    """
-    titles: list[str] = []
-    budget = str(profile.get("budget", "")).strip()
-    if budget:
-        amount = _budget_to_amount(budget)
-        titles.append(f"Бюджет: {budget} (~{amount:,} ₽)".replace(",", " "))
-
-    for event in profile.get("events") or []:
-        date = str(event.get("date", "")).strip() or "—"
-        relation = str(event.get("relation", "")).strip() or "—"
-        occasion = str(event.get("occasion", "")).strip() or "—"
-        titles.append(f"📅 {date} · {relation} · {occasion}")
-
-    return titles
-
-
 async def _read_error_body(resp: aiohttp.ClientResponse) -> str:
     try:
         text = await resp.text()
@@ -378,94 +357,14 @@ async def get_or_create_customer_source(
     return str(data["data"]["id"])
 
 
-async def _list_customer_preferences(
-    session: aiohttp.ClientSession,
-    access_token: str,
-) -> list[dict[str, Any]]:
-    data = await _api_request(
-        session,
-        "GET",
-        "/customer-preferences?filter[onlyActive]=true",
-        access_token=access_token,
-    )
-    return list(data.get("data") or [])
-
-
-async def get_or_create_customer_preference(
-    session: aiohttp.ClientSession,
-    access_token: str,
-    title: str,
-) -> str | None:
-    """
-    Предпочтение клиента — справочник customer-preferences.
-    GET /customer-preferences → POST /customer-preferences при отсутствии.
-    """
-    clean = title.strip()
-    if not clean:
+def _customer_relationships(source_id: str | None) -> dict[str, Any] | None:
+    if not source_id:
         return None
-
-    for item in await _list_customer_preferences(session, access_token):
-        attrs = item.get("attributes") or {}
-        if attrs.get("deleted"):
-            continue
-        if attrs.get("title", "").strip() == clean:
-            return str(item["id"])
-
-    data = await _api_request(
-        session,
-        "POST",
-        "/customer-preferences",
-        access_token=access_token,
-        json_body={
-            "data": {
-                "type": "customer-preferences",
-                "attributes": {"title": clean},
-            }
-        },
-    )
-    return str(data["data"]["id"])
-
-
-async def get_or_create_customer_preferences(
-    session: aiohttp.ClientSession,
-    access_token: str,
-    titles: list[str],
-) -> list[str]:
-    """Создаёт/находит предпочтения по списку заголовков."""
-    preference_ids: list[str] = []
-    seen: set[str] = set()
-    for title in titles:
-        pref_id = await get_or_create_customer_preference(
-            session, access_token, title
-        )
-        if pref_id and pref_id not in seen:
-            preference_ids.append(pref_id)
-            seen.add(pref_id)
-    return preference_ids
-
-
-def _build_customer_relationships(
-    *,
-    source_id: str | None = None,
-    preference_ids: list[str] | None = None,
-) -> dict[str, Any] | None:
-    relationships: dict[str, Any] = {}
-    if source_id:
-        relationships["customerSources"] = {
+    return {
+        "customerSources": {
             "data": [{"type": "customer-sources", "id": source_id}],
         }
-    if preference_ids:
-        relationships["customerPreferences"] = {
-            "data": [
-                {"type": "customer-preferences", "id": pref_id}
-                for pref_id in preference_ids
-            ],
-        }
-    return relationships or None
-
-
-def _customer_relationships(source_id: str | None) -> dict[str, Any] | None:
-    return _build_customer_relationships(source_id=source_id)
+    }
 
 
 async def create_customer(
@@ -476,7 +375,6 @@ async def create_customer(
     *,
     notes: str = "",
     source_id: str | None = None,
-    preference_ids: list[str] | None = None,
 ) -> str:
     payload: dict[str, Any] = {
         "data": {
@@ -490,10 +388,7 @@ async def create_customer(
             },
         }
     }
-    relationships = _build_customer_relationships(
-        source_id=source_id,
-        preference_ids=preference_ids,
-    )
+    relationships = _customer_relationships(source_id)
     if relationships:
         payload["data"]["relationships"] = relationships
 
@@ -515,7 +410,6 @@ async def update_customer(
     title: str | None = None,
     notes: str | None = None,
     source_id: str | None = None,
-    preference_ids: list[str] | None = None,
 ) -> None:
     attributes: dict[str, str] = {}
     if title is not None:
@@ -530,10 +424,7 @@ async def update_customer(
             "attributes": attributes,
         }
     }
-    relationships = _build_customer_relationships(
-        source_id=source_id,
-        preference_ids=preference_ids,
-    )
+    relationships = _customer_relationships(source_id)
     if relationships:
         payload["data"]["relationships"] = relationships
 
@@ -554,18 +445,16 @@ async def sync_customer_card_from_survey(
     telegram_id: int,
     *,
     source_id: str | None,
-    preference_ids: list[str],
 ) -> None:
     """
     Заполняет карточку клиента Posiflora по ответам анкеты бота.
 
-    | Поле анкеты   | Posiflora API                          |
-    |---------------|----------------------------------------|
-    | name          | attributes.title                       |
-    | phone         | attributes.phone, countryCode          |
-    | source        | relationships.customerSources          |
-    | budget, dates | relationships.customerPreferences      |
-    | все ответы    | attributes.notes (полная карточка)     |
+    | Поле анкеты | Posiflora API                  |
+    |-------------|--------------------------------|
+    | name        | attributes.title               |
+    | phone       | attributes.phone, countryCode  |
+    | source      | relationships.customerSources  |
+    | все ответы  | attributes.notes             |
     """
     name = str(profile.get("name", "")).strip()
     notes = _build_profile_notes(profile, telegram_id)
@@ -576,12 +465,10 @@ async def sync_customer_card_from_survey(
         title=name,
         notes=notes,
         source_id=source_id,
-        preference_ids=preference_ids,
     )
     logger.info(
-        "Posiflora: карточка клиента #%s — имя, источник, %s предпочтений, notes",
+        "Posiflora: карточка клиента #%s — имя, источник, notes",
         customer_id,
-        len(preference_ids),
     )
 
 
@@ -593,7 +480,6 @@ async def get_or_create_customer_id_by_phone(
     *,
     notes: str = "",
     source_id: str | None = None,
-    preference_ids: list[str] | None = None,
 ) -> tuple[str, bool]:
     """
     1. GET /customers?search={phone} — если найден, вернуть id.
@@ -611,7 +497,6 @@ async def get_or_create_customer_id_by_phone(
         title,
         notes=notes,
         source_id=source_id,
-        preference_ids=preference_ids,
     )
     logger.info("Posiflora: клиент создан, id=%s", customer_id)
     return customer_id, True
@@ -1143,7 +1028,7 @@ async def sync_survey_profile_to_posiflora(
     """
     Синхронизация анкеты (7 вопросов) с Posiflora:
     1. Поиск клиента по телефону → id (или создание → id)
-    2. Заполнение карточки: имя, источник, предпочтения, notes
+    2. Заполнение карточки: имя, источник, notes
     3. Каждая дата — отдельный POST /customer-events
     """
     name = str(profile.get("name", "")).strip()
@@ -1154,7 +1039,6 @@ async def sync_survey_profile_to_posiflora(
         raise PosifloraAPIError("Для синхронизации нужны имя и телефон клиента")
 
     notes = _build_profile_notes(profile, telegram_id)
-    preference_titles = _build_survey_preference_titles(profile)
 
     async with aiohttp.ClientSession() as session:
         access_token = await _get_access_token(session)
@@ -1163,11 +1047,6 @@ async def sync_survey_profile_to_posiflora(
             access_token,
             str(profile.get("source", "")),
         )
-        preference_ids = await get_or_create_customer_preferences(
-            session,
-            access_token,
-            preference_titles,
-        )
         customer_id, created = await get_or_create_customer_id_by_phone(
             session,
             access_token,
@@ -1175,7 +1054,6 @@ async def sync_survey_profile_to_posiflora(
             name,
             notes=notes,
             source_id=source_id,
-            preference_ids=preference_ids,
         )
         await sync_customer_card_from_survey(
             session,
@@ -1184,7 +1062,6 @@ async def sync_survey_profile_to_posiflora(
             profile,
             telegram_id,
             source_id=source_id,
-            preference_ids=preference_ids,
         )
 
         (
@@ -1204,7 +1081,6 @@ async def sync_survey_profile_to_posiflora(
         "customer_id": customer_id,
         "customer_created": created,
         "source_id": source_id,
-        "preference_ids": preference_ids,
         "event_ids": event_ids,
         "celebration_ids": celebration_ids,
         "events_total": len(events),
