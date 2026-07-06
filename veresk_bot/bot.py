@@ -78,9 +78,14 @@ SOURCE_PRESETS = {
     "Увидел вывеску",
 }
 
+# Прогресс анкеты в чате. Telegram не даёт задать точный hex (#432C5F) для emoji —
+# 🟣 всегда ярко-фиолетовый. ⬤/◯ — тёмные круги, ближе к цвету листа на паттерне.
+PROGRESS_FILLED = "⬤"
+PROGRESS_EMPTY = "◯"
+
 
 def progress(step: int, total: int = FORM_STEPS) -> str:
-    return "🟣" * step + "⚪️" * (total - step) + f"  {step}/{total}"
+    return PROGRESS_FILLED * step + PROGRESS_EMPTY * (total - step) + f"  {step}/{total}"
 
 
 def _choice_keyboard(rows: list[list[str]]) -> ReplyKeyboardMarkup:
