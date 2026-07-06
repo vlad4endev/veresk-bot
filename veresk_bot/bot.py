@@ -5,6 +5,7 @@ import os
 import re
 from datetime import datetime, timedelta
 from logging.handlers import RotatingFileHandler
+from typing import Any
 
 from aiogram import Bot, Dispatcher, F
 from aiogram.client.session.aiohttp import AiohttpSession
@@ -880,9 +881,45 @@ async def _finish_survey(message: Message, state: FSMContext) -> None:
     )
 
     await save_client_profile(tg_id, profile)
-    await notify_florist_profile(message.bot, FLORIST_CHAT_ID, profile, tg_id)
+
+    posiflora_ok = False
+    posiflora_meta: dict[str, Any] = {}
+    try:
+        from posiflora import sync_survey_profile_to_posiflora
+
+        posiflora_meta = await sync_survey_profile_to_posiflora(profile, tg_id)
+        posiflora_ok = bool(posiflora_meta.get("posiflora_ok"))
+        logger.info(
+            "Posiflora анкета: customer=%s, событий %s/%s",
+            posiflora_meta.get("customer_id"),
+            posiflora_meta.get("events_synced"),
+            posiflora_meta.get("events_total"),
+        )
+    except Exception:
+        logger.exception("❌ Ошибка синхронизации анкеты с Posiflora (tg_id=%s)", tg_id)
+
+    await notify_florist_profile(
+        message.bot,
+        FLORIST_CHAT_ID,
+        profile,
+        tg_id,
+        posiflora_ok=posiflora_ok,
+        posiflora_meta=posiflora_meta,
+    )
 
     events_block = _format_events_lines(events)
+    posiflora_note = ""
+    if not posiflora_ok:
+        posiflora_note = (
+            "\n\n⚠️ _Данные сохранены локально, но не удалось передать их в Posiflora\\. "
+            "Флорист свяжется с вами вручную\\._"
+        )
+    elif posiflora_meta.get("events_failed"):
+        posiflora_note = (
+            "\n\n_Карточка клиента обновлена в Posiflora\\. "
+            "Часть дат сохранена в заметках CRM\\._"
+        )
+
     await message.answer(
         f"{progress(7)}\n\n"
         "✅ *Анкета сохранена!*\n\n"
@@ -896,7 +933,8 @@ async def _finish_survey(message: Message, state: FSMContext) -> None:
         f"{events_block}\n"
         "└─────────────────────\n\n"
         "Спасибо, что ответили на все вопросы! 🌷\n\n"
-        "_Спасибо, что выбираете Veresk · trail of happiness_",
+        "_Спасибо, что выбираете Veresk · trail of happiness_"
+        f"{posiflora_note}",
         parse_mode=PARSE_MODE,
         reply_markup=ReplyKeyboardRemove(),
     )

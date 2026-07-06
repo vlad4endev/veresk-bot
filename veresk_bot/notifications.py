@@ -80,7 +80,13 @@ def florist_message(
     return text
 
 
-def profile_message(data: dict, client_tg_id: int) -> str:
+def profile_message(
+    data: dict,
+    client_tg_id: int,
+    *,
+    posiflora_ok: bool = True,
+    posiflora_meta: dict | None = None,
+) -> str:
     now = datetime.now().strftime("%d.%m.%Y %H:%M")
     events = data.get("events") or []
     events_lines = []
@@ -91,7 +97,7 @@ def profile_message(data: dict, client_tg_id: int) -> str:
         )
     events_block = "\n".join(events_lines) if events_lines else "│ — нет дат"
 
-    return (
+    text = (
         "🌸 *Новая анкета — Veresk*\n"
         f"_trail of happiness · {now}_\n\n"
         "┌─────────────────────\n"
@@ -105,6 +111,24 @@ def profile_message(data: dict, client_tg_id: int) -> str:
         f"{events_block}\n"
         "└─────────────────────"
     )
+    meta = posiflora_meta or {}
+    if posiflora_ok and meta.get("customer_id"):
+        text += f"\n\n🆔 Posiflora клиент: `{meta['customer_id']}`"
+        synced = meta.get("events_synced", 0)
+        total = meta.get("events_total", 0)
+        if total:
+            text += f"\n📅 Событий в CRM: *{synced}/{total}*"
+    if not posiflora_ok:
+        text += (
+            "\n\n⚠️ *Анкета НЕ передана в Posiflora\\!*\n"
+            "Создайте клиента и даты вручную по данным выше\\."
+        )
+    elif meta.get("events_failed"):
+        text += (
+            "\n\n⚠️ *События календаря:* часть дат только в заметках клиента CRM "
+            f"\\({meta.get('events_synced', 0)}/{meta.get('events_total', 0)} в календаре\\)\\."
+        )
+    return text
 
 
 def profile_keyboard(client_tg_id: int, phone: str) -> InlineKeyboardMarkup:
@@ -131,6 +155,9 @@ async def notify_florist_profile(
     florist_chat_id: int,
     data: dict,
     client_tg_id: int,
+    *,
+    posiflora_ok: bool = True,
+    posiflora_meta: dict | None = None,
 ) -> None:
     if not florist_chat_id:
         logger.warning("FLORIST_CHAT_ID не задан — уведомление об анкете пропущено")
@@ -139,7 +166,12 @@ async def notify_florist_profile(
     try:
         await bot.send_message(
             chat_id=florist_chat_id,
-            text=profile_message(data, client_tg_id),
+            text=profile_message(
+                data,
+                client_tg_id,
+                posiflora_ok=posiflora_ok,
+                posiflora_meta=posiflora_meta,
+            ),
             parse_mode=PARSE_MODE,
             reply_markup=profile_keyboard(client_tg_id, phone),
         )
