@@ -4,6 +4,7 @@ import json
 import logging
 import re
 import time
+import uuid
 from datetime import datetime, timedelta
 from typing import Any
 from urllib.parse import quote
@@ -29,6 +30,7 @@ BUDGET_MAP = {
     "до 10 000 ₽": 9999,
     "до 15 000 ₽": 14999,
     "от 15 000 ₽": 15000,
+    "более 15 000 ₽": 15000,
 }
 
 # Кэш токена между запросами polling (секунды)
@@ -150,29 +152,76 @@ def _build_survey_event_title(relation: str, occasion: str) -> str:
     return f"{relation} · {occasion}"
 
 
+def _budget_to_amount(budget: str) -> int:
+    """Сумма бюджета из анкеты для отображения в карточке клиента."""
+    clean = budget.strip()
+    if clean in BUDGET_MAP:
+        return BUDGET_MAP[clean]
+    digits = re.sub(r"\D", "", clean)
+    if digits:
+        return int(digits)
+    return 4999
+
+
 def _build_profile_notes(
     profile: dict[str, Any],
     telegram_id: int,
 ) -> str:
-    """Текст заметки в карточке клиента Posiflora (все поля анкеты)."""
+    """Полная карточка ответов анкеты → customers.attributes.notes."""
+    name = str(profile.get("name", "")).strip() or "—"
+    phone = str(profile.get("phone", "")).strip() or "—"
+    budget = str(profile.get("budget", "")).strip() or "—"
+    source = str(profile.get("source", "")).strip() or "—"
+    amount = _budget_to_amount(budget) if budget != "—" else None
+
     lines = [
         "📱 Анкета Veresk (Telegram-бот)",
-        f"Telegram ID: {telegram_id}",
-        f"Бюджет: {profile.get('budget', '—')}",
-        f"Источник: {profile.get('source', '—')}",
-        "",
-        "Важные даты:",
+        "─────────────────────────",
+        f"👤 Имя: {name}",
+        f"📞 Телефон: {phone}",
+        f"💰 Бюджет: {budget}",
     ]
+    if amount is not None:
+        lines.append(f"💵 Сумма: {amount:,} ₽".replace(",", " "))
+    lines.extend(
+        [
+            f"📣 Откуда узнали: {source}",
+            f"🆔 Telegram ID: {telegram_id}",
+            "",
+            "📅 Важные даты:",
+        ]
+    )
     events = profile.get("events") or []
     if not events:
         lines.append("— нет дат")
     else:
         for index, event in enumerate(events, start=1):
             lines.append(
-                f"{index}. {event.get('date', '—')} — "
-                f"{event.get('relation', '—')} — {event.get('occasion', '—')}"
+                f"{index}. {event.get('date', '—')} · "
+                f"{event.get('relation', '—')} · {event.get('occasion', '—')}"
             )
     return "\n".join(lines)
+
+
+def _build_survey_preference_titles(profile: dict[str, Any]) -> list[str]:
+    """
+    Предпочтения клиента для relationships.customerPreferences.
+
+    Бюджет — отдельное предпочтение с суммой, каждая важная дата — своё.
+    """
+    titles: list[str] = []
+    budget = str(profile.get("budget", "")).strip()
+    if budget:
+        amount = _budget_to_amount(budget)
+        titles.append(f"Бюджет: {budget} (~{amount:,} ₽)".replace(",", " "))
+
+    for event in profile.get("events") or []:
+        date = str(event.get("date", "")).strip() or "—"
+        relation = str(event.get("relation", "")).strip() or "—"
+        occasion = str(event.get("occasion", "")).strip() or "—"
+        titles.append(f"📅 {date} · {relation} · {occasion}")
+
+    return titles
 
 
 async def _read_error_body(resp: aiohttp.ClientResponse) -> str:
@@ -283,6 +332,142 @@ async def find_customer_by_phone(
     return str(customers[0]["id"])
 
 
+async def _list_customer_sources(
+    session: aiohttp.ClientSession,
+    access_token: str,
+) -> list[dict[str, Any]]:
+    data = await _api_request(
+        session,
+        "GET",
+        "/customer-sources",
+        access_token=access_token,
+    )
+    return list(data.get("data") or [])
+
+
+async def get_or_create_customer_source(
+    session: aiohttp.ClientSession,
+    access_token: str,
+    title: str,
+) -> str | None:
+    """
+    Источник клиента — отдельный справочник Posiflora (customer-sources).
+    GET /customer-sources → POST /customer-sources при отсутствии.
+    """
+    clean = title.strip()
+    if not clean:
+        return None
+
+    for item in await _list_customer_sources(session, access_token):
+        attrs = item.get("attributes") or {}
+        if attrs.get("title", "").strip().lower() == clean.lower():
+            return str(item["id"])
+
+    data = await _api_request(
+        session,
+        "POST",
+        "/customer-sources",
+        access_token=access_token,
+        json_body={
+            "data": {
+                "type": "customer-sources",
+                "attributes": {"title": clean},
+            }
+        },
+    )
+    return str(data["data"]["id"])
+
+
+async def _list_customer_preferences(
+    session: aiohttp.ClientSession,
+    access_token: str,
+) -> list[dict[str, Any]]:
+    data = await _api_request(
+        session,
+        "GET",
+        "/customer-preferences?filter[onlyActive]=true",
+        access_token=access_token,
+    )
+    return list(data.get("data") or [])
+
+
+async def get_or_create_customer_preference(
+    session: aiohttp.ClientSession,
+    access_token: str,
+    title: str,
+) -> str | None:
+    """
+    Предпочтение клиента — справочник customer-preferences.
+    GET /customer-preferences → POST /customer-preferences при отсутствии.
+    """
+    clean = title.strip()
+    if not clean:
+        return None
+
+    for item in await _list_customer_preferences(session, access_token):
+        attrs = item.get("attributes") or {}
+        if attrs.get("deleted"):
+            continue
+        if attrs.get("title", "").strip() == clean:
+            return str(item["id"])
+
+    data = await _api_request(
+        session,
+        "POST",
+        "/customer-preferences",
+        access_token=access_token,
+        json_body={
+            "data": {
+                "type": "customer-preferences",
+                "attributes": {"title": clean},
+            }
+        },
+    )
+    return str(data["data"]["id"])
+
+
+async def get_or_create_customer_preferences(
+    session: aiohttp.ClientSession,
+    access_token: str,
+    titles: list[str],
+) -> list[str]:
+    """Создаёт/находит предпочтения по списку заголовков."""
+    preference_ids: list[str] = []
+    seen: set[str] = set()
+    for title in titles:
+        pref_id = await get_or_create_customer_preference(
+            session, access_token, title
+        )
+        if pref_id and pref_id not in seen:
+            preference_ids.append(pref_id)
+            seen.add(pref_id)
+    return preference_ids
+
+
+def _build_customer_relationships(
+    *,
+    source_id: str | None = None,
+    preference_ids: list[str] | None = None,
+) -> dict[str, Any] | None:
+    relationships: dict[str, Any] = {}
+    if source_id:
+        relationships["customerSources"] = {
+            "data": [{"type": "customer-sources", "id": source_id}],
+        }
+    if preference_ids:
+        relationships["customerPreferences"] = {
+            "data": [
+                {"type": "customer-preferences", "id": pref_id}
+                for pref_id in preference_ids
+            ],
+        }
+    return relationships or None
+
+
+def _customer_relationships(source_id: str | None) -> dict[str, Any] | None:
+    return _build_customer_relationships(source_id=source_id)
+
+
 async def create_customer(
     session: aiohttp.ClientSession,
     access_token: str,
@@ -290,24 +475,34 @@ async def create_customer(
     title: str,
     *,
     notes: str = "",
+    source_id: str | None = None,
+    preference_ids: list[str] | None = None,
 ) -> str:
+    payload: dict[str, Any] = {
+        "data": {
+            "type": "customers",
+            "attributes": {
+                "title": title.strip(),
+                "phone": _normalize_phone(phone),
+                "countryCode": 7,
+                "status": "on",
+                "notes": notes,
+            },
+        }
+    }
+    relationships = _build_customer_relationships(
+        source_id=source_id,
+        preference_ids=preference_ids,
+    )
+    if relationships:
+        payload["data"]["relationships"] = relationships
+
     data = await _api_request(
         session,
         "POST",
         "/customers",
         access_token=access_token,
-        json_body={
-            "data": {
-                "type": "customers",
-                "attributes": {
-                    "title": title.strip(),
-                    "phone": _normalize_phone(phone),
-                    "countryCode": 7,
-                    "status": "on",
-                    "notes": notes,
-                },
-            }
-        },
+        json_body=payload,
     )
     return str(data["data"]["id"])
 
@@ -319,6 +514,8 @@ async def update_customer(
     *,
     title: str | None = None,
     notes: str | None = None,
+    source_id: str | None = None,
+    preference_ids: list[str] | None = None,
 ) -> None:
     attributes: dict[str, str] = {}
     if title is not None:
@@ -326,19 +523,98 @@ async def update_customer(
     if notes is not None:
         attributes["notes"] = notes
 
+    payload: dict[str, Any] = {
+        "data": {
+            "type": "customers",
+            "id": customer_id,
+            "attributes": attributes,
+        }
+    }
+    relationships = _build_customer_relationships(
+        source_id=source_id,
+        preference_ids=preference_ids,
+    )
+    if relationships:
+        payload["data"]["relationships"] = relationships
+
     await _api_request(
         session,
         "PATCH",
         f"/customers/{customer_id}",
         access_token=access_token,
-        json_body={
-            "data": {
-                "type": "customers",
-                "id": customer_id,
-                "attributes": attributes,
-            }
-        },
+        json_body=payload,
     )
+
+
+async def sync_customer_card_from_survey(
+    session: aiohttp.ClientSession,
+    access_token: str,
+    customer_id: str,
+    profile: dict[str, Any],
+    telegram_id: int,
+    *,
+    source_id: str | None,
+    preference_ids: list[str],
+) -> None:
+    """
+    Заполняет карточку клиента Posiflora по ответам анкеты бота.
+
+    | Поле анкеты   | Posiflora API                          |
+    |---------------|----------------------------------------|
+    | name          | attributes.title                       |
+    | phone         | attributes.phone, countryCode          |
+    | source        | relationships.customerSources          |
+    | budget, dates | relationships.customerPreferences      |
+    | все ответы    | attributes.notes (полная карточка)     |
+    """
+    name = str(profile.get("name", "")).strip()
+    notes = _build_profile_notes(profile, telegram_id)
+    await update_customer(
+        session,
+        access_token,
+        customer_id,
+        title=name,
+        notes=notes,
+        source_id=source_id,
+        preference_ids=preference_ids,
+    )
+    logger.info(
+        "Posiflora: карточка клиента #%s — имя, источник, %s предпочтений, notes",
+        customer_id,
+        len(preference_ids),
+    )
+
+
+async def get_or_create_customer_id_by_phone(
+    session: aiohttp.ClientSession,
+    access_token: str,
+    phone: str,
+    title: str,
+    *,
+    notes: str = "",
+    source_id: str | None = None,
+    preference_ids: list[str] | None = None,
+) -> tuple[str, bool]:
+    """
+    1. GET /customers?search={phone} — если найден, вернуть id.
+    2. Иначе POST /customers — создать и вернуть id.
+    """
+    customer_id = await find_customer_by_phone(session, access_token, phone)
+    if customer_id:
+        logger.info("Posiflora: клиент найден по телефону, id=%s", customer_id)
+        return customer_id, False
+
+    customer_id = await create_customer(
+        session,
+        access_token,
+        phone,
+        title,
+        notes=notes,
+        source_id=source_id,
+        preference_ids=preference_ids,
+    )
+    logger.info("Posiflora: клиент создан, id=%s", customer_id)
+    return customer_id, True
 
 
 async def find_or_create_customer(
@@ -348,21 +624,322 @@ async def find_or_create_customer(
     title: str,
     *,
     notes: str = "",
+    source_id: str | None = None,
 ) -> tuple[str, bool]:
     """Find or Create клиента. Возвращает (customer_id, created)."""
-    customer_id = await find_customer_by_phone(session, access_token, phone)
-    if customer_id:
-        logger.info("Posiflora: клиент найден по телефону, id=%s", customer_id)
-        await update_customer(
-            session, access_token, customer_id, title=title, notes=notes
-        )
-        return customer_id, False
-
-    customer_id = await create_customer(
-        session, access_token, phone, title, notes=notes
+    customer_id, created = await get_or_create_customer_id_by_phone(
+        session,
+        access_token,
+        phone,
+        title,
+        notes=notes,
+        source_id=source_id,
     )
-    logger.info("Posiflora: клиент создан, id=%s", customer_id)
-    return customer_id, True
+    if not created:
+        await update_customer(
+            session,
+            access_token,
+            customer_id,
+            title=title,
+            notes=notes,
+            source_id=source_id,
+        )
+    return customer_id, created
+
+
+def _build_survey_celebration_title(
+    relation: str,
+    occasion: str,
+    date_iso: str,
+) -> str:
+    """Уникальный заголовок праздника: дата в title, т.к. Posiflora не допускает дубликаты."""
+    base = _build_survey_event_title(relation, occasion)
+    try:
+        dt = datetime.strptime(date_iso, "%Y-%m-%d")
+        date_label = dt.strftime("%d.%m.%Y")
+    except ValueError:
+        date_label = date_iso
+    return f"{base} · {date_label}"
+
+
+async def list_customer_celebrations(
+    session: aiohttp.ClientSession,
+    access_token: str,
+    *,
+    include_dates: bool = True,
+) -> dict[str, Any]:
+    """GET /customer-celebrations — список праздников салона."""
+    path = "/customer-celebrations"
+    if include_dates:
+        path += "?include=dates"
+    return await _api_request(session, "GET", path, access_token=access_token)
+
+
+async def get_customer_celebration(
+    session: aiohttp.ClientSession,
+    access_token: str,
+    celebration_id: str,
+) -> dict[str, Any]:
+    """GET /customer-celebration/{id} — карточка праздника."""
+    return await _api_request(
+        session,
+        "GET",
+        f"/customer-celebration/{celebration_id}",
+        access_token=access_token,
+    )
+
+
+async def list_customer_celebration_dates(
+    session: aiohttp.ClientSession,
+    access_token: str,
+    *,
+    customer_id: str | None = None,
+) -> dict[str, Any]:
+    """GET /customer-celebration-dates — связи клиент ↔ праздник ↔ дата."""
+    path = "/customer-celebration-dates"
+    if customer_id:
+        path += f"?filter[customer]={quote(customer_id, safe='')}"
+    return await _api_request(session, "GET", path, access_token=access_token)
+
+
+async def find_customer_celebration_by_title(
+    session: aiohttp.ClientSession,
+    access_token: str,
+    title: str,
+) -> str | None:
+    """Ищет праздник в справочнике по точному совпадению title."""
+    clean = title.strip()
+    if not clean:
+        return None
+
+    data = await list_customer_celebrations(session, access_token)
+    for item in data.get("data") or []:
+        attrs = item.get("attributes") or {}
+        if attrs.get("title", "").strip() == clean:
+            return str(item["id"])
+    return None
+
+
+async def create_customer_celebration(
+    session: aiohttp.ClientSession,
+    access_token: str,
+    *,
+    title: str,
+    date_from: str,
+    date_until: str | None = None,
+    customer_id: str | None = None,
+) -> str:
+    """
+    POST /customer-celebrations — создаёт праздник в справочнике Posiflora.
+
+    Документация: https://posiflora.com/api/#tag/Customer-Celebrations-API
+
+    Тело запроса: title + вложенные celebration-dates (dateFrom, dateUntil).
+    Опционально relationships.customer — привязка к клиенту (best-effort).
+    """
+    until = date_until or date_from
+    relationships: dict[str, Any] = {
+        "dates": {
+            "data": [
+                {
+                    "type": "celebration-dates",
+                    "attributes": {
+                        "dateFrom": date_from,
+                        "dateUntil": until,
+                    },
+                }
+            ],
+        }
+    }
+    if customer_id:
+        relationships["customer"] = {
+            "data": {"type": "customers", "id": customer_id},
+        }
+
+    payload = {
+        "data": {
+            "type": "customer-celebrations",
+            "attributes": {"title": title.strip()},
+            "relationships": relationships,
+        }
+    }
+
+    try:
+        data = await _api_request(
+            session,
+            "POST",
+            "/customer-celebrations",
+            access_token=access_token,
+            json_body=payload,
+        )
+        return str(data["data"]["id"])
+    except PosifloraAPIError as exc:
+        if "already registered" not in str(exc):
+            raise
+        existing_id = await find_customer_celebration_by_title(
+            session, access_token, title
+        )
+        if existing_id:
+            logger.info(
+                "Posiflora: праздник «%s» уже есть в справочнике, id=%s",
+                title,
+                existing_id,
+            )
+            return existing_id
+        raise
+
+
+async def update_customer_celebration(
+    session: aiohttp.ClientSession,
+    access_token: str,
+    celebration_id: str,
+    *,
+    title: str | None = None,
+    date_from: str | None = None,
+    date_until: str | None = None,
+    date_id: str | None = None,
+) -> None:
+    """PATCH /customer-celebration/{id} — обновление праздника."""
+    payload_data: dict[str, Any] = {
+        "type": "customer-celebrations",
+        "id": celebration_id,
+    }
+    if title is not None:
+        payload_data["attributes"] = {"title": title.strip()}
+
+    if date_from is not None:
+        date_attrs = {
+            "dateFrom": date_from,
+            "dateUntil": date_until or date_from,
+        }
+        date_entry: dict[str, Any] = {
+            "type": "celebration-dates",
+            "attributes": date_attrs,
+        }
+        if date_id:
+            date_entry["id"] = date_id
+        payload_data["relationships"] = {
+            "dates": {"data": [date_entry]},
+        }
+
+    await _api_request(
+        session,
+        "PATCH",
+        f"/customer-celebration/{celebration_id}",
+        access_token=access_token,
+        json_body={"data": payload_data},
+    )
+
+
+async def delete_customer_celebrations(
+    session: aiohttp.ClientSession,
+    access_token: str,
+    celebration_ids: list[str],
+) -> None:
+    """DELETE /customer-celebrations — удаление праздников из справочника."""
+    if not celebration_ids:
+        return
+    await _api_request(
+        session,
+        "DELETE",
+        "/customer-celebrations",
+        access_token=access_token,
+        json_body={
+            "data": [
+                {"id": celebration_id, "type": "customer-celebrations"}
+                for celebration_id in celebration_ids
+            ]
+        },
+    )
+
+
+async def link_customer_celebration(
+    session: aiohttp.ClientSession,
+    access_token: str,
+    customer_id: str,
+    celebration_id: str,
+) -> bool:
+    """
+    Пытается привязать праздник к клиенту через PATCH /customers/{id}.
+    На veresksalon связь в customer-celebration-dates через API не подтверждена.
+    """
+    try:
+        await _api_request(
+            session,
+            "PATCH",
+            f"/customers/{customer_id}",
+            access_token=access_token,
+            json_body={
+                "data": {
+                    "type": "customers",
+                    "id": customer_id,
+                    "relationships": {
+                        "customerCelebrations": {
+                            "data": [
+                                {
+                                    "type": "customer-celebrations",
+                                    "id": celebration_id,
+                                }
+                            ],
+                        }
+                    },
+                }
+            },
+        )
+    except PosifloraAPIError:
+        return False
+
+    data = await list_customer_celebration_dates(
+        session, access_token, customer_id=customer_id
+    )
+    linked = any(
+        (item.get("relationships") or {})
+        .get("celebration", {})
+        .get("data", {})
+        .get("id")
+        == celebration_id
+        for item in data.get("data") or []
+    )
+    return linked
+
+
+async def create_customer_celebration_for_customer(
+    session: aiohttp.ClientSession,
+    access_token: str,
+    customer_id: str,
+    *,
+    title: str,
+    date_from: str,
+    date_until: str | None = None,
+) -> str:
+    """Создаёт праздник и пытается привязать его к клиенту."""
+    celebration_id = await create_customer_celebration(
+        session,
+        access_token,
+        title=title,
+        date_from=date_from,
+        date_until=date_until,
+        customer_id=customer_id,
+    )
+    linked = await link_customer_celebration(
+        session, access_token, customer_id, celebration_id
+    )
+    if linked:
+        logger.info(
+            "Posiflora: праздник #%s «%s» привязан к клиенту #%s",
+            celebration_id,
+            title,
+            customer_id,
+        )
+    else:
+        logger.info(
+            "Posiflora: праздник #%s «%s» создан в справочнике "
+            "(привязка к клиенту #%s через API не подтверждена)",
+            celebration_id,
+            title,
+            customer_id,
+        )
+    return celebration_id
 
 
 async def create_customer_event(
@@ -376,8 +953,13 @@ async def create_customer_event(
 ) -> str | None:
     """
     POST /customer-events — событие в календаре клиента.
-    Поля по документации Posiflora: title, dateFrom, dateUntil.
+
+    Документация: CreateCustomerEventsAction
+    https://posiflora.com/api/#tag/Customer-Events-API/operation/CreateCustomerEventsAction
+
+    Важно: Posiflora требует client-generated UUID в data.id, иначе HTTP 500.
     """
+    event_id = str(uuid.uuid4())
     try:
         data = await _api_request(
             session,
@@ -387,6 +969,7 @@ async def create_customer_event(
             json_body={
                 "data": {
                     "type": "customer-events",
+                    "id": event_id,
                     "attributes": {
                         "title": title,
                         "dateFrom": date_from,
@@ -412,15 +995,156 @@ async def create_customer_event(
         raise
 
 
+async def create_customer_events_from_survey(
+    session: aiohttp.ClientSession,
+    access_token: str,
+    customer_id: str,
+    events: list[dict[str, Any]],
+) -> tuple[list[str], list[str], int, int]:
+    """
+    Создаёт события анкеты в Posiflora — каждое отдельным POST /customer-events.
+
+    Один клиент, N дат из бота → N отдельных запросов (свой UUID на каждый).
+    """
+    event_ids: list[str] = []
+    celebration_ids: list[str] = []
+    events_failed = 0
+    celebrations_linked = 0
+    total = len(events)
+
+    for index, event in enumerate(events, start=1):
+        relation = str(event.get("relation", ""))
+        occasion = str(event.get("occasion", ""))
+        title = _build_survey_event_title(relation, occasion)
+        date_iso = _survey_date_to_iso(str(event.get("date", "")))
+
+        event_id = await create_customer_event(
+            session,
+            access_token,
+            customer_id,
+            title=title,
+            date_from=date_iso,
+            date_until=date_iso,
+        )
+        if event_id:
+            event_ids.append(event_id)
+            logger.info(
+                "Posiflora: событие %s/%s #%s «%s» (%s) для клиента #%s",
+                index,
+                total,
+                event_id,
+                title,
+                date_iso,
+                customer_id,
+            )
+            continue
+
+        events_failed += 1
+        celebration_title = _build_survey_celebration_title(
+            relation, occasion, date_iso
+        )
+        try:
+            celebration_id = await create_customer_celebration_for_customer(
+                session,
+                access_token,
+                customer_id,
+                title=celebration_title,
+                date_from=date_iso,
+                date_until=date_iso,
+            )
+            celebration_ids.append(celebration_id)
+            linked_dates = await list_customer_celebration_dates(
+                session,
+                access_token,
+                customer_id=customer_id,
+            )
+            if any(
+                (item.get("relationships") or {})
+                .get("celebration", {})
+                .get("data", {})
+                .get("id")
+                == celebration_id
+                for item in linked_dates.get("data") or []
+            ):
+                celebrations_linked += 1
+            logger.info(
+                "Posiflora: fallback праздник %s/%s #%s «%s» для клиента #%s",
+                index,
+                total,
+                celebration_id,
+                celebration_title,
+                customer_id,
+            )
+        except PosifloraAPIError as exc:
+            logger.warning(
+                "Posiflora: событие %s/%s не создано для клиента #%s: %s",
+                index,
+                total,
+                customer_id,
+                exc,
+            )
+
+    return event_ids, celebration_ids, events_failed, celebrations_linked
+
+
+async def create_customer_event_by_phone(
+    session: aiohttp.ClientSession,
+    access_token: str,
+    phone: str,
+    name: str,
+    *,
+    title: str,
+    date_from: str,
+    date_until: str,
+    notes: str = "",
+    source_id: str | None = None,
+) -> tuple[str | None, str, bool]:
+    """
+    Создание события клиента: сначала клиент по телефону, затем POST /customer-events.
+
+    1. GET /customers?search={phone} → id
+    2. Если не найден — POST /customers → id
+    3. POST /customer-events с полученным customer id
+
+    Возвращает (event_id, customer_id, customer_created).
+    """
+    customer_id, created = await get_or_create_customer_id_by_phone(
+        session,
+        access_token,
+        phone,
+        name,
+        notes=notes,
+        source_id=source_id,
+    )
+    if not created and notes:
+        await update_customer(
+            session,
+            access_token,
+            customer_id,
+            title=name,
+            notes=notes,
+            source_id=source_id,
+        )
+    event_id = await create_customer_event(
+        session,
+        access_token,
+        customer_id,
+        title=title,
+        date_from=date_from,
+        date_until=date_until,
+    )
+    return event_id, customer_id, created
+
+
 async def sync_survey_profile_to_posiflora(
     profile: dict[str, Any],
     telegram_id: int,
 ) -> dict[str, Any]:
     """
     Синхронизация анкеты (7 вопросов) с Posiflora:
-    1. Find or Create клиента по телефону
-    2. Обновление notes (имя, бюджет, источник, все даты)
-    3. Создание customer-events для каждой важной даты из анкеты
+    1. Поиск клиента по телефону → id (или создание → id)
+    2. Заполнение карточки: имя, источник, предпочтения, notes
+    3. Каждая дата — отдельный POST /customer-events
     """
     name = str(profile.get("name", "")).strip()
     phone = str(profile.get("phone", "")).strip()
@@ -430,54 +1154,64 @@ async def sync_survey_profile_to_posiflora(
         raise PosifloraAPIError("Для синхронизации нужны имя и телефон клиента")
 
     notes = _build_profile_notes(profile, telegram_id)
-    event_ids: list[str] = []
-    events_failed = 0
+    preference_titles = _build_survey_preference_titles(profile)
 
     async with aiohttp.ClientSession() as session:
         access_token = await _get_access_token(session)
-        customer_id, created = await find_or_create_customer(
+        source_id = await get_or_create_customer_source(
+            session,
+            access_token,
+            str(profile.get("source", "")),
+        )
+        preference_ids = await get_or_create_customer_preferences(
+            session,
+            access_token,
+            preference_titles,
+        )
+        customer_id, created = await get_or_create_customer_id_by_phone(
             session,
             access_token,
             phone,
             name,
             notes=notes,
+            source_id=source_id,
+            preference_ids=preference_ids,
+        )
+        await sync_customer_card_from_survey(
+            session,
+            access_token,
+            customer_id,
+            profile,
+            telegram_id,
+            source_id=source_id,
+            preference_ids=preference_ids,
         )
 
-        for event in events:
-            title = _build_survey_event_title(
-                str(event.get("relation", "")),
-                str(event.get("occasion", "")),
-            )
-            date_iso = _survey_date_to_iso(str(event.get("date", "")))
-            event_id = await create_customer_event(
-                session,
-                access_token,
-                customer_id,
-                title=title,
-                date_from=date_iso,
-                date_until=date_iso,
-            )
-            if event_id:
-                event_ids.append(event_id)
-                logger.info(
-                    "Posiflora: событие #%s «%s» (%s) для клиента #%s",
-                    event_id,
-                    title,
-                    date_iso,
-                    customer_id,
-                )
-            else:
-                events_failed += 1
+        (
+            event_ids,
+            celebration_ids,
+            events_failed,
+            celebrations_linked,
+        ) = await create_customer_events_from_survey(
+            session,
+            access_token,
+            customer_id,
+            events,
+        )
 
-    # Клиент синхронизирован; события могут быть только в notes, если API events падает
     posiflora_ok = bool(customer_id)
     return {
         "customer_id": customer_id,
         "customer_created": created,
+        "source_id": source_id,
+        "preference_ids": preference_ids,
         "event_ids": event_ids,
+        "celebration_ids": celebration_ids,
         "events_total": len(events),
         "events_synced": len(event_ids),
         "events_failed": events_failed,
+        "celebrations_synced": len(celebration_ids),
+        "celebrations_linked": celebrations_linked,
         "posiflora_ok": posiflora_ok,
     }
 
@@ -546,40 +1280,34 @@ async def create_posiflora_order(
     telegram_id: int,
 ) -> str:
     """
-    Find or Create клиента, событие в календаре и заказ в Posiflora.
-    Все поля из Mini App передаются в CRM.
+    Find or Create клиента по телефону, событие в календаре и заказ в Posiflora.
     """
     delivery_at, _, _ = _delivery_window(delivery_date)
     event_title = _build_event_title(recipient, occasion)
     date_iso = delivery_at[:10]
+    order_comment = _build_comment(
+        customer_name,
+        phone,
+        recipient,
+        occasion,
+        relation,
+        budget,
+        delivery_date,
+        telegram_id,
+    )
 
     async with aiohttp.ClientSession() as session:
         access_token = await _get_access_token(session)
 
-        customer_id, _ = await find_or_create_customer(
+        event_id, customer_id, _ = await create_customer_event_by_phone(
             session,
             access_token,
             phone,
             customer_name,
-            notes=_build_comment(
-                customer_name,
-                phone,
-                recipient,
-                occasion,
-                relation,
-                budget,
-                delivery_date,
-                telegram_id,
-            ),
-        )
-
-        event_id = await create_customer_event(
-            session,
-            access_token,
-            customer_id,
             title=event_title,
             date_from=date_iso,
             date_until=date_iso,
+            notes=order_comment,
         )
         if event_id:
             logger.info(

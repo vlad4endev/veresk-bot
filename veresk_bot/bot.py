@@ -914,10 +914,19 @@ async def _finish_survey(message: Message, state: FSMContext) -> None:
             "\n\n⚠️ _Данные сохранены локально, но не удалось передать их в Posiflora\\. "
             "Флорист свяжется с вами вручную\\._"
         )
-    elif posiflora_meta.get("events_failed"):
+    elif posiflora_meta.get("events_failed") and not posiflora_meta.get(
+        "celebrations_synced"
+    ):
         posiflora_note = (
             "\n\n_Карточка клиента обновлена в Posiflora\\. "
             "Часть дат сохранена в заметках CRM\\._"
+        )
+    elif posiflora_meta.get("events_failed") and posiflora_meta.get(
+        "celebrations_synced"
+    ):
+        posiflora_note = (
+            "\n\n_Карточка клиента обновлена в Posiflora\\. "
+            "Даты добавлены как праздники в CRM\\._"
         )
 
     await message.answer(

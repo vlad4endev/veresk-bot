@@ -118,15 +118,26 @@ def profile_message(
         total = meta.get("events_total", 0)
         if total:
             text += f"\n📅 Событий в CRM: *{synced}/{total}*"
+        cel_synced = meta.get("celebrations_synced", 0)
+        if cel_synced:
+            text += f"\n🎉 Праздников в справочнике: *{cel_synced}*"
+        pref_count = len(meta.get("preference_ids") or [])
+        if pref_count:
+            text += f"\n🏷 Предпочтений в CRM: *{pref_count}*"
     if not posiflora_ok:
         text += (
             "\n\n⚠️ *Анкета НЕ передана в Posiflora\\!*\n"
             "Создайте клиента и даты вручную по данным выше\\."
         )
-    elif meta.get("events_failed"):
+    elif meta.get("events_failed") and not meta.get("celebrations_synced"):
         text += (
             "\n\n⚠️ *События календаря:* часть дат только в заметках клиента CRM "
             f"\\({meta.get('events_synced', 0)}/{meta.get('events_total', 0)} в календаре\\)\\."
+        )
+    elif meta.get("events_failed") and meta.get("celebrations_synced"):
+        text += (
+            "\n\n⚠️ *Календарь событий недоступен* — даты созданы как праздники "
+            f"\\({meta.get('celebrations_synced', 0)} шт\\.\\) и в заметках клиента\\."
         )
     return text
 
