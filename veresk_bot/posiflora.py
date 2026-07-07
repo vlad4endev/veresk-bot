@@ -33,9 +33,20 @@ BUDGET_MAP = {
     "более 15 000 ₽": 15000,
 }
 
-# Кэш токена между запросами polling (секунды)
-_TOKEN_CACHE: dict[str, float | str] = {"token": "", "expires_at": 0.0}
+# Кэш токена между запросами polling.
+# Posiflora access-токен живёт ~1 час (точный срок задаётся в настройках салона)
+# и по истечении отдаёт 401. Храним реальный expireAt из ответа /sessions,
+# refreshToken для продления и запасной TTL, если сервер не вернул сроки.
+_TOKEN_CACHE: dict[str, float | str] = {
+    "token": "",
+    "expires_at": 0.0,
+    "refresh_token": "",
+    "refresh_expires_at": 0.0,
+}
+# Запасной TTL, если Posiflora не вернул expireAt (страхуемся ретраем на 401).
 _TOKEN_TTL_SEC = 50 * 60
+# Запас перед фактическим истечением, чтобы не отправить запрос с «протухшим» токеном.
+_TOKEN_EXPIRY_MARGIN_SEC = 60
 
 
 class PosifloraAuthError(Exception):
@@ -47,13 +58,31 @@ class PosifloraAPIError(Exception):
 
 
 def _normalize_phone(phone: str) -> str:
-    """Нормализует телефон для Posiflora (только цифры, код страны 7)."""
+    """
+    Нормализует телефон под формат Posiflora: 10-значный национальный номер,
+    код страны (7) хранится отдельно в countryCode.
+
+    В Posiflora клиенты (в т.ч. заведённые вручную) хранятся как «9152905729»,
+    поэтому убираем ведущие 7/8, иначе поиск не находит существующих клиентов
+    и создаются дубликаты.
+    """
     digits = re.sub(r"\D", "", phone.strip())
-    if digits.startswith("8") and len(digits) == 11:
-        digits = "7" + digits[1:]
-    if len(digits) == 10:
-        digits = "7" + digits
+    if len(digits) == 11 and digits[0] in ("7", "8"):
+        digits = digits[1:]
     return digits
+
+
+def _parse_iso_epoch(value: Any) -> float | None:
+    """ISO-8601 (например, expireAt из Posiflora) → epoch-секунды."""
+    if not value:
+        return None
+    raw = str(value).strip()
+    if raw.endswith("Z"):
+        raw = raw[:-1] + "+00:00"
+    try:
+        return datetime.fromisoformat(raw).timestamp()
+    except ValueError:
+        return None
 
 
 def _survey_date_to_iso(date_str: str) -> str:
@@ -203,10 +232,13 @@ def _build_profile_notes(
     return "\n".join(lines)
 
 
-async def _read_error_body(resp: aiohttp.ClientResponse) -> str:
+_ERROR_LOG_LIMIT = 2000
+
+
+async def _read_body(resp: aiohttp.ClientResponse) -> str:
+    """Читает ПОЛНОЕ тело ответа (для json.loads). Обрезаем только при логировании."""
     try:
-        text = await resp.text()
-        return text[:2000] if text else ""
+        return await resp.text()
     except Exception:
         return ""
 
@@ -215,12 +247,16 @@ def _format_json_api_errors(body: str) -> str:
     try:
         payload = json.loads(body)
     except json.JSONDecodeError:
-        return body
+        return body[:_ERROR_LOG_LIMIT]
 
     errors = payload.get("errors")
     if isinstance(errors, list) and errors:
         return json.dumps(errors, ensure_ascii=False, indent=2)
-    return json.dumps(payload, ensure_ascii=False, indent=2)
+    return json.dumps(payload, ensure_ascii=False, indent=2)[:_ERROR_LOG_LIMIT]
+
+
+def _is_sessions_path(path: str) -> bool:
+    return path.lstrip("/").startswith("sessions")
 
 
 async def _api_request(
@@ -230,6 +266,7 @@ async def _api_request(
     *,
     access_token: str | None = None,
     json_body: dict[str, Any] | None = None,
+    _allow_refresh: bool = True,
 ) -> dict[str, Any]:
     headers = dict(JSON_API_HEADERS)
     if access_token:
@@ -239,31 +276,90 @@ async def _api_request(
 
     try:
         async with session.request(method, url, headers=headers, json=json_body) as resp:
-            body = await _read_error_body(resp)
-            if resp.status >= 400:
-                formatted = _format_json_api_errors(body)
-                logger.error(
-                    "Posiflora %s %s → HTTP %s\n%s",
-                    method,
-                    path,
-                    resp.status,
-                    formatted,
-                )
-                raise PosifloraAPIError(f"HTTP {resp.status}: {formatted}")
-            if not body:
-                return {}
-            return json.loads(body)
+            status = resp.status
+            body = await _read_body(resp)
     except aiohttp.ClientError as exc:
         logger.exception("Сетевая ошибка Posiflora %s %s", method, path)
         raise PosifloraAPIError(f"Сетевая ошибка: {exc}") from exc
 
+    # Токен Posiflora истёк — обновляем и повторяем запрос один раз.
+    if (
+        status == 401
+        and access_token
+        and _allow_refresh
+        and not _is_sessions_path(path)
+    ):
+        logger.warning(
+            "Posiflora 401 на %s %s — токен истёк, обновляем и повторяем",
+            method,
+            path,
+        )
+        new_token = await _get_access_token(session, force_refresh=True)
+        return await _api_request(
+            session,
+            method,
+            path,
+            access_token=new_token,
+            json_body=json_body,
+            _allow_refresh=False,
+        )
 
-async def _get_access_token(session: aiohttp.ClientSession) -> str:
-    now = time.time()
-    cached = _TOKEN_CACHE.get("token")
-    if cached and now < float(_TOKEN_CACHE.get("expires_at", 0)):
-        return str(cached)
+    if status >= 400:
+        formatted = _format_json_api_errors(body)
+        logger.error(
+            "Posiflora %s %s → HTTP %s\n%s",
+            method,
+            path,
+            status,
+            formatted,
+        )
+        raise PosifloraAPIError(f"HTTP {status}: {formatted}")
+    if not body:
+        return {}
+    try:
+        return json.loads(body)
+    except json.JSONDecodeError as exc:
+        logger.error(
+            "Posiflora %s %s → HTTP %s: не удалось разобрать JSON-ответ (%s символов): %s",
+            method,
+            path,
+            status,
+            len(body),
+            body[:_ERROR_LOG_LIMIT],
+        )
+        raise PosifloraAPIError(
+            f"Некорректный JSON в ответе Posiflora {method} {path}: {exc}"
+        ) from exc
 
+
+def _store_session_tokens(data: dict[str, Any], now: float) -> str:
+    """Сохраняет accessToken/refreshToken и их реальные сроки из ответа /sessions."""
+    attrs = (data.get("data") or {}).get("attributes") or {}
+    token = str(attrs.get("accessToken") or "")
+
+    expire_at = _parse_iso_epoch(attrs.get("expireAt"))
+    if expire_at:
+        _TOKEN_CACHE["expires_at"] = max(now, expire_at - _TOKEN_EXPIRY_MARGIN_SEC)
+    else:
+        _TOKEN_CACHE["expires_at"] = now + _TOKEN_TTL_SEC
+
+    refresh_token = attrs.get("refreshToken")
+    if refresh_token:
+        _TOKEN_CACHE["refresh_token"] = str(refresh_token)
+        refresh_expire_at = _parse_iso_epoch(attrs.get("refreshExpireAt"))
+        _TOKEN_CACHE["refresh_expires_at"] = (
+            (refresh_expire_at - _TOKEN_EXPIRY_MARGIN_SEC)
+            if refresh_expire_at
+            else now + 7 * 24 * 3600
+        )
+
+    _TOKEN_CACHE["token"] = token
+    return token
+
+
+async def _login_with_credentials(
+    session: aiohttp.ClientSession, now: float
+) -> str:
     try:
         data = await _api_request(
             session,
@@ -286,11 +382,51 @@ async def _get_access_token(session: aiohttp.ClientSession) -> str:
                 "Укажите рабочий логин/пароль и URL вашего салона."
             ) from exc
         raise
+    return _store_session_tokens(data, now)
 
-    token = data["data"]["attributes"]["accessToken"]
-    _TOKEN_CACHE["token"] = token
-    _TOKEN_CACHE["expires_at"] = now + _TOKEN_TTL_SEC
-    return token
+
+async def _refresh_access_token(
+    session: aiohttp.ClientSession, refresh_token: str, now: float
+) -> str:
+    """PATCH /sessions с refreshToken — продлевает сессию без логина/пароля."""
+    data = await _api_request(
+        session,
+        "PATCH",
+        "/sessions",
+        json_body={
+            "data": {
+                "type": "sessions",
+                "id": "current",
+                "attributes": {"refreshToken": refresh_token},
+            }
+        },
+    )
+    return _store_session_tokens(data, now)
+
+
+async def _get_access_token(
+    session: aiohttp.ClientSession,
+    *,
+    force_refresh: bool = False,
+) -> str:
+    now = time.time()
+
+    if not force_refresh:
+        cached = _TOKEN_CACHE.get("token")
+        if cached and now < float(_TOKEN_CACHE.get("expires_at", 0)):
+            return str(cached)
+
+    refresh_token = str(_TOKEN_CACHE.get("refresh_token") or "")
+    if refresh_token and now < float(_TOKEN_CACHE.get("refresh_expires_at", 0)):
+        try:
+            return await _refresh_access_token(session, refresh_token, now)
+        except PosifloraAPIError:
+            logger.warning(
+                "Posiflora: продление токена через refreshToken не удалось — "
+                "выполняем полный вход по логину/паролю"
+            )
+
+    return await _login_with_credentials(session, now)
 
 
 async def find_customer_by_phone(
