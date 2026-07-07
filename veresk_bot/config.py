@@ -27,7 +27,17 @@ def _normalize_token(value: str) -> str:
 
 
 BOT_TOKEN = _normalize_token(_require("BOT_TOKEN"))
-FLORIST_CHAT_ID = int(os.getenv("FLORIST_CHAT_ID", "0"))
+
+
+def _env_bool(name: str, default: bool = False) -> bool:
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    return raw.strip().lower() in ("1", "true", "yes", "on")
+
+
+FLORIST_CHAT_ID = int(os.getenv("FLORIST_CHAT_ID", "0") or "0")
+FLORIST_NOTIFICATIONS_ENABLED = _env_bool("FLORIST_NOTIFICATIONS_ENABLED", False)
 POSIFLORA_USERNAME = _require("POSIFLORA_USERNAME")
 POSIFLORA_PASSWORD = _require("POSIFLORA_PASSWORD")
 POSIFLORA_STORE_ID = _require("POSIFLORA_STORE_ID")

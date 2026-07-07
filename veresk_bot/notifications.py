@@ -6,6 +6,7 @@ from datetime import datetime
 from aiogram import Bot, F, Router
 
 import app_context
+from config import FLORIST_NOTIFICATIONS_ENABLED
 from order_store import update_order_status
 from webapp_buttons import tracking_keyboard
 from aiogram.types import (
@@ -167,6 +168,8 @@ async def notify_florist_profile(
     posiflora_ok: bool = True,
     posiflora_meta: dict | None = None,
 ) -> None:
+    if not FLORIST_NOTIFICATIONS_ENABLED:
+        return
     if not florist_chat_id:
         logger.warning("FLORIST_CHAT_ID не задан — уведомление об анкете пропущено")
         return
@@ -198,6 +201,8 @@ async def notify_florist(
     client_tg_id: int,
     posiflora_ok: bool = True,
 ) -> None:
+    if not FLORIST_NOTIFICATIONS_ENABLED:
+        return
     if not florist_chat_id:
         logger.warning("FLORIST_CHAT_ID не задан — уведомление флористу пропущено")
         return
