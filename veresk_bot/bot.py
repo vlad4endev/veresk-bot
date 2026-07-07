@@ -1232,6 +1232,11 @@ async def main() -> None:
 
     await init_db()
 
+    from posiflora import start_token_refresher, warmup_token
+
+    await warmup_token()
+    start_token_refresher()
+
     redis = getattr(dp.storage, "redis", None)
     if redis:
         dp.redis = redis

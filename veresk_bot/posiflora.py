@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import re
@@ -427,6 +428,84 @@ async def _get_access_token(
             )
 
     return await _login_with_credentials(session, now)
+
+
+def _token_seconds_left() -> float:
+    """Сколько секунд осталось до истечения кешированного access-токена."""
+    return float(_TOKEN_CACHE.get("expires_at", 0)) - time.time()
+
+
+async def warmup_token() -> bool:
+    """
+    Прогрев токена при старте бота.
+
+    Заранее авторизуемся в Posiflora, чтобы:
+    - первый клиент не ждал логин (кеш уже заполнен);
+    - неверные логин/пароль/URL были видны сразу в логах при запуске,
+      а не всплывали на первой же анкете.
+
+    Не бросает исключение — бот должен стартовать даже без Posiflora.
+    """
+    async with aiohttp.ClientSession() as session:
+        try:
+            await _get_access_token(session, force_refresh=True)
+        except PosifloraAuthError:
+            logger.error(
+                "❌ Posiflora: авторизация при старте отклонена — "
+                "проверьте POSIFLORA_USERNAME/PASSWORD/BASE_URL"
+            )
+            return False
+        except PosifloraAPIError as exc:
+            logger.warning("⚠️ Posiflora: прогрев токена при старте не удался: %s", exc)
+            return False
+
+    logger.info(
+        "✅ Posiflora: токен получен при старте, действителен ещё ~%d сек",
+        max(0, int(_token_seconds_left())),
+    )
+    return True
+
+
+async def _token_refresh_loop(check_interval: int) -> None:
+    while True:
+        left = _token_seconds_left()
+        # Обновляем заранее — до истечения, чтобы клиентские запросы не ждали логин.
+        if left <= _TOKEN_EXPIRY_MARGIN_SEC:
+            try:
+                async with aiohttp.ClientSession() as session:
+                    await _get_access_token(session, force_refresh=True)
+                left = _token_seconds_left()
+                logger.info(
+                    "🔑 Posiflora: токен обновлён заранее, действителен ещё ~%d сек",
+                    max(0, int(left)),
+                )
+            except PosifloraAuthError:
+                logger.error(
+                    "❌ Posiflora: фоновое обновление токена — авторизация отклонена, "
+                    "повтор через 5 мин"
+                )
+                await asyncio.sleep(300)
+                continue
+            except Exception:
+                logger.exception("⚠️ Posiflora: ошибка фонового обновления токена")
+                await asyncio.sleep(300)
+                continue
+
+        # Спим почти до момента истечения, но проверяемся не реже check_interval.
+        sleep_for = left - _TOKEN_EXPIRY_MARGIN_SEC
+        await asyncio.sleep(max(float(check_interval), sleep_for))
+
+
+def start_token_refresher(check_interval: int = 300) -> asyncio.Task:
+    """
+    Запускает фоновую задачу, которая держит access-токен «тёплым»:
+    обновляет его через refreshToken до истечения, чтобы каждый запрос
+    клиента шёл сразу с валидным токеном без логина.
+
+    Возвращает asyncio.Task (можно отменить при остановке бота).
+    """
+    logger.info("🔄 Posiflora: фоновое обновление токена запущено")
+    return asyncio.create_task(_token_refresh_loop(check_interval))
 
 
 async def find_customer_by_phone(
