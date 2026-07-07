@@ -81,7 +81,7 @@ SOURCE_PRESETS = {
 }
 
 def progress(step: int, total: int = FORM_STEPS) -> str:
-    return "🟣" * step + "⚪️" * (total - step) + f"  {step}/{total}"
+    return "🌸" * step + "⚪️" * (total - step) + f"  {step}/{total}"
 
 
 def _choice_keyboard(rows: list[list[str]]) -> ReplyKeyboardMarkup:
