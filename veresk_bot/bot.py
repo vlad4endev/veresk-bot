@@ -793,7 +793,7 @@ async def _phone_done(message: Message, state: FSMContext, phone: str) -> None:
 
 async def _ask_occasion(message: Message, state: FSMContext) -> None:
     await message.answer(
-        f"{progress(4)}\n\n"
+        f"{progress(3)}\n\n"
         "*Какой повод?*\n\n"
         "_Выберите вариант или нажмите «Свой вариант»_",
         parse_mode=PARSE_MODE,
@@ -804,7 +804,7 @@ async def _ask_occasion(message: Message, state: FSMContext) -> None:
 
 async def _ask_relation(message: Message, state: FSMContext) -> None:
     await message.answer(
-        f"{progress(5)}\n\n"
+        f"{progress(4)}\n\n"
         "*Кем приходится получатель?* 🌺\n\n"
         "_Выберите вариант или нажмите «Свой вариант»_",
         parse_mode=PARSE_MODE,
@@ -838,7 +838,7 @@ async def _save_event_and_ask_more(message: Message, state: FSMContext) -> None:
 
 async def _ask_budget(message: Message, state: FSMContext) -> None:
     await message.answer(
-        f"{progress(6)}\n\n"
+        f"{progress(5)}\n\n"
         "*Уровень бюджета букета?*\n\n"
         "_Выберите вариант из кнопок ниже_",
         parse_mode=PARSE_MODE,
@@ -849,7 +849,7 @@ async def _ask_budget(message: Message, state: FSMContext) -> None:
 
 async def _ask_source(message: Message, state: FSMContext) -> None:
     await message.answer(
-        f"{progress(7)}\n\n"
+        f"{progress(6)}\n\n"
         "*Откуда вы узнали о нас?*\n\n"
         "_Выберите вариант или нажмите «Свой вариант»_",
         parse_mode=PARSE_MODE,
