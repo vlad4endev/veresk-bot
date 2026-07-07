@@ -663,7 +663,7 @@ async def cmd_start(message: Message, state: FSMContext) -> None:
     await state.clear()
     await state.update_data(events=[])
     await message.answer(
-        "💜 *Добро пожаловать в Veresk*\n"
+        "💗 *Добро пожаловать в Veresk*\n"
         "_флористический салон · trail of happiness_\n\n"
         "Заполните короткую анкету — это поможет нам подобрать "
         "идеальный букет для вашего повода.\n\n"
