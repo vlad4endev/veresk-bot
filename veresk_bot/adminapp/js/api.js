@@ -44,10 +44,10 @@ const AdminAPI = (() => {
   return {
     getToken,
     setToken,
-    login: (password) =>
+    login: (username, password) =>
       request("/api/admin/login", {
         method: "POST",
-        body: JSON.stringify({ password }),
+        body: JSON.stringify({ username, password }),
       }),
     logout: () => request("/api/admin/logout", { method: "POST" }),
     me: () => request("/api/admin/me"),

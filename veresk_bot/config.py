@@ -55,7 +55,12 @@ _default_db = Path(__file__).resolve().parent / "data" / "veresk.db"
 DATABASE_PATH = os.getenv("DATABASE_PATH", str(_default_db))
 
 # Админ-панель рассылок
+ADMIN_USERNAME = os.getenv("ADMIN_USERNAME", "admin").strip() or "admin"
+ADMIN_PASSWORD = os.getenv("ADMIN_PASSWORD", "").strip()
+# Обратная совместимость: если ADMIN_PASSWORD пуст — берём ADMIN_TOKEN
 ADMIN_TOKEN = os.getenv("ADMIN_TOKEN", "").strip()
+if not ADMIN_PASSWORD and ADMIN_TOKEN:
+    ADMIN_PASSWORD = ADMIN_TOKEN
 POSIFLORA_SYNC_INTERVAL = int(os.getenv("POSIFLORA_SYNC_INTERVAL", "3600"))
 MAILING_SEND_INTERVAL = float(os.getenv("MAILING_SEND_INTERVAL", "3.0"))
 MAILING_BATCH_SIZE = int(os.getenv("MAILING_BATCH_SIZE", "10"))

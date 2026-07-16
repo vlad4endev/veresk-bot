@@ -1,6 +1,6 @@
 """
 HTTP API админ-панели рассылок: /api/admin/*
-Авторизация: Bearer-токен после POST /api/admin/login с ADMIN_TOKEN.
+Авторизация: Bearer-токен после POST /api/admin/login (логин + пароль).
 """
 
 from __future__ import annotations
@@ -12,7 +12,7 @@ from typing import Any
 
 from aiohttp import web
 
-from config import ADMIN_TOKEN, MAX_BOT_TOKEN
+from config import ADMIN_PASSWORD, ADMIN_USERNAME, MAX_BOT_TOKEN
 from mailing_db import (
     add_campaign_recipients,
     count_customers,
@@ -76,7 +76,7 @@ def _extract_token(request: web.Request) -> str:
 
 async def _require_admin(request: web.Request) -> web.Response | None:
     """Возвращает Response с ошибкой или None, если OK."""
-    if not ADMIN_TOKEN:
+    if not ADMIN_PASSWORD:
         return _json({"error": "admin_not_configured"}, status=503)
     token = _extract_token(request)
     if not token or not await validate_admin_session(token):
@@ -143,18 +143,22 @@ def _when_label(days_until: int) -> tuple[str, str]:
 
 
 async def handle_login(request: web.Request) -> web.Response:
-    if not ADMIN_TOKEN:
+    if not ADMIN_PASSWORD:
         return _json({"error": "admin_not_configured"}, status=503)
     try:
         body = await request.json()
     except Exception:
         return _json({"error": "invalid_json"}, status=400)
-    password = str(body.get("token") or body.get("password") or "").strip()
-    if not password or password != ADMIN_TOKEN:
+    username = str(body.get("username") or body.get("login") or "").strip()
+    password = str(body.get("password") or body.get("token") or "").strip()
+    # Логин сравниваем без учёта регистра (удобно с телефона), пароль — строго
+    user_ok = secrets.compare_digest(username.lower(), ADMIN_USERNAME.lower())
+    pass_ok = secrets.compare_digest(password, ADMIN_PASSWORD)
+    if not username or not password or not (user_ok and pass_ok):
         return _json({"error": "invalid_credentials"}, status=401)
     session = secrets.token_urlsafe(32)
     await create_admin_session(session)
-    return _json({"token": session, "expires_hours": 72})
+    return _json({"token": session, "expires_hours": 72, "username": ADMIN_USERNAME})
 
 
 async def handle_logout(request: web.Request) -> web.Response:

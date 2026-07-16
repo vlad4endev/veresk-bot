@@ -58,6 +58,7 @@
   function showLogin() {
     $("#appShell").classList.add("hidden");
     $("#loginScreen").classList.remove("hidden");
+    setTimeout(focusLogin, 50);
   }
 
   async function tryAuth() {
@@ -74,18 +75,92 @@
     }
   }
 
+  const LOGIN_KEY = "veresk_admin_login";
+
+  function focusLogin() {
+    const userEl = $("#loginUsername");
+    const saved = localStorage.getItem(LOGIN_KEY) || "";
+    if (saved && !userEl.value) userEl.value = saved;
+    (userEl.value ? $("#loginPassword") : userEl).focus();
+  }
+
+  function setLoginBusy(busy) {
+    $("#loginSubmit").disabled = busy;
+    $("#loginSpinner").classList.toggle("hidden", !busy);
+    $("#loginSubmitLabel").textContent = busy ? "Входим…" : "Войти";
+  }
+
+  function showLoginError(text) {
+    const errEl = $("#loginErr");
+    errEl.textContent = text;
+    errEl.style.display = "block";
+    const card = $("#loginForm");
+    card.classList.remove("shake");
+    void card.offsetWidth; // перезапуск анимации
+    card.classList.add("shake");
+  }
+
+  // Показать/скрыть пароль
+  $("#passToggle")?.addEventListener("click", () => {
+    const inp = $("#loginPassword");
+    const show = inp.type === "password";
+    inp.type = show ? "text" : "password";
+    $("#passToggle .eye-show").classList.toggle("hidden", show);
+    $("#passToggle .eye-hide").classList.toggle("hidden", !show);
+    $("#passToggle").setAttribute("aria-label", show ? "Скрыть пароль" : "Показать пароль");
+    inp.focus();
+  });
+
+  // Подсказка про Caps Lock
+  $("#loginPassword")?.addEventListener("keyup", (e) => {
+    if (typeof e.getModifierState === "function") {
+      $("#capsHint").classList.toggle("hidden", !e.getModifierState("CapsLock"));
+    }
+  });
+  $("#loginPassword")?.addEventListener("blur", () => {
+    $("#capsHint").classList.add("hidden");
+  });
+
+  // Скрываем ошибку, как только начали исправлять
+  ["#loginUsername", "#loginPassword"].forEach((sel) => {
+    $(sel)?.addEventListener("input", () => {
+      $("#loginErr").style.display = "none";
+    });
+  });
+
   $("#loginForm")?.addEventListener("submit", async (e) => {
     e.preventDefault();
+    const username = $("#loginUsername").value.trim();
     const pwd = $("#loginPassword").value;
-    const errEl = $("#loginErr");
-    errEl.style.display = "none";
+    if (!username) {
+      showLoginError("Введите логин");
+      $("#loginUsername").focus();
+      return;
+    }
+    if (!pwd) {
+      showLoginError("Введите пароль");
+      $("#loginPassword").focus();
+      return;
+    }
+    $("#loginErr").style.display = "none";
+    setLoginBusy(true);
     try {
-      const res = await AdminAPI.login(pwd);
+      const res = await AdminAPI.login(username, pwd);
       AdminAPI.setToken(res.token);
+      localStorage.setItem(LOGIN_KEY, username);
+      $("#loginPassword").value = "";
       await showApp();
     } catch (err) {
-      errEl.textContent = "Неверный пароль";
-      errEl.style.display = "block";
+      if (err.status === 503) {
+        showLoginError("Админка не настроена: задайте ADMIN_USERNAME и ADMIN_PASSWORD в .env");
+      } else if (err.status === 401) {
+        showLoginError("Неверный логин или пароль");
+        $("#loginPassword").select();
+      } else {
+        showLoginError("Сервер недоступен. Попробуйте ещё раз.");
+      }
+    } finally {
+      setLoginBusy(false);
     }
   });
 

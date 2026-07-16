@@ -13,13 +13,30 @@
 
 <!-- LOGIN -->
 <div id="loginScreen" class="login-wrap">
-  <form class="login-card" id="loginForm">
-    <div style="width:90px;margin:0 auto 16px"><svg viewBox="0 0 200 205"><use href="#veresk"/></svg></div>
-    <h1>Вход в админку</h1>
-    <p>Панель рассылок Veresk. Введите пароль из настройки ADMIN_TOKEN.</p>
-    <div class="login-err" id="loginErr"></div>
-    <input type="password" id="loginPassword" placeholder="Пароль" autocomplete="current-password" required>
-    <button type="submit" class="btn primary block big">Войти</button>
+  <form class="login-card" id="loginForm" novalidate>
+    <div class="login-logo"><svg viewBox="0 0 200 205"><use href="#veresk"/></svg></div>
+    <h1>С возвращением!</h1>
+    <p>Панель рассылок Veresk</p>
+    <div class="login-err" id="loginErr" role="alert"></div>
+    <div class="login-field">
+      <label for="loginUsername">Логин</label>
+      <input type="text" id="loginUsername" name="username" placeholder="admin" autocomplete="username" autocapitalize="none" autocorrect="off" spellcheck="false" required enterkeyhint="next">
+    </div>
+    <div class="login-field">
+      <label for="loginPassword">Пароль</label>
+      <div class="pass-wrap">
+        <input type="password" id="loginPassword" name="password" placeholder="••••••••" autocomplete="current-password" required enterkeyhint="go">
+        <button type="button" class="pass-toggle" id="passToggle" aria-label="Показать пароль" tabindex="-1">
+          <svg class="eye-show" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7-10-7-10-7z"/><circle cx="12" cy="12" r="3"/></svg>
+          <svg class="eye-hide hidden" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7-10-7-10-7z"/><circle cx="12" cy="12" r="3"/><path d="M4 4l16 16"/></svg>
+        </button>
+      </div>
+      <div class="login-caps hidden" id="capsHint">⇪ Включён Caps Lock</div>
+    </div>
+    <button type="submit" class="btn primary block big login-submit" id="loginSubmit">
+      <span class="spinner hidden" id="loginSpinner"></span>
+      <span id="loginSubmitLabel">Войти</span>
+    </button>
   </form>
 </div>
 
