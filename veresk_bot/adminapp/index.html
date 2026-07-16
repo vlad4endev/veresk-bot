@@ -170,6 +170,21 @@
         <div id="tgHint">Сообщения уходят порциями с паузами. Новые номера сначала прогреваются.</div>
       </div>
       <div class="acards" id="accountsList"></div>
+
+      <div class="acct-form" id="tgApiForm" style="margin-top:22px">
+        <div style="font-weight:600;margin-bottom:6px">Ключи Telegram API</div>
+        <p class="page-desc" style="margin:0 0 12px">
+          Получите один раз на <a href="https://my.telegram.org" target="_blank" rel="noopener">my.telegram.org</a>
+          → API development tools. Одни ключи работают для любого числа номеров.
+        </p>
+        <div id="tgApiStatus" class="page-desc" style="margin:0 0 12px"></div>
+        <label>API ID</label>
+        <input id="tgApiId" type="text" inputmode="numeric" placeholder="12345678">
+        <label style="margin-top:10px;display:block">API Hash</label>
+        <input id="tgApiHash" type="text" placeholder="0123456789abcdef0123456789abcdef">
+        <button class="btn primary" id="tgApiSave" style="margin-top:12px">Сохранить ключи</button>
+      </div>
+
       <button class="btn primary big" id="btnConnectTg" style="margin-top:22px"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M12 5v14M5 12h14"/></svg>Подключить Telegram</button>
       <div class="acct-form hidden" id="acctForm">
         <label>Телефон (+7…)</label>

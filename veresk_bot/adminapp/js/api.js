@@ -88,6 +88,12 @@ const AdminAPI = (() => {
         body: JSON.stringify(body),
       }),
     accounts: () => request("/api/admin/accounts"),
+    tgSettings: () => request("/api/admin/accounts/telegram/settings"),
+    tgSaveSettings: (api_id, api_hash) =>
+      request("/api/admin/accounts/telegram/settings", {
+        method: "POST",
+        body: JSON.stringify({ api_id, api_hash }),
+      }),
     tgStart: (phone) =>
       request("/api/admin/accounts/telegram/start", {
         method: "POST",

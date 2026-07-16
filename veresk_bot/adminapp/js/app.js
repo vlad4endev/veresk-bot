@@ -577,13 +577,17 @@
     box.innerHTML = '<div class="loading">Загрузка…</div>';
     try {
       const data = await AdminAPI.accounts();
-      if (!data.telethon_configured) {
+      const configured = !!data.telethon_configured;
+      if (!configured) {
         $("#tgHint").textContent =
-          "Задайте TELEGRAM_API_ID и TELEGRAM_API_HASH в .env, чтобы подключать номера.";
+          "Укажите ключи Telegram API ниже, затем подключайте номера — всё из этой панели.";
       } else {
         $("#tgHint").textContent =
           "Подключите личный номер Telegram: телефон → код из SMS → (при необходимости) пароль 2FA.";
       }
+      loadTgApiStatus();
+      const connectBtn = $("#btnConnectTg");
+      if (connectBtn) connectBtn.style.display = configured ? "" : "none";
       box.innerHTML = (data.items || [])
         .map((a) => {
           const isMax = a.kind === "max_bot";
@@ -617,6 +621,41 @@
       box.innerHTML = '<div class="empty-state">Ошибка загрузки</div>';
     }
   }
+
+  async function loadTgApiStatus() {
+    const box = $("#tgApiStatus");
+    if (!box) return;
+    try {
+      const s = await AdminAPI.tgSettings();
+      if (s.configured) {
+        const src = s.from_env ? " (из .env)" : "";
+        box.innerHTML =
+          '<span style="color:var(--ok)">✓ Ключи заданы' +
+          src +
+          (s.api_id ? ", API ID " + esc(String(s.api_id)) : "") +
+          "</span>";
+        if (s.api_id && !$("#tgApiId").value) $("#tgApiId").value = s.api_id;
+      } else {
+        box.innerHTML =
+          '<span style="color:var(--warn)">Ключи ещё не заданы</span>';
+      }
+    } catch (_) {}
+  }
+
+  $("#tgApiSave")?.addEventListener("click", async () => {
+    const apiId = $("#tgApiId").value.trim();
+    const apiHash = $("#tgApiHash").value.trim();
+    if (!apiId || !apiHash) return alert("Укажите API ID и API Hash");
+    try {
+      const res = await AdminAPI.tgSaveSettings(apiId, apiHash);
+      if (!res.ok) return alert(res.error || "Ошибка");
+      $("#tgApiHash").value = "";
+      alert("Ключи сохранены");
+      loadAccounts();
+    } catch (err) {
+      alert(err.data?.error || err.message);
+    }
+  });
 
   $("#btnConnectTg")?.addEventListener("click", () => {
     $("#acctForm").classList.toggle("hidden");

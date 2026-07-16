@@ -37,9 +37,11 @@ from mailing_db import (
     validate_admin_session,
     customers_for_segment,
 )
+import runtime_settings
 from posiflora_sync import last_sync_info, sync_from_posiflora
 from senders.telegram_userbot import (
     confirm_telegram_login,
+    get_api_credentials,
     is_telethon_configured,
     start_telegram_login,
 )
@@ -644,6 +646,48 @@ async def handle_telegram_connect_confirm(request: web.Request) -> web.Response:
     return _json({"ok": True, "account_id": account_id, **result})
 
 
+async def handle_telegram_settings_get(request: web.Request) -> web.Response:
+    err = await _require_admin(request)
+    if err:
+        return err
+    api_id, api_hash = get_api_credentials()
+    from_env = bool(runtime_settings.get("telegram_api_id")) is False and bool(api_id)
+    return _json(
+        {
+            "configured": bool(api_id and api_hash),
+            "api_id": api_id or None,
+            "api_hash_set": bool(api_hash),
+            "from_env": from_env,
+        }
+    )
+
+
+async def handle_telegram_settings_save(request: web.Request) -> web.Response:
+    err = await _require_admin(request)
+    if err:
+        return err
+    try:
+        body = await request.json()
+    except Exception:
+        return _json({"error": "invalid_json"}, status=400)
+
+    raw_id = str(body.get("api_id") or "").strip()
+    raw_hash = str(body.get("api_hash") or "").strip()
+    if not raw_id or not raw_hash:
+        return _json({"error": "api_id_and_hash_required"}, status=400)
+    try:
+        api_id = int(raw_id)
+    except ValueError:
+        return _json({"error": "api_id_must_be_number"}, status=400)
+    if api_id <= 0:
+        return _json({"error": "api_id_must_be_positive"}, status=400)
+
+    runtime_settings.set_many(
+        {"telegram_api_id": api_id, "telegram_api_hash": raw_hash}
+    )
+    return _json({"ok": True, "configured": is_telethon_configured()})
+
+
 async def handle_segment_counts(request: web.Request) -> web.Response:
     err = await _require_admin(request)
     if err:
@@ -676,6 +720,8 @@ def setup_admin_routes(app: web.Application) -> None:
         ("/api/admin/campaigns/{id}/recipients", handle_campaign_recipients, "GET"),
         ("/api/admin/personal", handle_personal, "POST"),
         ("/api/admin/accounts", handle_accounts_list, "GET"),
+        ("/api/admin/accounts/telegram/settings", handle_telegram_settings_get, "GET"),
+        ("/api/admin/accounts/telegram/settings", handle_telegram_settings_save, "POST"),
         ("/api/admin/accounts/telegram/start", handle_telegram_connect_start, "POST"),
         ("/api/admin/accounts/telegram/confirm", handle_telegram_connect_confirm, "POST"),
         ("/api/admin/segments", handle_segment_counts, "GET"),

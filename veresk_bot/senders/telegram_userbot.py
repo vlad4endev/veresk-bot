@@ -8,6 +8,7 @@ import re
 from pathlib import Path
 from typing import Any
 
+import runtime_settings
 from config import SESSIONS_DIR, TELEGRAM_API_HASH, TELEGRAM_API_ID
 from senders.base import SendResult
 
@@ -15,6 +16,22 @@ logger = logging.getLogger(__name__)
 
 # phone → pending Telethon client during login flow
 _pending_logins: dict[str, Any] = {}
+
+
+def get_api_credentials() -> tuple[int, str]:
+    """API ID/Hash: сначала значения из админ-панели, затем fallback на .env."""
+    raw_id = runtime_settings.get("telegram_api_id")
+    raw_hash = runtime_settings.get("telegram_api_hash")
+    api_id = 0
+    if raw_id:
+        try:
+            api_id = int(raw_id)
+        except (TypeError, ValueError):
+            api_id = 0
+    api_hash = str(raw_hash).strip() if raw_hash else ""
+    if api_id and api_hash:
+        return api_id, api_hash
+    return TELEGRAM_API_ID, TELEGRAM_API_HASH
 
 
 def _normalize_phone(phone: str) -> str:
@@ -35,7 +52,8 @@ def sessions_path() -> Path:
 
 
 def is_telethon_configured() -> bool:
-    return bool(TELEGRAM_API_ID and TELEGRAM_API_HASH)
+    api_id, api_hash = get_api_credentials()
+    return bool(api_id and api_hash)
 
 
 async def start_telegram_login(phone: str) -> dict[str, Any]:
@@ -43,17 +61,18 @@ async def start_telegram_login(phone: str) -> dict[str, Any]:
     if not is_telethon_configured():
         return {
             "ok": False,
-            "error": "TELEGRAM_API_ID / TELEGRAM_API_HASH не заданы в .env",
+            "error": "TELEGRAM_API_ID / TELEGRAM_API_HASH не заданы — укажите их в настройках",
         }
     try:
         from telethon import TelegramClient
     except ImportError:
         return {"ok": False, "error": "telethon не установлен"}
 
+    api_id, api_hash = get_api_credentials()
     phone_norm = _normalize_phone(phone)
     digits_only = re.sub(r"\D", "", phone_norm)
     session_name = sessions_path() / f"acc_{digits_only}"
-    client = TelegramClient(str(session_name), TELEGRAM_API_ID, TELEGRAM_API_HASH)
+    client = TelegramClient(str(session_name), api_id, api_hash)
     await client.connect()
     try:
         await client.send_code_request(phone_norm)
@@ -147,7 +166,8 @@ class TelegramUserbotSender:
         base = self.session_file
         if base.endswith(".session"):
             base = base[:-8]
-        client = TelegramClient(base, TELEGRAM_API_ID, TELEGRAM_API_HASH)
+        api_id, api_hash = get_api_credentials()
+        client = TelegramClient(base, api_id, api_hash)
         await client.connect()
         if not await client.is_user_authorized():
             await client.disconnect()
