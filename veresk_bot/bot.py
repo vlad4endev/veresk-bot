@@ -1229,13 +1229,23 @@ async def main() -> None:
     await validate_bot_token()
 
     from client_db import init_db
+    from mailing_db import init_mailing_db
 
     await init_db()
+    await init_mailing_db()
 
     from posiflora import start_token_refresher, warmup_token
 
     await warmup_token()
     start_token_refresher()
+
+    from posiflora_sync import start_posiflora_sync
+
+    start_posiflora_sync()
+
+    from senders.dispatcher import start_mailing_dispatcher
+
+    start_mailing_dispatcher()
 
     redis = getattr(dp.storage, "redis", None)
     if redis:
@@ -1246,13 +1256,15 @@ async def main() -> None:
     else:
         logger.warning("⚠️ Redis недоступен — polling статусов отключён")
 
+    # API (Mini App + админка) всегда поднимаем — админка не зависит от MINIAPP_URL
+    await start_webapp_server(redis, WEBAPP_HOST, WEBAPP_PORT, bot=bot)
     if MINIAPP_URL:
-        await start_webapp_server(redis, WEBAPP_HOST, WEBAPP_PORT, bot=bot)
         logger.info("🌐 Mini App URL: %s (доступен всем клиентам)", MINIAPP_URL)
     else:
         logger.warning(
             "⚠️ MINIAPP_URL не задан — Web App не откроется (задайте HTTPS в .env)"
         )
+    logger.info("🛠 Админ-панель: /admin/ (API /api/admin/)")
 
     await setup_menu_commands()
     await dp.start_polling(bot)

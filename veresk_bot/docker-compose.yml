@@ -5,6 +5,7 @@ services:
     env_file: .env
     environment:
       DATABASE_PATH: /app/data/veresk.db
+      SESSIONS_DIR: /app/data/sessions
     expose:
       - "3005"
     volumes:
@@ -23,6 +24,7 @@ services:
       # - "443:443"
     volumes:
       - ./miniapp:/usr/share/nginx/html/miniapp:ro
+      - ./adminapp:/usr/share/nginx/html/admin:ro
       - ./nginx.conf:/etc/nginx/conf.d/default.conf:ro
     depends_on:
       - bot

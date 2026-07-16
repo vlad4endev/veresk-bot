@@ -1,0 +1,304 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="theme-color" content="#402c60">
+<meta name="description" content="Veresk — авторассылки клиентам через Telegram и MAX">
+<title>Veresk — рассылки клиентам</title>
+<link rel="stylesheet" href="css/admin.css">
+</head>
+<body>
+<svg width="0" height="0" style="position:absolute"><defs><g id="veresk"><circle cx="100" cy="106" r="50" fill="none" stroke="#F47DB9" stroke-width="7.5"/><path d="M100 158 C 92 130 82 100 76 66" fill="none" stroke="#F47DB9" stroke-width="4" stroke-linecap="round"/><path d="M0 -9 C 6 -4.5 6 4.5 0 9 C -6 4.5 -6 -4.5 0 -9 Z" fill="#F47DB9" transform="translate(76,70) rotate(-32) scale(1.05)"/><path d="M0 -9 C 6 -4.5 6 4.5 0 9 C -6 4.5 -6 -4.5 0 -9 Z" fill="#F47DB9" transform="translate(79,86) rotate(-38) scale(1.05)"/><path d="M0 -9 C 6 -4.5 6 4.5 0 9 C -6 4.5 -6 -4.5 0 -9 Z" fill="#F47DB9" transform="translate(82,102) rotate(-44) scale(1.05)"/><path d="M0 -9 C 6 -4.5 6 4.5 0 9 C -6 4.5 -6 -4.5 0 -9 Z" fill="#F47DB9" transform="translate(86,118) rotate(-52) scale(1.05)"/><path d="M0 -9 C 6 -4.5 6 4.5 0 9 C -6 4.5 -6 -4.5 0 -9 Z" fill="#F47DB9" transform="translate(91,133) rotate(-60) scale(1.05)"/><path d="M0 -9 C 6 -4.5 6 4.5 0 9 C -6 4.5 -6 -4.5 0 -9 Z" fill="#F47DB9" transform="translate(90,92) rotate(20) scale(1.05)"/><path d="M0 -9 C 6 -4.5 6 4.5 0 9 C -6 4.5 -6 -4.5 0 -9 Z" fill="#F47DB9" transform="translate(92,108) rotate(14) scale(1.05)"/><path d="M0 -9 C 6 -4.5 6 4.5 0 9 C -6 4.5 -6 -4.5 0 -9 Z" fill="#F47DB9" transform="translate(94,124) rotate(8) scale(1.05)"/><path d="M100 158 C 108 130 118 100 124 66" fill="none" stroke="#F47DB9" stroke-width="4" stroke-linecap="round"/><path d="M0 -9 C 6 -4.5 6 4.5 0 9 C -6 4.5 -6 -4.5 0 -9 Z" fill="#F47DB9" transform="translate(124,70) rotate(32) scale(1.05)"/><path d="M0 -9 C 6 -4.5 6 4.5 0 9 C -6 4.5 -6 -4.5 0 -9 Z" fill="#F47DB9" transform="translate(121,86) rotate(38) scale(1.05)"/><path d="M0 -9 C 6 -4.5 6 4.5 0 9 C -6 4.5 -6 -4.5 0 -9 Z" fill="#F47DB9" transform="translate(118,102) rotate(44) scale(1.05)"/><path d="M0 -9 C 6 -4.5 6 4.5 0 9 C -6 4.5 -6 -4.5 0 -9 Z" fill="#F47DB9" transform="translate(114,118) rotate(52) scale(1.05)"/><path d="M0 -9 C 6 -4.5 6 4.5 0 9 C -6 4.5 -6 -4.5 0 -9 Z" fill="#F47DB9" transform="translate(109,133) rotate(60) scale(1.05)"/><path d="M0 -9 C 6 -4.5 6 4.5 0 9 C -6 4.5 -6 -4.5 0 -9 Z" fill="#F47DB9" transform="translate(110,92) rotate(-20) scale(1.05)"/><path d="M0 -9 C 6 -4.5 6 4.5 0 9 C -6 4.5 -6 -4.5 0 -9 Z" fill="#F47DB9" transform="translate(108,108) rotate(-14) scale(1.05)"/><path d="M0 -9 C 6 -4.5 6 4.5 0 9 C -6 4.5 -6 -4.5 0 -9 Z" fill="#F47DB9" transform="translate(106,124) rotate(-8) scale(1.05)"/><circle cx="30.7" cy="66.0" r="3" fill="#402C60"/><circle cx="22.7" cy="85.3" r="3" fill="#402C60"/><circle cx="20.0" cy="106.0" r="3" fill="#402C60"/><circle cx="22.7" cy="126.7" r="3" fill="#402C60"/><circle cx="30.7" cy="146.0" r="3" fill="#402C60"/><circle cx="169.3" cy="66.0" r="3" fill="#402C60"/><circle cx="177.3" cy="85.3" r="3" fill="#402C60"/><circle cx="180.0" cy="106.0" r="3" fill="#402C60"/><circle cx="177.3" cy="126.7" r="3" fill="#402C60"/><circle cx="169.3" cy="146.0" r="3" fill="#402C60"/><path id="topArc" d="M 33.7 61.3 A 80 80 0 0 1 166.3 61.3" fill="none"/><path id="botArc" d="M 28.7 154.1 A 86 86 0 0 0 171.3 154.1" fill="none"/><text font-family="Georgia,serif" font-size="34" font-weight="700" fill="#402C60" letter-spacing="1"><textPath href="#topArc" startOffset="50%" text-anchor="middle">Veresk</textPath></text><text font-family="Georgia,serif" font-style="italic" font-size="15.5" fill="#402C60" letter-spacing="1.5"><textPath href="#botArc" startOffset="50%" text-anchor="middle">trail of happiness</textPath></text></g></defs></svg>
+
+<!-- LOGIN -->
+<div id="loginScreen" class="login-wrap">
+  <form class="login-card" id="loginForm">
+    <div style="width:90px;margin:0 auto 16px"><svg viewBox="0 0 200 205"><use href="#veresk"/></svg></div>
+    <h1>Вход в админку</h1>
+    <p>Панель рассылок Veresk. Введите пароль из настройки ADMIN_TOKEN.</p>
+    <div class="login-err" id="loginErr"></div>
+    <input type="password" id="loginPassword" placeholder="Пароль" autocomplete="current-password" required>
+    <button type="submit" class="btn primary block big">Войти</button>
+  </form>
+</div>
+
+<div class="app hidden" id="appShell">
+  <aside class="side">
+    <a class="logo" href="#" onclick="go('home');return false" aria-label="Veresk"><svg viewBox="0 0 200 205"><use href="#veresk"/></svg></a>
+    <button class="btn primary create-btn" onclick="go('compose')">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M12 5v14M5 12h14"/></svg>
+      Создать рассылку
+    </button>
+    <nav class="nav">
+      <button class="nav-item active" data-nav="home" onclick="go('home')"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="m3 11 18-8-8 18-2-8z"/></svg>Рассылки</button>
+      <button class="nav-item" data-nav="clients" onclick="go('clients')"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="9" cy="8" r="3"/><path d="M3 20c0-3 3-5 6-5s6 2 6 5"/><path d="M16 6a3 3 0 010 6"/><path d="M18 20c0-2-.6-3.5-2-4.5"/></svg>Клиенты</button>
+      <button class="nav-item" data-nav="accounts" onclick="go('accounts')"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="6" y="2" width="12" height="20" rx="3"/><path d="M11 18h2"/></svg>Аккаунты</button>
+    </nav>
+    <div class="side-foot">
+      <div class="avatar">V</div>
+      <div><div class="nm">Админ</div><div class="rl">Veresk</div></div>
+    </div>
+  </aside>
+
+  <main class="main">
+    <div class="mtop mob">
+      <a class="logo" href="#" onclick="go('home');return false" aria-label="Veresk"><svg viewBox="0 0 200 205"><use href="#veresk"/></svg></a>
+      <div>
+        <div class="mtop-hi">Здравствуйте</div>
+        <div class="mtop-sub">Что отправим клиентам сегодня?</div>
+      </div>
+    </div>
+
+    <!-- HOME -->
+    <section class="panel active" id="home">
+      <div class="mob">
+        <button class="hero" onclick="go('compose')">
+          <span class="plus"><svg viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2.4"><path d="M12 5v14M5 12h14"/></svg></span>
+          <span><div class="ht">Создать рассылку</div><div class="hs">Напишите клиентам за 3 простых шага</div></span>
+          <span class="arr"><svg viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2.2"><path d="M9 6l6 6-6 6"/></svg></span>
+        </button>
+      </div>
+      <div class="head-row dk-flex">
+        <div><h1>Рассылки</h1><p>Сообщения клиентам в Telegram и MAX</p></div>
+        <div class="spacer"></div>
+        <button class="btn primary big" onclick="go('compose')"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M12 5v14M5 12h14"/></svg>Создать рассылку</button>
+      </div>
+      <div class="strip dk-flex">
+        <div class="stat"><div class="n" id="statCustomers">—</div><div class="l">клиентов в базе</div></div>
+        <div class="stat"><div class="n" id="statAccounts">—</div><div class="l">аккаунта готовы к работе</div></div>
+        <div class="stat"><div class="n" id="statDelivery">—</div><div class="l">сообщений дошло за месяц</div></div>
+      </div>
+      <div class="widget">
+        <div class="wg-head">
+          <div>
+            <h3>События клиентов</h3>
+            <span class="sub">Поводы написать — из Posiflora</span>
+          </div>
+          <button class="wg-all" id="wgAll">Все события</button>
+        </div>
+        <div id="eventsList"></div>
+      </div>
+      <div class="recent-h">Ваши рассылки</div>
+      <div class="mhead dk-grid"><span></span><span>Рассылка</span><span>Где</span><span>Статус</span><span></span></div>
+      <div class="rlist" id="campaignsList"></div>
+      <div class="foot mob">
+        <button class="foot-btn" onclick="go('clients')">
+          <span class="fb-ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9"><circle cx="9" cy="8" r="3"/><path d="M3 20c0-3 3-5 6-5s6 2 6 5"/></svg></span>
+          <span class="fb-t">Клиенты<span class="fb-s">База получателей</span></span>
+          <span class="fb-ch"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 6l6 6-6 6"/></svg></span>
+        </button>
+        <button class="foot-btn" onclick="go('accounts')">
+          <span class="fb-ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9"><rect x="6" y="2" width="12" height="20" rx="3"/><path d="M11 18h2"/></svg></span>
+          <span class="fb-t">Аккаунты<span class="fb-s">Telegram и MAX</span></span>
+          <span class="fb-ch"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 6l6 6-6 6"/></svg></span>
+        </button>
+      </div>
+    </section>
+
+    <!-- CLIENTS -->
+    <section class="panel" id="clients">
+      <button class="back mob" onclick="go('home')"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M15 18l-6-6 6-6"/></svg>Главная</button>
+      <div class="page-title">Клиенты</div>
+      <p class="page-desc">База из Posiflora. Сегменты считаются автоматически.</p>
+      <div class="seg">
+        <button class="on" data-seg="all">Все</button>
+        <button data-seg="regular">Постоянные</button>
+        <button data-seg="new">Новые</button>
+        <button data-seg="inactive">Давно не заказывали</button>
+      </div>
+      <div class="tbl-wrap">
+        <table>
+          <thead><tr><th>Клиент</th><th class="hide-mob">Контакт</th><th>Где пишем</th><th>Последний заказ</th><th class="hide-mob">Группа</th></tr></thead>
+          <tbody id="clientsBody"></tbody>
+        </table>
+      </div>
+      <button class="btn block" id="btnSync" style="margin-top:20px;max-width:360px">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M12 3v12M8 11l4 4 4-4"/><path d="M4 17v2a2 2 0 002 2h12a2 2 0 002-2v-2"/></svg>
+        Синхронизировать из Posiflora
+      </button>
+      <p class="hint" id="clientsHint"></p>
+    </section>
+
+    <!-- CLIENT CARD -->
+    <section class="panel" id="client">
+      <button class="back" onclick="go('clients')"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M15 18l-6-6 6-6"/></svg>Клиенты</button>
+      <div class="cl-head">
+        <span class="cl-av" id="clAv">—</span>
+        <div>
+          <div class="cl-name" id="clName">—</div>
+          <div class="cl-meta">
+            <span class="tag" id="clSeg">—</span>
+            <span class="src">данные из Posiflora</span>
+          </div>
+        </div>
+        <div class="spacer"></div>
+        <button class="btn primary" id="clWrite"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m3 11 18-8-8 18-2-8z"/></svg>Написать лично</button>
+      </div>
+      <div class="cl-contacts" id="clContacts"></div>
+      <div class="cl-cols">
+        <div class="cl-card">
+          <h4>Важные даты</h4>
+          <div class="dl">
+            <div class="row"><span class="k">День рождения</span><span class="v"><span id="clBday">—</span><button class="mini-btn" onclick="congratsCurrent('bday')">Поздравить</button></span></div>
+            <div class="row"><span class="k">Годовщина</span><span class="v"><span id="clAnniv">—</span><button class="mini-btn" id="clAnnivBtn" onclick="congratsCurrent('anniv')">Поздравить</button></span></div>
+            <div class="row"><span class="k">Клиент с</span><span class="v" id="clSince">—</span></div>
+            <div class="row"><span class="k">Последний заказ</span><span class="v" id="clLast">—</span></div>
+          </div>
+        </div>
+        <div class="cl-card">
+          <h4>Все события</h4>
+          <div id="clEvents"></div>
+        </div>
+      </div>
+      <div class="subh">История сообщений</div>
+      <div class="tbl-wrap" style="margin-top:12px">
+        <table>
+          <thead><tr><th>Дата</th><th>Сообщение</th><th class="hide-mob">Канал</th><th>Статус</th></tr></thead>
+          <tbody id="clMsgBody"></tbody>
+        </table>
+      </div>
+    </section>
+
+    <!-- ACCOUNTS -->
+    <section class="panel" id="accounts">
+      <button class="back mob" onclick="go('home')"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M15 18l-6-6 6-6"/></svg>Главная</button>
+      <div class="page-title">Аккаунты</div>
+      <p class="page-desc">С каких аккаунтов уходят сообщения клиентам.</p>
+      <div class="note" style="max-width:640px">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
+        <div id="tgHint">Сообщения уходят порциями с паузами. Новые номера сначала прогреваются.</div>
+      </div>
+      <div class="acards" id="accountsList"></div>
+      <button class="btn primary big" id="btnConnectTg" style="margin-top:22px"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M12 5v14M5 12h14"/></svg>Подключить Telegram</button>
+      <div class="acct-form hidden" id="acctForm">
+        <label>Телефон (+7…)</label>
+        <input id="tgPhone" type="tel" placeholder="+79001234567">
+        <button class="btn primary" id="tgSendCode" style="margin-top:12px">Получить код</button>
+        <div id="tgCodeStep" class="hidden">
+          <label>Код из Telegram / SMS</label>
+          <input id="tgCode" type="text" placeholder="12345">
+          <div id="tg2faWrap" class="hidden">
+            <label>Пароль 2FA</label>
+            <input id="tg2fa" type="password" placeholder="Пароль облака">
+          </div>
+          <button class="btn primary" id="tgConfirm" style="margin-top:12px">Подтвердить</button>
+        </div>
+      </div>
+    </section>
+
+    <!-- DETAIL -->
+    <section class="panel" id="detail">
+      <button class="back" onclick="go('home')"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M15 18l-6-6 6-6"/></svg>Все рассылки</button>
+      <div id="detailBody"></div>
+    </section>
+
+    <!-- PERSONAL -->
+    <section class="panel" id="personal">
+      <button class="back" onclick="go('home')"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M15 18l-6-6 6-6"/></svg>Главная</button>
+      <div class="page-title">Личное сообщение</div>
+      <p class="page-desc">Персональное сообщение — уйдёт только этому клиенту.</p>
+      <div id="personalForm">
+        <div class="rcard">
+          <span class="av" id="pAv">—</span>
+          <div><div class="rn" id="pName">—</div><div class="rc2" id="pContact"></div></div>
+          <span class="ev-when today" id="pEv"></span>
+        </div>
+        <div class="compose">
+          <div>
+            <label class="lbl">Текст сообщения</label>
+            <textarea class="textarea" id="pmsg"></textarea>
+          </div>
+          <div class="phone">
+            <div class="ptop"><div class="dot">V</div>Veresk</div>
+            <div class="bubble"><span id="ppreview"></span><div class="tm">сейчас</div></div>
+          </div>
+        </div>
+        <div class="wnav" style="margin-top:24px">
+          <button class="btn primary big" id="pSend"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="m3 11 18-8-8 18-2-8z"/></svg><span id="pSendLabel">Отправить</span></button>
+        </div>
+      </div>
+      <div id="personalDone" style="display:none">
+        <div class="success">
+          <div class="okic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4"><path d="M20 6 9 17l-5-5"/></svg></div>
+          <h2>Сообщение в очереди!</h2>
+          <p><b id="doneName">Клиент</b> получит ваше сообщение в <span id="doneChan">Telegram</span>.</p>
+          <button class="btn primary big" onclick="go('home')">На главную</button>
+        </div>
+      </div>
+    </section>
+
+    <!-- COMPOSE -->
+    <section class="panel" id="compose">
+      <button class="back" id="wexit"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M15 18l-6-6 6-6"/></svg>Отменить</button>
+      <div class="page-title" style="margin-bottom:0">Новая рассылка</div>
+      <div class="stepper">
+        <div class="step active"><div class="num">1</div><div class="tx">Кому</div></div>
+        <div class="bar"></div>
+        <div class="step"><div class="num">2</div><div class="tx">Сообщение</div></div>
+        <div class="bar"></div>
+        <div class="step"><div class="num">3</div><div class="tx">Отправка</div></div>
+      </div>
+      <div class="wstep active" id="s0">
+        <div class="wq">Кому отправим?</div>
+        <p class="wsub">Выберите группу клиентов.</p>
+        <div class="choices">
+          <button class="choice on" data-seg="regular" data-count="0"><div class="ci">💜</div><div><div class="ct">Постоянные</div><div class="cc">— человек</div></div><span class="rc"><svg viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="3"><path d="M20 6 9 17l-5-5"/></svg></span></button>
+          <button class="choice" data-seg="all" data-count="0"><div class="ci">👥</div><div><div class="ct">Все клиенты</div><div class="cc">— человек</div></div><span class="rc"><svg viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="3"><path d="M20 6 9 17l-5-5"/></svg></span></button>
+          <button class="choice" data-seg="new" data-count="0"><div class="ci">🌱</div><div><div class="ct">Новые</div><div class="cc">— человек</div></div><span class="rc"><svg viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="3"><path d="M20 6 9 17l-5-5"/></svg></span></button>
+          <button class="choice" data-seg="inactive" data-count="0"><div class="ci">💤</div><div><div class="ct">Давно не заказывали</div><div class="cc">— человек</div></div><span class="rc"><svg viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="3"><path d="M20 6 9 17l-5-5"/></svg></span></button>
+        </div>
+      </div>
+      <div class="wstep" id="s1">
+        <div class="wq">Что напишем?</div>
+        <p class="wsub">Справа сразу видно, как сообщение придёт клиенту.</p>
+        <div class="compose">
+          <div>
+            <label class="lbl">Текст сообщения</label>
+            <textarea class="textarea" id="msg">Здравствуйте, {имя}!
+
+Только для вас — весенние букеты со скидкой 15%.
+
+Заказать: veresk.flowers</textarea>
+            <div class="inserts"><button class="ins">+ Имя клиента</button><button class="ins">+ Скидка</button><button class="ins">+ Ссылка</button></div>
+          </div>
+          <div class="phone">
+            <div class="ptop"><div class="dot">V</div>Veresk</div>
+            <div class="bubble"><span id="msgPreview"></span><div class="tm">10:00 ✓✓</div></div>
+          </div>
+        </div>
+      </div>
+      <div class="wstep" id="s2">
+        <div class="wq">Когда отправить?</div>
+        <p class="wsub">Сообщения уйдут через подключённые аккаунты порциями.</p>
+        <div class="choices">
+          <button class="choice" data-when="now"><div class="ci">⚡</div><div><div class="ct">Сейчас</div><div class="cc">начнём сразу</div></div><span class="rc"><svg viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="3"><path d="M20 6 9 17l-5-5"/></svg></span></button>
+          <button class="choice on" data-when="later"><div class="ci">📅</div><div><div class="ct">Позже</div><div class="cc">выбрать дату и время</div></div><span class="rc"><svg viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="3"><path d="M20 6 9 17l-5-5"/></svg></span></button>
+        </div>
+        <div class="datebox" id="datebox"><input type="date" id="wizDate"><input type="time" id="wizTime" value="10:00"></div>
+        <div class="summary">
+          <div class="r"><span>Получат сообщение</span><b id="sumWho">— клиентов</b></div>
+          <div class="r"><span>Когда</span><b id="sumWhen">—</b></div>
+        </div>
+      </div>
+      <div class="wstep" id="s3">
+        <div class="success">
+          <div class="okic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4"><path d="M20 6 9 17l-5-5"/></svg></div>
+          <h2>Готово!</h2>
+          <p id="successText">Рассылка создана.</p>
+          <button class="btn primary big" id="wdone">На главную</button>
+        </div>
+      </div>
+      <div class="wnav" id="wnav">
+        <button class="btn" id="wback" style="display:none">Назад</button>
+        <div class="spacer"></div>
+        <button class="btn primary big" id="wnext">Далее</button>
+      </div>
+    </section>
+  </main>
+</div>
+
+<script src="js/api.js"></script>
+<script src="js/app.js"></script>
+</body>
+</html>

@@ -53,3 +53,18 @@ WEBAPP_PORT = int(os.getenv("WEBAPP_PORT", "3005"))
 
 _default_db = Path(__file__).resolve().parent / "data" / "veresk.db"
 DATABASE_PATH = os.getenv("DATABASE_PATH", str(_default_db))
+
+# Админ-панель рассылок
+ADMIN_TOKEN = os.getenv("ADMIN_TOKEN", "").strip()
+POSIFLORA_SYNC_INTERVAL = int(os.getenv("POSIFLORA_SYNC_INTERVAL", "3600"))
+MAILING_SEND_INTERVAL = float(os.getenv("MAILING_SEND_INTERVAL", "3.0"))
+MAILING_BATCH_SIZE = int(os.getenv("MAILING_BATCH_SIZE", "10"))
+
+# Telethon (userbot для рассылок с личных номеров)
+TELEGRAM_API_ID = int(os.getenv("TELEGRAM_API_ID", "0") or "0")
+TELEGRAM_API_HASH = os.getenv("TELEGRAM_API_HASH", "").strip()
+_default_sessions = Path(__file__).resolve().parent / "data" / "sessions"
+SESSIONS_DIR = os.getenv("SESSIONS_DIR", str(_default_sessions))
+
+# MAX-бот (заглушка — заполните, когда API будет готов)
+MAX_BOT_TOKEN = os.getenv("MAX_BOT_TOKEN", "").strip()

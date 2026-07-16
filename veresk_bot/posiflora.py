@@ -1438,3 +1438,164 @@ async def get_order_status(order_id: str) -> str:
             raise PosifloraAPIError(f"Заказ #{order_id} не найден в Posiflora")
         attrs = data["data"]["attributes"]
         return attrs.get("status") or attrs.get("deliveryStatus", "unknown")
+
+
+async def list_customers_page(
+    session: aiohttp.ClientSession,
+    access_token: str,
+    *,
+    page: int = 1,
+    page_size: int = 100,
+) -> dict[str, Any]:
+    """
+    GET /customers с пагинацией JSON:API.
+    Возвращает сырой ответ {data, meta, links, included?}.
+    """
+    path = (
+        f"/customers?page[number]={page}&page[size]={page_size}"
+        "&sort=title"
+    )
+    return await _api_request(session, "GET", path, access_token=access_token)
+
+
+async def list_all_customers(
+    *,
+    page_size: int = 100,
+    max_pages: int = 500,
+) -> list[dict[str, Any]]:
+    """
+    Загружает всех клиентов Posiflora постранично.
+    Каждый элемент: {id, title, phone, country_code, notes, created_at, status}.
+    """
+    results: list[dict[str, Any]] = []
+    async with aiohttp.ClientSession() as session:
+        access_token = await _get_access_token(session)
+        for page in range(1, max_pages + 1):
+            data = await list_customers_page(
+                session, access_token, page=page, page_size=page_size
+            )
+            items = data.get("data") or []
+            if not items:
+                break
+            for item in items:
+                attrs = item.get("attributes") or {}
+                phone = str(attrs.get("phone") or "").strip()
+                country = attrs.get("countryCode")
+                results.append(
+                    {
+                        "id": str(item.get("id", "")),
+                        "title": str(attrs.get("title") or "").strip(),
+                        "phone": phone,
+                        "country_code": country,
+                        "notes": str(attrs.get("notes") or ""),
+                        "created_at": attrs.get("createdAt") or attrs.get("created"),
+                        "status": attrs.get("status"),
+                        "raw": attrs,
+                    }
+                )
+            meta = data.get("meta") or {}
+            # Останавливаемся, если страница неполная или meta говорит «конец»
+            page_count = meta.get("pageCount") or meta.get("page-count")
+            if page_count is not None and page >= int(page_count):
+                break
+            if len(items) < page_size:
+                break
+    return results
+
+
+async def list_customer_events_all(
+    session: aiohttp.ClientSession,
+    access_token: str,
+) -> list[dict[str, Any]]:
+    """
+    GET /customer-events — события календаря клиентов.
+    Возвращает список {id, title, date_from, date_until, customer_id}.
+    """
+    data = await _api_request(
+        session, "GET", "/customer-events", access_token=access_token
+    )
+    results: list[dict[str, Any]] = []
+    for item in data.get("data") or []:
+        attrs = item.get("attributes") or {}
+        rel = (item.get("relationships") or {}).get("customer") or {}
+        customer_ref = rel.get("data") or {}
+        date_from = attrs.get("dateFrom") or attrs.get("date") or ""
+        results.append(
+            {
+                "id": str(item.get("id", "")),
+                "title": str(attrs.get("title") or "").strip(),
+                "date_from": str(date_from)[:10],
+                "date_until": str(attrs.get("dateUntil") or date_from)[:10],
+                "customer_id": str(customer_ref.get("id") or "") or None,
+            }
+        )
+    return results
+
+
+async def list_celebration_dates_all(
+    session: aiohttp.ClientSession,
+    access_token: str,
+) -> list[dict[str, Any]]:
+    """
+    GET /customer-celebration-dates + celebrations —
+    праздники клиентов (fallback, если events недоступны).
+    """
+    celebrations: dict[str, str] = {}
+    try:
+        celeb_data = await list_customer_celebrations(session, access_token)
+        for item in celeb_data.get("data") or []:
+            attrs = item.get("attributes") or {}
+            celebrations[str(item["id"])] = str(attrs.get("title") or "").strip()
+    except PosifloraAPIError:
+        logger.warning("Posiflora: не удалось загрузить справочник праздников")
+
+    try:
+        dates_data = await list_customer_celebration_dates(session, access_token)
+    except PosifloraAPIError:
+        logger.warning("Posiflora: не удалось загрузить celebration-dates")
+        return []
+
+    results: list[dict[str, Any]] = []
+    for item in dates_data.get("data") or []:
+        attrs = item.get("attributes") or {}
+        rels = item.get("relationships") or {}
+        customer_ref = (rels.get("customer") or {}).get("data") or {}
+        celebration_ref = (rels.get("celebration") or {}).get("data") or {}
+        celeb_id = str(celebration_ref.get("id") or "")
+        date_from = attrs.get("dateFrom") or attrs.get("date") or ""
+        title = celebrations.get(celeb_id) or attrs.get("title") or "Праздник"
+        results.append(
+            {
+                "id": f"celeb:{item.get('id', '')}",
+                "title": str(title).strip(),
+                "date_from": str(date_from)[:10],
+                "date_until": str(attrs.get("dateUntil") or date_from)[:10],
+                "customer_id": str(customer_ref.get("id") or "") or None,
+            }
+        )
+    return results
+
+
+async def fetch_customers_and_events() -> dict[str, Any]:
+    """
+    Полная выгрузка клиентов + событий/праздников для синхронизации в локальную БД.
+    """
+    customers = await list_all_customers()
+    events: list[dict[str, Any]] = []
+    async with aiohttp.ClientSession() as session:
+        access_token = await _get_access_token(session)
+        try:
+            events = await list_customer_events_all(session, access_token)
+        except PosifloraAPIError as exc:
+            logger.warning("Posiflora: customer-events недоступны: %s", exc)
+        try:
+            celebrations = await list_celebration_dates_all(session, access_token)
+            # Добавляем праздники, которых нет среди events
+            existing = {e["id"] for e in events}
+            for c in celebrations:
+                if c["id"] not in existing:
+                    events.append(c)
+        except PosifloraAPIError as exc:
+            logger.warning("Posiflora: celebration-dates недоступны: %s", exc)
+
+    return {"customers": customers, "events": events}

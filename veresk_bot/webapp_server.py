@@ -282,6 +282,10 @@ def create_api_app(redis, bot=None) -> web.Application:
     app.router.add_get("/api/client/me", handle_client_me)
     app.router.add_get("/api/client/orders", handle_client_orders)
 
+    from admin_api import setup_admin_routes
+
+    setup_admin_routes(app)
+
     return app
 
 
