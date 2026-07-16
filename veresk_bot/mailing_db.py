@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
 import sqlite3
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -51,6 +52,23 @@ CREATE INDEX IF NOT EXISTS idx_events_customer ON customer_events (customer_id);
 CREATE INDEX IF NOT EXISTS idx_events_date ON customer_events (date_from);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_events_pf
     ON customer_events (posiflora_event_id) WHERE posiflora_event_id IS NOT NULL;
+
+CREATE TABLE IF NOT EXISTS customer_orders (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    customer_id INTEGER NOT NULL,
+    posiflora_order_id TEXT NOT NULL UNIQUE,
+    number TEXT NOT NULL DEFAULT '',
+    amount REAL NOT NULL DEFAULT 0,
+    status TEXT NOT NULL DEFAULT '',
+    comment TEXT NOT NULL DEFAULT '',
+    ordered_at TEXT,
+    delivery_at TEXT,
+    synced_at TEXT NOT NULL,
+    FOREIGN KEY (customer_id) REFERENCES customers (id) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_orders_customer ON customer_orders (customer_id);
+CREATE INDEX IF NOT EXISTS idx_orders_date ON customer_orders (ordered_at);
 
 CREATE TABLE IF NOT EXISTS campaigns (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -126,6 +144,30 @@ def _now() -> str:
     return datetime.now().isoformat(timespec="seconds")
 
 
+def normalize_phone_db(phone: str) -> str:
+    """
+    Единый формат хранения телефона в базе рассылок: +7(999)999-99-99.
+
+    Принимает номер в любом виде («89991234567», «9991234567»,
+    «+7 999 123-45-67»…). Если из номера не получается российский
+    10-значный, возвращает исходную строку без изменений.
+    """
+    digits = re.sub(r"\D", "", str(phone or ""))
+    if len(digits) == 11 and digits[0] in ("7", "8"):
+        digits = digits[1:]
+    if len(digits) != 10:
+        return str(phone or "").strip()
+    return f"+7({digits[0:3]}){digits[3:6]}-{digits[6:8]}-{digits[8:10]}"
+
+
+def _phone_digits(phone: str) -> str:
+    """10 цифр национального номера для сравнения телефонов между собой."""
+    digits = re.sub(r"\D", "", str(phone or ""))
+    if len(digits) == 11 and digits[0] in ("7", "8"):
+        digits = digits[1:]
+    return digits
+
+
 def _connect() -> sqlite3.Connection:
     conn = sqlite3.connect(DATABASE_PATH, check_same_thread=False)
     conn.row_factory = sqlite3.Row
@@ -142,6 +184,15 @@ async def init_mailing_db() -> None:
         Path(DATABASE_PATH).parent.mkdir(parents=True, exist_ok=True)
         with _connect() as db:
             db.executescript(_SCHEMA)
+            # Миграция: приводим ранее сохранённые телефоны к +7(999)999-99-99
+            rows = db.execute("SELECT id, phone FROM customers").fetchall()
+            for row in rows:
+                formatted = normalize_phone_db(row["phone"])
+                if formatted != row["phone"]:
+                    db.execute(
+                        "UPDATE customers SET phone = ? WHERE id = ?",
+                        (formatted, row["id"]),
+                    )
             db.commit()
 
     await _run_db(_init)
@@ -163,6 +214,7 @@ async def upsert_customer(
     segment: str = "all",
 ) -> int:
     now = _now()
+    phone = normalize_phone_db(phone)
 
     def _upsert() -> int:
         with _connect() as db:
@@ -261,8 +313,20 @@ async def list_customers(
                 params.append(segment)
             if search:
                 q = f"%{search.strip()}%"
-                where.append("(name LIKE ? OR phone LIKE ?)")
-                params.extend([q, q])
+                digits = re.sub(r"\D", "", search)
+                if digits:
+                    # Ищем и по «сырым» цифрам, игнорируя формат +7(999)999-99-99
+                    stripped = (
+                        "REPLACE(REPLACE(REPLACE(REPLACE(REPLACE("
+                        "phone,'+',''),'(',''),')',''),'-',''),' ','')"
+                    )
+                    where.append(
+                        f"(name LIKE ? OR phone LIKE ? OR {stripped} LIKE ?)"
+                    )
+                    params.extend([q, q, f"%{digits}%"])
+                else:
+                    where.append("(name LIKE ? OR phone LIKE ?)")
+                    params.extend([q, q])
             clause = ("WHERE " + " AND ".join(where)) if where else ""
             total = db.execute(
                 f"SELECT COUNT(*) AS c FROM customers {clause}", params
@@ -296,12 +360,23 @@ async def count_customers(segment: str | None = None) -> int:
 
 
 async def set_customer_tg_by_phone(phone: str, tg_user_id: int) -> None:
+    """Привязывает tg_id к клиенту; телефон сравнивается по цифрам,
+    независимо от формата хранения/входа."""
+    target = _phone_digits(phone)
+    if not target:
+        return
+
     def _set() -> None:
         with _connect() as db:
-            db.execute(
-                "UPDATE customers SET tg_user_id = ? WHERE phone = ?",
-                (tg_user_id, phone),
-            )
+            rows = db.execute("SELECT id, phone FROM customers").fetchall()
+            ids = [
+                row["id"] for row in rows if _phone_digits(row["phone"]) == target
+            ]
+            for cid in ids:
+                db.execute(
+                    "UPDATE customers SET tg_user_id = ? WHERE id = ?",
+                    (tg_user_id, cid),
+                )
             db.commit()
 
     await _run_db(_set)
@@ -492,6 +567,138 @@ async def list_auto_events_for_today() -> list[dict[str, Any]]:
         return [dict(r) for r in rows]
 
     return await _run_db(_list)
+
+
+# ── orders (история покупок из Posiflora) ──────────────────────────────────
+
+
+async def upsert_customer_order(
+    *,
+    customer_id: int,
+    posiflora_order_id: str,
+    number: str = "",
+    amount: float = 0,
+    status: str = "",
+    comment: str = "",
+    ordered_at: str | None = None,
+    delivery_at: str | None = None,
+) -> int:
+    now = _now()
+
+    def _upsert() -> int:
+        with _connect() as db:
+            row = db.execute(
+                "SELECT id FROM customer_orders WHERE posiflora_order_id = ?",
+                (posiflora_order_id,),
+            ).fetchone()
+            if row:
+                db.execute(
+                    """
+                    UPDATE customer_orders SET
+                        customer_id = ?, number = ?, amount = ?, status = ?,
+                        comment = ?, ordered_at = ?, delivery_at = ?, synced_at = ?
+                    WHERE id = ?
+                    """,
+                    (
+                        customer_id,
+                        number,
+                        amount,
+                        status,
+                        comment,
+                        ordered_at,
+                        delivery_at,
+                        now,
+                        row["id"],
+                    ),
+                )
+                db.commit()
+                return int(row["id"])
+            cur = db.execute(
+                """
+                INSERT INTO customer_orders (
+                    customer_id, posiflora_order_id, number, amount, status,
+                    comment, ordered_at, delivery_at, synced_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    customer_id,
+                    posiflora_order_id,
+                    number,
+                    amount,
+                    status,
+                    comment,
+                    ordered_at,
+                    delivery_at,
+                    now,
+                ),
+            )
+            db.commit()
+            return int(cur.lastrowid)
+
+    return await _run_db(_upsert)
+
+
+async def list_orders_for_customer(
+    customer_id: int, limit: int = 100
+) -> list[dict[str, Any]]:
+    def _list() -> list[dict[str, Any]]:
+        with _connect() as db:
+            rows = db.execute(
+                """
+                SELECT * FROM customer_orders
+                WHERE customer_id = ?
+                ORDER BY ordered_at DESC
+                LIMIT ?
+                """,
+                (customer_id, limit),
+            ).fetchall()
+        return [dict(r) for r in rows]
+
+    return await _run_db(_list)
+
+
+async def get_order_stats_for_customer(customer_id: int) -> dict[str, Any]:
+    """Агрегаты по покупкам клиента: количество, сумма, средний чек, последняя."""
+
+    def _stats() -> dict[str, Any]:
+        with _connect() as db:
+            row = db.execute(
+                """
+                SELECT COUNT(*) AS orders_count,
+                       COALESCE(SUM(amount), 0) AS total_spent,
+                       MAX(ordered_at) AS last_order_at
+                FROM customer_orders
+                WHERE customer_id = ?
+                """,
+                (customer_id,),
+            ).fetchone()
+        count = int(row["orders_count"] or 0)
+        total = float(row["total_spent"] or 0)
+        return {
+            "orders_count": count,
+            "total_spent": total,
+            "avg_order": round(total / count) if count else 0,
+            "last_order_at": row["last_order_at"],
+        }
+
+    return await _run_db(_stats)
+
+
+async def update_customer_last_order(
+    customer_id: int, last_order_at: str | None
+) -> None:
+    if not last_order_at:
+        return
+
+    def _set() -> None:
+        with _connect() as db:
+            db.execute(
+                "UPDATE customers SET last_order_at = ? WHERE id = ?",
+                (last_order_at, customer_id),
+            )
+            db.commit()
+
+    await _run_db(_set)
 
 
 # ── campaigns ──────────────────────────────────────────────────────────────

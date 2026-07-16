@@ -1503,6 +1503,96 @@ async def list_all_customers(
     return results
 
 
+async def list_orders_page(
+    session: aiohttp.ClientSession,
+    access_token: str,
+    *,
+    page: int = 1,
+    page_size: int = 100,
+) -> dict[str, Any]:
+    """GET /orders с пагинацией JSON:API (новые заказы первыми)."""
+    path = (
+        f"/orders?page[number]={page}&page[size]={page_size}"
+        "&sort=-createdAt"
+    )
+    return await _api_request(session, "GET", path, access_token=access_token)
+
+
+def _order_customer_ref(item: dict[str, Any]) -> str | None:
+    """Достаёт id клиента из relationships заказа (client или customer)."""
+    rels = item.get("relationships") or {}
+    for key in ("client", "customer"):
+        ref = (rels.get(key) or {}).get("data") or {}
+        if isinstance(ref, dict) and ref.get("id"):
+            return str(ref["id"])
+    return None
+
+
+def _order_amount(attrs: dict[str, Any]) -> float:
+    for key in ("total", "amount", "totalAmount", "sum"):
+        value = attrs.get(key)
+        if value is None:
+            continue
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            continue
+    return 0.0
+
+
+async def list_all_orders(
+    session: aiohttp.ClientSession,
+    access_token: str,
+    *,
+    page_size: int = 100,
+    max_pages: int = 500,
+) -> list[dict[str, Any]]:
+    """
+    Полная история покупок (заказов) Posiflora постранично.
+    Каждый элемент: {id, number, amount, status, comment, created_at,
+    delivery_at, customer_id}.
+    """
+    results: list[dict[str, Any]] = []
+    for page in range(1, max_pages + 1):
+        data = await list_orders_page(
+            session, access_token, page=page, page_size=page_size
+        )
+        items = data.get("data") or []
+        if not items:
+            break
+        for item in items:
+            attrs = item.get("attributes") or {}
+            results.append(
+                {
+                    "id": str(item.get("id", "")),
+                    "number": str(
+                        attrs.get("docNumber")
+                        or attrs.get("number")
+                        or ""
+                    ).strip(),
+                    "amount": _order_amount(attrs),
+                    "status": str(
+                        attrs.get("status")
+                        or attrs.get("deliveryStatus")
+                        or ""
+                    ).strip(),
+                    "comment": str(attrs.get("comment") or "").strip(),
+                    "created_at": str(
+                        attrs.get("createdAt") or attrs.get("created") or ""
+                    ),
+                    "delivery_at": str(attrs.get("deliveryAt") or ""),
+                    "customer_id": _order_customer_ref(item),
+                }
+            )
+        meta = data.get("meta") or {}
+        page_count = meta.get("pageCount") or meta.get("page-count")
+        if page_count is not None and page >= int(page_count):
+            break
+        if len(items) < page_size:
+            break
+    return results
+
+
 async def list_customer_events_all(
     session: aiohttp.ClientSession,
     access_token: str,
@@ -1578,10 +1668,12 @@ async def list_celebration_dates_all(
 
 async def fetch_customers_and_events() -> dict[str, Any]:
     """
-    Полная выгрузка клиентов + событий/праздников для синхронизации в локальную БД.
+    Полная выгрузка клиентов + событий/праздников + истории покупок
+    для синхронизации в локальную БД.
     """
     customers = await list_all_customers()
     events: list[dict[str, Any]] = []
+    orders: list[dict[str, Any]] = []
     async with aiohttp.ClientSession() as session:
         access_token = await _get_access_token(session)
         try:
@@ -1597,5 +1689,9 @@ async def fetch_customers_and_events() -> dict[str, Any]:
                     events.append(c)
         except PosifloraAPIError as exc:
             logger.warning("Posiflora: celebration-dates недоступны: %s", exc)
+        try:
+            orders = await list_all_orders(session, access_token)
+        except PosifloraAPIError as exc:
+            logger.warning("Posiflora: история заказов недоступна: %s", exc)
 
-    return {"customers": customers, "events": events}
+    return {"customers": customers, "events": events, "orders": orders}

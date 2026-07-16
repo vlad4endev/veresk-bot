@@ -35,14 +35,13 @@ def get_api_credentials() -> tuple[int, str]:
 
 
 def _normalize_phone(phone: str) -> str:
+    """Любой формат (в т.ч. +7(999)999-99-99 из базы) → +79999999999."""
     digits = re.sub(r"\D", "", phone.strip())
     if len(digits) == 10:
         digits = "7" + digits
     if len(digits) == 11 and digits[0] == "8":
         digits = "7" + digits[1:]
-    return "+" + digits if digits and not phone.strip().startswith("+") else (
-        phone.strip() if phone.strip().startswith("+") else f"+{digits}"
-    )
+    return f"+{digits}" if digits else phone.strip()
 
 
 def sessions_path() -> Path:

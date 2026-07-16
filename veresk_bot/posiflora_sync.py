@@ -15,6 +15,8 @@ from mailing_db import (
     phone_to_tg_map,
     upsert_customer,
     upsert_customer_event,
+    upsert_customer_order,
+    update_customer_last_order,
     get_customer_by_posiflora_id,
 )
 from posiflora import PosifloraAPIError, fetch_customers_and_events
@@ -26,6 +28,7 @@ _last_sync: dict[str, Any] = {
     "at": None,
     "customers": 0,
     "events": 0,
+    "orders": 0,
     "error": None,
 }
 
@@ -118,7 +121,18 @@ async def sync_from_posiflora() -> dict[str, Any]:
         tg_map = await phone_to_tg_map()
         customers = payload.get("customers") or []
         events = payload.get("events") or []
+        orders = payload.get("orders") or []
         pf_to_local: dict[str, int] = {}
+
+        # Последняя покупка по каждому клиенту Posiflora — для сегментации
+        last_order_by_pf: dict[str, str] = {}
+        for o in orders:
+            pf_customer = o.get("customer_id")
+            ordered = str(o.get("created_at") or "")[:19]
+            if not pf_customer or not ordered:
+                continue
+            if ordered > last_order_by_pf.get(pf_customer, ""):
+                last_order_by_pf[pf_customer] = ordered
 
         for c in customers:
             phone = _normalize_phone(c.get("phone", ""), c.get("country_code"))
@@ -127,17 +141,21 @@ async def sync_from_posiflora() -> dict[str, Any]:
             created = c.get("created_at")
             if isinstance(created, str):
                 created = created[:19]
+            last_order = last_order_by_pf.get(c["id"])
             segment = _compute_segment(
                 created_at=created,
-                last_order_at=None,
+                last_order_at=last_order,
                 notes=notes,
             )
             tg_id = tg_map.get(phone)
+            # Телефон в базе рассылок всегда хранится как +7(999)999-99-99 —
+            # форматирование делает upsert_customer (normalize_phone_db).
             local_id = await upsert_customer(
                 posiflora_id=c["id"],
                 name=name,
                 phone=phone,
                 notes=notes,
+                last_order_at=last_order,
                 created_in_pf_at=created,
                 tg_user_id=tg_id,
                 segment=segment,
@@ -167,18 +185,53 @@ async def sync_from_posiflora() -> dict[str, Any]:
             )
             events_synced += 1
 
+        # История покупок (+ комментарии заказов, если есть)
+        orders_synced = 0
+        for o in orders:
+            pf_customer = o.get("customer_id")
+            order_id = o.get("id")
+            if not pf_customer or not order_id:
+                continue
+            local_id = pf_to_local.get(pf_customer)
+            if not local_id:
+                existing = await get_customer_by_posiflora_id(pf_customer)
+                if not existing:
+                    continue
+                local_id = int(existing["id"])
+            await upsert_customer_order(
+                customer_id=local_id,
+                posiflora_order_id=str(order_id),
+                number=str(o.get("number") or ""),
+                amount=float(o.get("amount") or 0),
+                status=str(o.get("status") or ""),
+                comment=str(o.get("comment") or ""),
+                ordered_at=str(o.get("created_at") or "")[:19] or None,
+                delivery_at=str(o.get("delivery_at") or "")[:19] or None,
+            )
+            orders_synced += 1
+
+        # Обновляем last_order_at у клиентов, которые не пришли в этой выгрузке
+        for pf_id, last_order in last_order_by_pf.items():
+            if pf_id in pf_to_local:
+                continue
+            existing = await get_customer_by_posiflora_id(pf_id)
+            if existing:
+                await update_customer_last_order(int(existing["id"]), last_order)
+
         _last_sync.update(
             {
                 "at": datetime.now().isoformat(timespec="seconds"),
                 "customers": len(customers),
                 "events": events_synced,
+                "orders": orders_synced,
                 "error": None,
             }
         )
         logger.info(
-            "Posiflora sync: %s клиентов, %s событий",
+            "Posiflora sync: %s клиентов, %s событий, %s заказов",
             len(customers),
             events_synced,
+            orders_synced,
         )
         return {"ok": True, **last_sync_info()}
 

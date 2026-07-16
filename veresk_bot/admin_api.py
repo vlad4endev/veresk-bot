@@ -28,8 +28,10 @@ from mailing_db import (
     list_campaign_recipients,
     list_campaigns,
     list_customers,
+    get_order_stats_for_customer,
     list_events_for_customer,
     list_messages_for_customer,
+    list_orders_for_customer,
     list_send_accounts,
     list_upcoming_events,
     set_event_auto_send,
@@ -257,6 +259,8 @@ async def handle_client_detail(request: web.Request) -> web.Response:
         return _json({"error": "not_found"}, status=404)
     events = await list_events_for_customer(customer_id)
     messages = await list_messages_for_customer(customer_id)
+    orders = await list_orders_for_customer(customer_id)
+    order_stats = await get_order_stats_for_customer(customer_id)
     return _json(
         {
             "id": c["id"],
@@ -284,6 +288,20 @@ async def handle_client_detail(request: web.Request) -> web.Response:
                 for e in events
             ],
             "messages": messages,
+            "orders": [
+                {
+                    "id": o["id"],
+                    "number": o.get("number") or "",
+                    "amount": o.get("amount") or 0,
+                    "status": o.get("status") or "",
+                    "comment": o.get("comment") or "",
+                    "ordered_at": o.get("ordered_at"),
+                    "ordered_label": _format_relative(o.get("ordered_at")),
+                    "delivery_at": o.get("delivery_at"),
+                }
+                for o in orders
+            ],
+            "order_stats": order_stats,
         }
     )
 

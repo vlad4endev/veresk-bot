@@ -510,7 +510,7 @@
       const res = await AdminAPI.sync();
       alert(
         res.ok
-          ? `Готово: ${res.customers} клиентов, ${res.events} событий`
+          ? `Готово: ${res.customers} клиентов, ${res.events} событий, ${res.orders || 0} заказов`
           : "Ошибка: " + (res.error || "unknown")
       );
       await loadClients();
@@ -561,6 +561,27 @@
       $("#clEvents").querySelectorAll("[data-kind]").forEach((btn) => {
         btn.addEventListener("click", () => congratsCurrent(btn.dataset.kind));
       });
+      const stats = c.order_stats || {};
+      const statsEl = $("#clOrderStats");
+      if (statsEl) {
+        statsEl.textContent = stats.orders_count
+          ? `${stats.orders_count} шт · ${Math.round(stats.total_spent).toLocaleString("ru-RU")} ₽ · средний чек ${Number(stats.avg_order).toLocaleString("ru-RU")} ₽`
+          : "";
+      }
+      const ordersBody = $("#clOrdersBody");
+      if (ordersBody) {
+        ordersBody.innerHTML = (c.orders || [])
+          .map(
+            (o) => `<tr>
+            <td>${esc((o.ordered_at || "").slice(0, 10) || "—")}</td>
+            <td class="who"><div class="nm">${esc(o.number ? "№" + o.number : "Заказ")}</div></td>
+            <td>${Number(o.amount || 0).toLocaleString("ru-RU")} ₽</td>
+            <td class="hide-mob">${esc(o.comment || "—")}</td>
+            <td><span class="status done">${esc(o.status || "—")}</span></td>
+          </tr>`
+          )
+          .join("") || '<tr><td colspan="5" class="empty-state">Покупок пока нет</td></tr>';
+      }
       const msgBody = $("#clMsgBody");
       msgBody.innerHTML = (c.messages || [])
         .map(
