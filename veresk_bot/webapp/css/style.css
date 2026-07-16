@@ -11,6 +11,13 @@
   --danger: #b85c5c;
   --radius: 20px;
   --shadow: 0 12px 40px rgba(42, 31, 61, 0.12);
+
+  /* Design tokens */
+  --shadow-soft: 0 1px 2px rgba(42, 31, 61, 0.04), 0 6px 24px rgba(42, 31, 61, 0.07);
+  --ease: cubic-bezier(0.4, 0, 0.2, 1);
+  --gutter: clamp(16px, 4.5vw, 26px);
+  --safe-bottom: env(safe-area-inset-bottom, 0px);
+  --safe-top: env(safe-area-inset-top, 0px);
 }
 
 * {
@@ -26,10 +33,22 @@ body {
   background: var(--cream);
   color: var(--text);
   -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
 }
 
 body {
   overflow-x: hidden;
+}
+
+:focus-visible {
+  outline: 2px solid var(--purple-light);
+  outline-offset: 2px;
+  border-radius: 4px;
+}
+
+::selection {
+  background: var(--purple-light);
+  color: #fff;
 }
 
 .bg-glow {
@@ -48,38 +67,47 @@ body {
 .app {
   position: relative;
   z-index: 1;
-  max-width: 440px;
+  width: 100%;
+  max-width: 480px;
   margin: 0 auto;
-  padding: 20px 18px 28px;
+  padding: calc(20px + var(--safe-top)) var(--gutter) calc(28px + var(--safe-bottom));
   min-height: 100vh;
+  min-height: 100dvh;
   display: flex;
   flex-direction: column;
+}
+
+@media (min-width: 768px) {
+  .app {
+    max-width: 540px;
+  }
 }
 
 .brand {
   display: flex;
   align-items: center;
   gap: 14px;
-  margin-bottom: 24px;
+  margin-bottom: clamp(20px, 5vw, 28px);
 }
 
 .brand-mark {
-  width: 48px;
-  height: 48px;
+  width: clamp(44px, 12vw, 52px);
+  height: clamp(44px, 12vw, 52px);
   border-radius: 14px;
   background: linear-gradient(145deg, var(--purple), var(--purple-deep));
   color: var(--gold);
   font-family: "Cormorant Garamond", serif;
-  font-size: 1.75rem;
+  font-size: clamp(1.6rem, 4.5vw, 1.9rem);
   font-weight: 600;
   display: grid;
   place-items: center;
   box-shadow: var(--shadow);
+  flex-shrink: 0;
 }
 
 .brand-text h1 {
   font-family: "Cormorant Garamond", serif;
-  font-size: 1.85rem;
+  font-size: clamp(1.65rem, 5vw, 2rem);
   font-weight: 600;
   letter-spacing: 0.02em;
   line-height: 1.1;
@@ -127,6 +155,10 @@ body {
   text-align: center;
   padding: 40px 12px;
   flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
 }
 
 .error-icon {
@@ -136,20 +168,39 @@ body {
 
 .error h2 {
   font-family: "Cormorant Garamond", serif;
-  font-size: 1.5rem;
+  font-size: clamp(1.4rem, 5vw, 1.7rem);
   margin-bottom: 8px;
+  text-wrap: balance;
 }
 
 .error-text {
   color: var(--text-muted);
   font-size: 0.95rem;
-  line-height: 1.5;
+  line-height: 1.55;
+  max-width: 34ch;
+  text-wrap: pretty;
+}
+
+.content {
+  animation: content-in 0.45s var(--ease) both;
+}
+
+@keyframes content-in {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
 }
 
 .order-badge {
   display: inline-flex;
   align-items: center;
   gap: 8px;
+  align-self: flex-start;
   background: var(--cream-dark);
   border-radius: 999px;
   padding: 8px 16px;
@@ -161,18 +212,20 @@ body {
 .order-badge strong {
   color: var(--purple);
   font-weight: 700;
+  font-variant-numeric: tabular-nums;
 }
 
 .status-hero {
   background: linear-gradient(160deg, var(--purple-deep) 0%, #3d2d56 55%, var(--purple) 100%);
   color: #fff;
   border-radius: var(--radius);
-  padding: 28px 22px 24px;
+  padding: clamp(24px, 6.5vw, 32px) clamp(20px, 5.5vw, 26px) clamp(20px, 5.5vw, 26px);
   box-shadow: var(--shadow);
   margin-bottom: 20px;
   text-align: center;
   position: relative;
   overflow: hidden;
+  transition: background 0.6s var(--ease);
 }
 
 .status-hero::before {
@@ -195,7 +248,7 @@ body {
 }
 
 .status-icon {
-  font-size: 2.4rem;
+  font-size: clamp(2.2rem, 7vw, 2.7rem);
   margin-bottom: 10px;
   animation: float 3s ease-in-out infinite;
 }
@@ -212,15 +265,19 @@ body {
 
 .status-hero h2 {
   font-family: "Cormorant Garamond", serif;
-  font-size: 1.65rem;
+  font-size: clamp(1.5rem, 5.5vw, 1.85rem);
   font-weight: 600;
   margin-bottom: 6px;
+  text-wrap: balance;
 }
 
 .status-hero > p {
   font-size: 0.9rem;
   opacity: 0.88;
-  line-height: 1.4;
+  line-height: 1.45;
+  max-width: 32ch;
+  margin: 0 auto;
+  text-wrap: pretty;
 }
 
 .progress-track {
@@ -236,13 +293,14 @@ body {
   width: 0%;
   background: linear-gradient(90deg, var(--gold), #e8d4b0);
   border-radius: 999px;
-  transition: width 0.8s cubic-bezier(0.4, 0, 0.2, 1);
+  transition: width 0.8s var(--ease);
 }
 
 .progress-pct {
   font-size: 0.75rem;
   opacity: 0.75;
   letter-spacing: 0.06em;
+  font-variant-numeric: tabular-nums;
 }
 
 .timeline {
@@ -250,6 +308,7 @@ body {
   flex-direction: column;
   gap: 0;
   margin-bottom: 20px;
+  padding: 4px 2px;
 }
 
 .timeline-step {
@@ -268,9 +327,10 @@ body {
   content: "";
   position: absolute;
   left: 19px;
-  top: 36px;
-  bottom: 0;
+  top: 42px;
+  bottom: 2px;
   width: 2px;
+  border-radius: 2px;
   background: var(--cream-dark);
 }
 
@@ -292,7 +352,7 @@ body {
   background: var(--cream-dark);
   border: 2px solid transparent;
   z-index: 1;
-  transition: all 0.4s ease;
+  transition: all 0.4s var(--ease);
 }
 
 .timeline-step.done .step-marker {
@@ -319,11 +379,17 @@ body {
   }
 }
 
+.step-body {
+  padding-top: 4px;
+  min-width: 0;
+}
+
 .step-body h4 {
   font-size: 0.95rem;
   font-weight: 600;
   margin-bottom: 2px;
   color: var(--text-muted);
+  transition: color 0.3s var(--ease);
 }
 
 .timeline-step.done .step-body h4,
@@ -338,21 +404,21 @@ body {
 .step-body p {
   font-size: 0.8rem;
   color: var(--text-muted);
-  line-height: 1.35;
+  line-height: 1.4;
 }
 
 .details-card {
   background: #fff;
   border-radius: var(--radius);
-  padding: 20px 18px;
-  box-shadow: 0 4px 24px rgba(42, 31, 61, 0.06);
+  padding: clamp(18px, 5vw, 24px) clamp(16px, 4.5vw, 22px);
+  box-shadow: var(--shadow-soft);
   border: 1px solid var(--cream-dark);
   margin-bottom: 16px;
 }
 
 .details-card h3 {
   font-family: "Cormorant Garamond", serif;
-  font-size: 1.25rem;
+  font-size: clamp(1.2rem, 4vw, 1.35rem);
   margin-bottom: 14px;
   color: var(--purple-deep);
 }
@@ -379,12 +445,14 @@ body {
 .details-list dt {
   font-size: 0.8rem;
   color: var(--text-muted);
+  flex-shrink: 0;
 }
 
 .details-list dd {
   font-size: 0.9rem;
   font-weight: 600;
   text-align: right;
+  overflow-wrap: anywhere;
 }
 
 .live-hint {
@@ -417,18 +485,26 @@ body {
 
 .footer {
   margin-top: auto;
-  padding-top: 20px;
+  padding-top: 24px;
   text-align: center;
   font-size: 0.72rem;
   color: var(--text-muted);
 }
 
 .footer a {
-  display: block;
-  margin-top: 4px;
+  display: inline-block;
+  margin-top: 6px;
+  padding: 6px 10px;
   color: var(--purple);
   text-decoration: none;
   font-weight: 600;
+  font-size: 0.85rem;
+  border-radius: 8px;
+  transition: background 0.18s var(--ease);
+}
+
+.footer a:hover {
+  background: var(--cream-dark);
 }
 
 .confetti {
@@ -450,5 +526,15 @@ body {
   to {
     transform: translateY(100vh) rotate(720deg);
     opacity: 0;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
   }
 }

@@ -2,9 +2,10 @@
 <html lang="ru">
 <head>
   <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, viewport-fit=cover">
+  <meta name="theme-color" content="#402C60">
   <title>Veresk</title>
-  <link rel="stylesheet" href="css/style.css?v=7">
+  <link rel="stylesheet" href="css/style.css?v=9">
   <link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,500;0,600;1,400;1,500;1,600&family=DM+Sans:wght@300;400;500&display=swap" rel="stylesheet">
   <script src="https://telegram.org/js/telegram-web-app.js"></script>
 </head>
@@ -126,13 +127,13 @@
         <div class="order-step" data-step="3">
           <div class="field-group">
             <label class="field-label">Когда нужен букет?</label>
-            <div class="chips-wrap" data-field="date">
-              <div class="chip" data-value="Сегодня">Сегодня</div>
-              <div class="chip" data-value="Завтра">Завтра</div>
-              <div class="chip" data-value="Через 2–3 дня">Через 2–3 дня</div>
-              <div class="chip" data-value="Через неделю">Через неделю</div>
-              <div class="chip" data-value="Через 2 недели">Через 2 недели</div>
-              <div class="chip" data-value="Другая дата">Другая дата</div>
+            <div class="chips-wrap" data-field="date" role="radiogroup" aria-label="Когда нужен букет">
+              <button type="button" class="chip" data-value="Сегодня">Сегодня</button>
+              <button type="button" class="chip" data-value="Завтра">Завтра</button>
+              <button type="button" class="chip" data-value="Через 2–3 дня">Через 2–3 дня</button>
+              <button type="button" class="chip" data-value="Через неделю">Через неделю</button>
+              <button type="button" class="chip" data-value="Через 2 недели">Через 2 недели</button>
+              <button type="button" class="chip" data-value="Другая дата">Другая дата</button>
             </div>
             <input type="text" class="field-input hidden" id="field-custom-date" placeholder="ДД.ММ.ГГГГ">
           </div>
@@ -148,13 +149,13 @@
         <div class="order-step" data-step="5">
           <div class="field-group">
             <label class="field-label">Повод</label>
-            <div class="chips-wrap" data-field="occasion">
-              <div class="chip" data-value="День рождения 🎂">День рождения 🎂</div>
-              <div class="chip" data-value="Годовщина 💍">Годовщина 💍</div>
-              <div class="chip" data-value="Свидание 💋">Свидание 💋</div>
-              <div class="chip" data-value="Просто так 🌷">Просто так 🌷</div>
-              <div class="chip" data-value="Выздоровление 🤍">Выздоровление 🤍</div>
-              <div class="chip" data-value="Другое">Другое</div>
+            <div class="chips-wrap" data-field="occasion" role="radiogroup" aria-label="Повод">
+              <button type="button" class="chip" data-value="День рождения 🎂">День рождения 🎂</button>
+              <button type="button" class="chip" data-value="Годовщина 💍">Годовщина 💍</button>
+              <button type="button" class="chip" data-value="Свидание 💋">Свидание 💋</button>
+              <button type="button" class="chip" data-value="Просто так 🌷">Просто так 🌷</button>
+              <button type="button" class="chip" data-value="Выздоровление 🤍">Выздоровление 🤍</button>
+              <button type="button" class="chip" data-value="Другое">Другое</button>
             </div>
             <input type="text" class="field-input hidden" id="field-custom-occasion" placeholder="Опишите своими словами">
           </div>
@@ -163,23 +164,23 @@
         <div class="order-step" data-step="6">
           <div class="field-group">
             <label class="field-label">Кем приходится получатель?</label>
-            <div class="chips-wrap" data-field="relation">
-              <div class="chip" data-value="Девушка / Жена">Девушка / Жена</div>
-              <div class="chip" data-value="Мама">Мама</div>
-              <div class="chip" data-value="Дочь">Дочь</div>
-              <div class="chip" data-value="Подруга">Подруга</div>
-              <div class="chip" data-value="Коллега">Коллега</div>
-              <div class="chip" data-value="Другое">Другое</div>
+            <div class="chips-wrap" data-field="relation" role="radiogroup" aria-label="Кем приходится получатель">
+              <button type="button" class="chip" data-value="Девушка / Жена">Девушка / Жена</button>
+              <button type="button" class="chip" data-value="Мама">Мама</button>
+              <button type="button" class="chip" data-value="Дочь">Дочь</button>
+              <button type="button" class="chip" data-value="Подруга">Подруга</button>
+              <button type="button" class="chip" data-value="Коллега">Коллега</button>
+              <button type="button" class="chip" data-value="Другое">Другое</button>
             </div>
             <input type="text" class="field-input hidden" id="field-custom-relation" placeholder="Опишите своими словами">
           </div>
           <div class="field-group">
             <label class="field-label">Бюджет</label>
-            <div class="budget-grid" data-field="budget">
-              <div class="budget-chip" data-value="до 5 000 ₽">до 5 000 ₽</div>
-              <div class="budget-chip" data-value="до 10 000 ₽">до 10 000 ₽</div>
-              <div class="budget-chip" data-value="до 15 000 ₽">до 15 000 ₽</div>
-              <div class="budget-chip" data-value="от 15 000 ₽">от 15 000 ₽</div>
+            <div class="budget-grid" data-field="budget" role="radiogroup" aria-label="Бюджет">
+              <button type="button" class="budget-chip" data-value="до 5 000 ₽">до 5 000 ₽</button>
+              <button type="button" class="budget-chip" data-value="до 10 000 ₽">до 10 000 ₽</button>
+              <button type="button" class="budget-chip" data-value="до 15 000 ₽">до 15 000 ₽</button>
+              <button type="button" class="budget-chip" data-value="от 15 000 ₽">от 15 000 ₽</button>
             </div>
           </div>
         </div>
