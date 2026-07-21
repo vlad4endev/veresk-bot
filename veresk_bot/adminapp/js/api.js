@@ -116,5 +116,16 @@ const AdminAPI = (() => {
         body: JSON.stringify({ phone, code, password }),
       }),
     segments: () => request("/api/admin/segments"),
+    aiCompose: (body) =>
+      request("/api/admin/ai/compose", {
+        method: "POST",
+        body: JSON.stringify(body),
+      }),
+    aiSettings: () => request("/api/admin/ai/settings"),
+    aiSaveSettings: (body) =>
+      request("/api/admin/ai/settings", {
+        method: "POST",
+        body: JSON.stringify(body),
+      }),
   };
 })();

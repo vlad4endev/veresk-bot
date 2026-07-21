@@ -12,6 +12,40 @@
       .replace(/"/g, "&quot;");
   }
 
+  /** Российский номер → 10 национальных цифр, иначе "". */
+  function phoneNationalDigits(phone) {
+    let digits = String(phone || "").replace(/\D/g, "");
+    if (digits.length === 11 && (digits[0] === "7" || digits[0] === "8")) {
+      digits = digits.slice(1);
+    }
+    return digits.length === 10 ? digits : "";
+  }
+
+  /** Видимый формат: +7(999)999-99-99. Пустая строка, если номер невалиден. */
+  function formatPhoneDisplay(phone) {
+    const d = phoneNationalDigits(phone);
+    if (!d) return "";
+    return `+7(${d.slice(0, 3)})${d.slice(3, 6)}-${d.slice(6, 8)}-${d.slice(8, 10)}`;
+  }
+
+  /** tel: href в виде +79999999999. Пустая строка, если номер невалиден. */
+  function phoneTelHref(phone) {
+    const d = phoneNationalDigits(phone);
+    return d ? `+7${d}` : "";
+  }
+
+  /** Чип телефона: кликабельный tel: при валидном номере, иначе экранированный текст. */
+  function phoneContactChipHtml(phone) {
+    const raw = String(phone || "").trim();
+    if (!raw) return "";
+    const display = formatPhoneDisplay(raw);
+    const tel = phoneTelHref(raw);
+    if (display && tel) {
+      return `<span class="contact-chip"><span class="ci2 ph">☎</span><a class="phone-link" href="tel:${esc(tel)}">${esc(display)}</a></span>`;
+    }
+    return `<span class="contact-chip"><span class="ci2 ph">☎</span>${esc(raw)}</span>`;
+  }
+
   function initials(n) {
     const p = String(n || "").trim().split(/\s+/);
     return ((p[0]?.[0] || "") + (p[1]?.[0] || "")).toUpperCase() || "?";
@@ -31,19 +65,22 @@
   };
 
   const panels = $$(".panel");
-  const navItems = $$(".nav-item");
+  const navItems = $$(".nav-item, .bnav-item[data-nav]");
 
   function go(tab) {
+    if (tab === "accounts") tab = "settings";
     panels.forEach((p) => p.classList.toggle("active", p.id === tab));
     const navKey =
       ({ compose: "home", detail: "home", personal: "home", client: "clients" })[tab] ||
       tab;
     navItems.forEach((n) => n.classList.toggle("active", n.dataset.nav === navKey));
+    document.body.classList.toggle("hide-bnav", tab === "compose");
     window.scrollTo({ top: 0, behavior: "smooth" });
     if (tab === "compose") setStep(0);
     if (tab === "home") loadHome();
     if (tab === "clients") loadClients();
-    if (tab === "accounts") loadAccounts();
+    if (tab === "settings") loadSettings();
+    if (tab === "aichat") initAiChat();
   }
   window.go = go;
 
@@ -191,6 +228,9 @@
       if (err.status === 401) return showLogin();
       eventsBox.innerHTML = '<div class="empty-state">Не удалось загрузить</div>';
       listBox.innerHTML = '<div class="empty-state">Не удалось загрузить</div>';
+      $("#campaignsHead")?.classList.add("is-empty");
+      const countEl = $("#campaignsCount");
+      if (countEl) countEl.textContent = "";
     }
   }
 
@@ -269,9 +309,31 @@
 
   function renderCampaigns(items) {
     const box = $("#campaignsList");
-    if (!items.length) {
-      box.innerHTML =
-        '<div class="empty-state"><div class="t">Пока нет рассылок</div>Создайте первую</div>';
+    const head = $("#campaignsHead");
+    const countEl = $("#campaignsCount");
+    const n = items.length;
+    if (countEl) {
+      countEl.textContent = n
+        ? n === 1
+          ? "1 рассылка"
+          : `${fmtNum(n)} рассылок`
+        : "Пока пусто";
+    }
+    if (head) head.classList.toggle("is-empty", !n);
+    if (!n) {
+      box.innerHTML = `<div class="empty-rich">
+        <div class="er-ic" aria-hidden="true">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6">
+            <path d="M4 6h16v12H4z"/><path d="m4 7 8 6 8-6"/>
+          </svg>
+        </div>
+        <div class="t">Пока нет рассылок</div>
+        <p class="d">Создайте первую — напишите постоянным клиентам или всем из базы за три шага.</p>
+        <button class="btn primary" type="button" onclick="go('compose')">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M12 5v14M5 12h14"/></svg>
+          Создать рассылку
+        </button>
+      </div>`;
       return;
     }
     const dot = {
@@ -371,6 +433,44 @@
       </tr>`;
     });
 
+    const leftActions = sent
+      ? `<div class="det-actions">
+          <button class="btn primary" id="btnRepeat">Повторить рассылку</button>
+        </div>`
+      : `<div class="notsent">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><path d="M12 7v6M12 16h.01"/></svg>
+          <div>${c.status === "scheduled" ? "Рассылка запланирована. " : "Рассылка ещё не отправлена. "}Получатели и статистика появятся после отправки.</div>
+        </div>
+        <div class="det-actions">
+          <button class="btn primary big" id="btnSendNow">Отправить сейчас</button>
+          <button class="btn big" onclick="go('compose')">Редактировать</button>
+        </div>`;
+
+    const rightBody = sent
+      ? `<div class="subh">Как дошло</div>
+        <div class="dstrip">
+          <div class="stat"><div class="n">${fmtNum(c.sent_count)}</div><div class="l">отправлено</div></div>
+          <div class="stat"><div class="n">${fmtNum(c.delivered_count || "—")}</div><div class="l">доставлено</div></div>
+          <div class="stat"><div class="n">${fmtNum(c.failed_count)}</div><div class="l">ошибок</div></div>
+          <div class="stat"><div class="n">${fmtNum(c.total_count)}</div><div class="l">всего</div></div>
+        </div>
+        <div class="subh">Получатели <span class="rcount">· ${fmtNum(recipients.total)} человек</span></div>
+        <div class="searchbox">
+          <svg class="si" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="m21 21-4.3-4.3"/></svg>
+          <input type="text" id="rSearch" placeholder="Поиск по имени или телефону">
+        </div>
+        <div class="tbl-wrap" style="margin-top:12px">
+          <table><thead><tr><th>Клиент</th><th class="hide-mob">Где</th><th>Когда</th><th>Статус</th></tr></thead>
+          <tbody id="rBody">${recipientsHtml || '<tr><td colspan="4" class="empty-state">Нет получателей</td></tr>'}</tbody></table>
+        </div>`
+      : `<div class="empty-rich" style="padding:28px 16px">
+          <div class="er-ic" aria-hidden="true">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M12 3v4M8 7h8"/><circle cx="12" cy="14" r="6"/><path d="M12 12v3"/></svg>
+          </div>
+          <div class="t">Ждём отправки</div>
+          <p class="d">После запуска здесь появятся статистика и список получателей.</p>
+        </div>`;
+
     $("#detailBody").innerHTML = `
       <div class="dhead">
         <span class="em">${esc(c.emoji)}</span>
@@ -378,47 +478,24 @@
         <div class="spacer"></div>
         <span class="status ${esc(c.status_class)}">${esc(c.status_label)}</span>
       </div>
-      <div class="dmeta">
-        <div class="mi"><div class="k">Когда</div><div class="v">${esc(c.when)}</div></div>
-        <div class="mi"><div class="k">Кому</div><div class="v">${esc(c.segment_label)} · ${fmtNum(c.total_count)} чел.</div></div>
-        <div class="mi"><div class="k">Где</div><div class="v">${chans}</div></div>
-      </div>
-      <div class="subh" style="margin-bottom:10px">Текст сообщения</div>
-      <div class="phone msgcard">
-        <div class="ptop"><div class="dot">V</div>Veresk</div>
-        <div class="bubble">${msgHtml}<div class="tm">${sent ? "✓✓" : ""}</div></div>
-      </div>
-      ${
-        sent
-          ? `<div class="det-actions">
-              <button class="btn primary" id="btnRepeat">Повторить рассылку</button>
-              ${c.status === "sending" ? "" : ""}
-            </div>
-            <div class="subh">Как дошло</div>
-            <div class="dstrip">
-              <div class="stat"><div class="n">${fmtNum(c.sent_count)}</div><div class="l">отправлено</div></div>
-              <div class="stat"><div class="n">${fmtNum(c.delivered_count || "—")}</div><div class="l">доставлено</div></div>
-              <div class="stat"><div class="n">${fmtNum(c.failed_count)}</div><div class="l">ошибок</div></div>
-              <div class="stat"><div class="n">${fmtNum(c.total_count)}</div><div class="l">всего</div></div>
-            </div>
-            <div class="subh">Получатели <span class="rcount">· ${fmtNum(recipients.total)} человек</span></div>
-            <div class="searchbox">
-              <svg class="si" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="m21 21-4.3-4.3"/></svg>
-              <input type="text" id="rSearch" placeholder="Поиск по имени или телефону">
-            </div>
-            <div class="tbl-wrap" style="margin-top:12px">
-              <table><thead><tr><th>Клиент</th><th class="hide-mob">Где</th><th>Когда</th><th>Статус</th></tr></thead>
-              <tbody id="rBody">${recipientsHtml || '<tr><td colspan="4" class="empty-state">Нет получателей</td></tr>'}</tbody></table>
-            </div>`
-          : `<div class="notsent">
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><path d="M12 7v6M12 16h.01"/></svg>
-              <div>${c.status === "scheduled" ? "Рассылка запланирована. " : "Рассылка ещё не отправлена. "}Получатели и статистика появятся после отправки.</div>
-            </div>
-            <div style="display:flex;gap:12px;flex-wrap:wrap;margin-top:16px">
-              <button class="btn primary big" id="btnSendNow">Отправить сейчас</button>
-              <button class="btn big" onclick="go('compose')">Редактировать</button>
-            </div>`
-      }`;
+      <div class="detail-grid">
+        <div class="detail-left">
+          <div class="subh" style="margin-bottom:10px">Текст сообщения</div>
+          <div class="phone msgcard phone-sticky">
+            <div class="ptop"><div class="dot">V</div>Veresk</div>
+            <div class="bubble">${msgHtml}<div class="tm">${sent ? "✓✓" : ""}</div></div>
+          </div>
+          ${leftActions}
+        </div>
+        <div class="detail-right">
+          <div class="dmeta">
+            <div class="mi"><div class="k">Когда</div><div class="v">${esc(c.when)}</div></div>
+            <div class="mi"><div class="k">Кому</div><div class="v">${esc(c.segment_label)} · ${fmtNum(c.total_count)} чел.</div></div>
+            <div class="mi"><div class="k">Где</div><div class="v">${chans}</div></div>
+          </div>
+          ${rightBody}
+        </div>
+      </div>`;
 
     $("#btnSendNow")?.addEventListener("click", async () => {
       await AdminAPI.patchCampaign(c.id, { send_now: true });
@@ -450,46 +527,120 @@
   // ── clients ─────────────────────────────────────────────────────────────
 
   let clientSegment = "all";
+  let clientSearch = "";
+  let clientsSearchTimer = null;
+
+  function clientPhoneUnderNameHtml(phone) {
+    const raw = String(phone || "").trim();
+    if (!raw) return `<span class="ph">нет телефона</span>`;
+    const display = formatPhoneDisplay(raw) || raw;
+    const tel = phoneTelHref(raw);
+    if (tel) {
+      return `<span class="ph"><a href="tel:${esc(tel)}" data-stop>${esc(display)}</a></span>`;
+    }
+    return `<span class="ph">${esc(display)}</span>`;
+  }
+
+  function clientSegmentPillHtml(c) {
+    const seg = String(c.segment || "all");
+    const cls = ["regular", "new", "inactive"].includes(seg) ? seg : "other";
+    const label = c.segment_label || seg;
+    return `<span class="seg-pill ${esc(cls)}"><span class="d"></span>${esc(label)}</span>`;
+  }
+
+  function clientChannelsHtml(channels) {
+    const parts = String(channels || "")
+      .split(",")
+      .map((ch) => ch.trim())
+      .filter(Boolean);
+    if (!parts.length) {
+      return `<span class="ch-none">нет канала</span>`;
+    }
+    return parts
+      .map((t) => {
+        const cls = t === "MAX" ? "max" : "tg";
+        return `<span class="chan ${cls}">${esc(t)}</span>`;
+      })
+      .join("");
+  }
+
+  function clientLastOrderHtml(c) {
+    const label = c.last_order_label;
+    if (!label) {
+      return `<div class="last-order muted"><span class="lo">Нет заказов</span></div>`;
+    }
+    return `<div class="last-order"><span class="lo">${esc(label)}</span></div>`;
+  }
+
+  function clientNextEventHtml(ev) {
+    if (!ev) return '<span class="nev-none">—</span>';
+    let when = ev.when_label;
+    if (ev.days_until > 30 && ev.next_date) {
+      const [y, m, d] = ev.next_date.split("-");
+      const months = ["янв", "фев", "мар", "апр", "мая", "июн", "июл", "авг", "сен", "окт", "ноя", "дек"];
+      when = `${+d} ${months[+m - 1] || m}`;
+    }
+    const soonCls =
+      ev.days_until === 0 ? " today" : ev.days_until <= 7 ? " soon" : "";
+    return `<span class="nev${soonCls}">
+      <span class="nev-ic">${eventIcon(ev.kind)}</span>
+      <span class="nev-b"><span class="nev-t">${esc(ev.title)}</span><span class="nev-d">${esc(when)}</span></span>
+    </span>`;
+  }
 
   async function loadClients() {
     const box = $("#clientsBody");
-    box.innerHTML = '<tr><td colspan="5" class="loading">Загрузка…</td></tr>';
+    box.innerHTML = '<tr><td colspan="6" class="loading">Загрузка…</td></tr>';
     try {
-      const data = await AdminAPI.clients({
+      const params = {
         segment: clientSegment,
         page_size: 100,
-      });
+      };
+      if (clientSearch) params.search = clientSearch;
+      const data = await AdminAPI.clients(params);
       if (!data.items.length) {
-        box.innerHTML =
-          '<tr><td colspan="5"><div class="empty-state">Клиентов пока нет — нажмите «Синхронизировать»</div></td></tr>';
-        $("#clientsHint").textContent = "0 клиентов";
+        const emptyMsg = clientSearch
+          ? "Никого не нашли по запросу"
+          : "Клиентов пока нет — нажмите «Синхронизировать»";
+        box.innerHTML = `<tr><td colspan="6"><div class="empty-state"><div class="t">${emptyMsg}</div></div></td></tr>`;
+        $("#clientsHint").textContent = clientSearch ? "0 по запросу" : "0 клиентов";
         return;
       }
       box.innerHTML = data.items
         .map(
           (c) => `<tr data-id="${c.id}">
-          <td class="who"><div class="nm">${esc(c.name)}</div></td>
-          <td class="hide-mob">${esc(c.phone_masked)}</td>
-          <td>${String(c.channels)
-            .split(",")
-            .map((ch) => {
-              const t = ch.trim();
-              if (!t) return "";
-              return `<span class="chan ${t === "MAX" ? "max" : "tg"}">${esc(t)}</span>`;
-            })
-            .join(" ")}</td>
-          <td>${esc(c.last_order_label)}</td>
-          <td class="hide-mob">${esc(c.segment_label)}</td>
+          <td>
+            <div class="cl-who">
+              <span class="cl-who-av">${esc(initials(c.name))}</span>
+              <div class="cl-who-b">
+                <div class="nm">${esc(c.name)}</div>
+                ${clientPhoneUnderNameHtml(c.phone)}
+              </div>
+            </div>
+          </td>
+          <td>${clientSegmentPillHtml(c)}</td>
+          <td><div class="ch-cell-inner">${clientChannelsHtml(c.channels)}</div></td>
+          <td class="hide-mob">${clientLastOrderHtml(c)}</td>
+          <td>${clientNextEventHtml(c.next_event)}</td>
+          <td class="cl-chev"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 6l6 6-6 6"/></svg></td>
         </tr>`
         )
         .join("");
       box.querySelectorAll("tr[data-id]").forEach((tr) => {
-        tr.addEventListener("click", () => openClientById(+tr.dataset.id));
+        tr.addEventListener("click", (e) => {
+          if (e.target.closest("[data-stop]")) return;
+          openClientById(+tr.dataset.id);
+        });
       });
-      $("#clientsHint").textContent = `Показано ${data.items.length} из ${fmtNum(data.total)}`;
+      const shown = data.items.length;
+      const total = data.total;
+      $("#clientsHint").textContent =
+        shown === total
+          ? `${fmtNum(total)} клиент${total === 1 ? "" : total > 1 && total < 5 ? "а" : "ов"}`
+          : `Показано ${fmtNum(shown)} из ${fmtNum(total)}`;
     } catch (err) {
       if (err.status === 401) return showLogin();
-      box.innerHTML = '<tr><td colspan="5">Ошибка загрузки</td></tr>';
+      box.innerHTML = '<tr><td colspan="6" class="empty-state">Ошибка загрузки</td></tr>';
     }
   }
 
@@ -500,6 +651,14 @@
       clientSegment = btn.dataset.seg || "all";
       loadClients();
     });
+  });
+
+  $("#clientsSearch")?.addEventListener("input", () => {
+    clearTimeout(clientsSearchTimer);
+    clientsSearchTimer = setTimeout(() => {
+      clientSearch = ($("#clientsSearch").value || "").trim();
+      loadClients();
+    }, 280);
   });
 
   $("#btnSync")?.addEventListener("click", async () => {
@@ -519,7 +678,7 @@
     }
     btn.disabled = false;
     btn.innerHTML =
-      '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M12 3v12M8 11l4 4 4-4"/><path d="M4 17v2a2 2 0 002 2h12a2 2 0 002-2v-2"/></svg> Синхронизировать из Posiflora';
+      '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M12 3v12M8 11l4 4 4-4"/><path d="M4 17v2a2 2 0 002 2h12a2 2 0 002-2v-2"/></svg> Синхронизировать';
   });
 
   async function openClientById(id) {
@@ -531,8 +690,7 @@
       $("#clName").textContent = c.name;
       $("#clSeg").textContent = c.segment_label;
       let chips = "";
-      if (c.phone)
-        chips += `<span class="contact-chip"><span class="ci2 ph">☎</span>${esc(c.phone)}</span>`;
+      chips += phoneContactChipHtml(c.phone);
       String(c.channels || "")
         .split(",")
         .forEach((x) => {
@@ -546,7 +704,7 @@
       const anniv = (c.events || []).find((e) => e.kind === "anniv");
       $("#clBday").textContent = bday ? bday.date_from : "—";
       $("#clAnniv").textContent = anniv ? anniv.date_from : "—";
-      $("#clAnnivBtn").style.display = anniv ? "inline-block" : "none";
+      $("#clAnnivBtn")?.classList.toggle("hidden", !anniv);
       $("#clSince").textContent = c.since_label || "—";
       $("#clLast").textContent = c.last_order_label || "—";
       $("#clEvents").innerHTML = (c.events || [])
@@ -636,8 +794,8 @@
     $("#pmsg").value = tpl[d.type] || tpl.plain;
     updatePPreview();
     $("#pSendLabel").textContent = "Отправить " + fn;
-    $("#personalForm").style.display = "block";
-    $("#personalDone").style.display = "none";
+    $("#personalForm")?.classList.remove("hidden");
+    $("#personalDone")?.classList.add("hidden");
     state.curPerson = { ...d, fn, chan: d.chan };
     go("personal");
   }
@@ -659,66 +817,522 @@
       });
       $("#doneName").textContent = p.fn;
       $("#doneChan").textContent = p.chan;
-      $("#personalForm").style.display = "none";
-      $("#personalDone").style.display = "block";
+      $("#personalForm")?.classList.add("hidden");
+      $("#personalDone")?.classList.remove("hidden");
     } catch (err) {
       alert("Ошибка: " + (err.data?.error || err.message));
     }
   });
 
-  // ── accounts ────────────────────────────────────────────────────────────
+  // ── settings ────────────────────────────────────────────────────────────
+
+  let settingsTab = "accounts";
+  let logsFilter = "all";
+  let accountsCache = null;
+
+  function setSettingsTab(name) {
+    settingsTab = name || "accounts";
+    $$(".settings-tab").forEach((b) =>
+      b.classList.toggle("on", b.dataset.settings === settingsTab)
+    );
+    $$(".settings-pane").forEach((p) =>
+      p.classList.toggle("active", p.dataset.pane === settingsTab)
+    );
+    if (settingsTab === "users") loadUsersPane();
+    if (settingsTab === "logs") renderLogsPane();
+    if (settingsTab === "integrations") loadIntegrationsPane();
+    if (settingsTab === "bots") loadBotsPane();
+  }
+
+  async function loadSettings() {
+    setSettingsTab(settingsTab);
+    await loadAccounts();
+    // статус MAX в шапке — даже если вкладка другая
+    try {
+      const s = await AdminAPI.maxSettings();
+      updateSettingsGlanceMax(!!s.configured);
+    } catch (_) {
+      updateSettingsGlanceMax(false);
+    }
+    if (settingsTab === "bots") loadBotsPane();
+    if (settingsTab === "users") loadUsersPane();
+    if (settingsTab === "logs") renderLogsPane();
+    if (settingsTab === "integrations") loadIntegrationsPane();
+  }
+
+  $$(".settings-tab").forEach((btn) => {
+    btn.addEventListener("click", () => setSettingsTab(btn.dataset.settings));
+  });
+
+  $$("#logsFilter button").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      $$("#logsFilter button").forEach((b) => b.classList.remove("on"));
+      btn.classList.add("on");
+      logsFilter = btn.dataset.log || "all";
+      renderLogsPane();
+    });
+  });
 
   async function loadAccounts() {
     const box = $("#accountsList");
+    if (!box) return;
     box.innerHTML = '<div class="loading">Загрузка…</div>';
     try {
       const data = await AdminAPI.accounts();
+      accountsCache = data;
       const configured = !!data.telethon_configured;
-      if (!configured) {
-        $("#tgHint").textContent =
-          "Укажите ключи Telegram API ниже, затем подключайте номера — всё из этой панели.";
-      } else {
-        $("#tgHint").textContent =
-          "Подключите личный номер Telegram: телефон → код из SMS → (при необходимости) пароль 2FA.";
+      const hint = $("#tgHint");
+      if (hint) {
+        hint.textContent = configured
+          ? "Подключите номер: телефон → код из Telegram/SMS → при необходимости пароль 2FA."
+          : "Сначала раскройте блок «Ключи Telegram API» ниже, затем подключайте номера.";
       }
-      loadTgApiStatus();
-      loadMaxTokenStatus();
+      await loadTgApiStatus();
+      const tgItems = (data.items || []).filter((a) => a.kind !== "max_bot");
+      const ready = tgItems.filter((a) => !["warmup", "unavailable", "blocked"].includes(String(a.status || ""))).length;
+      updateTgSetupStatus(configured, tgItems.length, ready);
+      updateSettingsGlance(configured, tgItems.length);
       const connectBtn = $("#btnConnectTg");
-      if (connectBtn) connectBtn.style.display = configured ? "" : "none";
-      box.innerHTML = (data.items || [])
-        .map((a) => {
-          const isMax = a.kind === "max_bot";
-          const ico = isMax ? "MX" : "TG";
-          const icoCls = isMax ? "max" : "tg";
-          let statusLabel = "Готов";
-          let statusColor = "var(--ok)";
-          if (a.status === "warmup") {
-            statusLabel = a.warmup_until
-              ? "Прогрев до " + a.warmup_until
-              : "Прогрев";
-            statusColor = "var(--warn)";
-          } else if (a.status === "unavailable" || a.status === "blocked") {
-            statusLabel = isMax && a.placeholder ? "Не подключён" : a.status;
-            statusColor = "var(--ink-3)";
-          }
-          const sub = isMax
-            ? a.placeholder
-              ? data.max_configured
-                ? "MAX · бот подключён, готов к рассылкам"
-                : "MAX · укажите токен ниже"
-              : `MAX · сегодня ${a.sent_today} из ${a.daily_limit}`
-            : `Telegram · сегодня ${a.sent_today} из ${a.daily_limit}`;
-          return `<div class="acct">
-            <div class="ico ${icoCls}">${ico}</div>
-            <div class="m"><div class="n">${esc(a.phone_masked || a.label)}</div><div class="p">${esc(sub)}</div></div>
-            <span class="tagi" style="color:${statusColor}"><span class="d" style="background:${statusColor}"></span>${esc(statusLabel)}</span>
-          </div>`;
-        })
-        .join("");
+      if (connectBtn) {
+        connectBtn.classList.toggle("is-locked", !configured);
+        connectBtn.title = configured ? "Подключить номер" : "Сначала сохраните API-ключи";
+      }
+      const apiDetails = $("#tgApiForm");
+      if (apiDetails && apiDetails.tagName === "DETAILS") {
+        apiDetails.open = !configured;
+      }
+      if (!tgItems.length) {
+        box.innerHTML = `<div class="empty-rich" style="padding:28px 16px">
+          <div class="er-ic" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><rect x="6" y="2" width="12" height="20" rx="3"/><path d="M11 18h2"/></svg></div>
+          <div class="t">Нет подключённых номеров</div>
+          <p class="d">${configured ? "Нажмите «Подключить», чтобы добавить Telegram-аккаунт." : "Сохраните API-ключи в блоке ниже — затем появится кнопка подключения."}</p>
+        </div>`;
+      } else {
+        box.innerHTML = tgItems
+          .map((a) => {
+            let statusLabel = "Готов";
+            let statusColor = "var(--ok)";
+            if (a.status === "warmup") {
+              statusLabel = a.warmup_until
+                ? "Прогрев до " + a.warmup_until
+                : "Прогрев";
+              statusColor = "var(--warn)";
+            } else if (a.status === "unavailable" || a.status === "blocked") {
+              statusLabel = a.status;
+              statusColor = "var(--ink-3)";
+            }
+            return `<div class="acct">
+              <div class="ico tg">TG</div>
+              <div class="m"><div class="n">${esc(a.phone_masked || a.label)}</div><div class="p">Telegram · сегодня ${esc(String(a.sent_today))} из ${esc(String(a.daily_limit))}</div></div>
+              <span class="tagi" style="color:${statusColor}"><span class="d" style="background:${statusColor}"></span>${esc(statusLabel)}</span>
+            </div>`;
+          })
+          .join("");
+      }
+      if (settingsTab === "bots") loadBotsPane();
     } catch (err) {
       if (err.status === 401) return showLogin();
       box.innerHTML = '<div class="empty-state">Ошибка загрузки</div>';
     }
+  }
+
+  async function loadBotsPane() {
+    const box = $("#botsOverview");
+    if (!box) return;
+    let maxConfigured = false;
+    let maxMeta = "";
+    try {
+      const s = await AdminAPI.maxSettings();
+      maxConfigured = !!s.configured;
+      if (s.bot_username) maxMeta = "@" + s.bot_username;
+      else if (s.bot_name) maxMeta = s.bot_name;
+      else if (s.token_masked) maxMeta = s.token_masked;
+    } catch (_) {}
+    loadMaxTokenStatus();
+    box.innerHTML = maxConfigured
+      ? `<span class="status-pill ok"><span class="d"></span>Подключён${maxMeta ? " · " + esc(maxMeta) : ""}</span>`
+      : `<span class="status-pill warn"><span class="d"></span>Токен не задан</span>`;
+    updateSettingsGlanceMax(maxConfigured);
+  }
+
+  function updateTgSetupStatus(configured, total, ready) {
+    const el = $("#tgSetupStatus");
+    if (!el) return;
+    const chips = [];
+    chips.push(
+      configured
+        ? `<span class="status-pill ok"><span class="d"></span>API-ключи</span>`
+        : `<span class="status-pill warn"><span class="d"></span>Нужны API-ключи</span>`
+    );
+    if (total) {
+      chips.push(
+        `<span class="status-pill ${ready ? "ok" : "warn"}"><span class="d"></span>${ready} из ${total} готовы</span>`
+      );
+    } else {
+      chips.push(`<span class="status-pill warn"><span class="d"></span>Нет номеров</span>`);
+    }
+    el.innerHTML = chips.join("");
+  }
+
+  function updateSettingsGlance(tgConfigured, tgCount) {
+    const el = $("#settingsGlance");
+    if (!el) return;
+    const maxOk = el.dataset.maxOk === "1";
+    el.innerHTML = [
+      `<span class="glance-chip ${tgConfigured && tgCount ? "ok" : "warn"}"><span class="d"></span>TG · ${tgCount || 0}</span>`,
+      `<span class="glance-chip ${maxOk ? "ok" : "warn"}"><span class="d"></span>MAX · ${maxOk ? "ок" : "нет"}</span>`,
+    ].join("");
+  }
+
+  function updateSettingsGlanceMax(ok) {
+    const el = $("#settingsGlance");
+    if (!el) return;
+    el.dataset.maxOk = ok ? "1" : "0";
+    const tgConfigured = !!(accountsCache && accountsCache.telethon_configured);
+    const tgCount = ((accountsCache && accountsCache.items) || []).filter((a) => a.kind !== "max_bot").length;
+    updateSettingsGlance(tgConfigured, tgCount);
+  }
+
+  async function loadUsersPane() {
+    const box = $("#usersList");
+    if (!box) return;
+    box.innerHTML = '<div class="loading">Загрузка…</div>';
+    try {
+      const me = await AdminAPI.me();
+      const name = me.username || "admin";
+      const saved = localStorage.getItem("veresk_admin_login") || name;
+      box.innerHTML = `<div class="user-row">
+        <div class="av">${esc(initials(saved))}</div>
+        <div style="flex:1;min-width:0">
+          <div class="nm">${esc(saved)}</div>
+          <div class="rl">Администратор · вход из .env</div>
+        </div>
+        <span class="badge-soft ok">Активен</span>
+      </div>`;
+    } catch (err) {
+      if (err.status === 401) return showLogin();
+      box.innerHTML = '<div class="empty-state">Не удалось загрузить</div>';
+    }
+  }
+
+  function renderLogsPane() {
+    const box = $("#logsList");
+    if (!box) return;
+    const demo = [
+      {
+        kind: "sync",
+        time: "—",
+        title: "Журнал пока пуст",
+        detail:
+          "Скоро здесь появятся события синхронизации Posiflora, запуски рассылок и ошибки каналов.",
+      },
+    ];
+    const items =
+      logsFilter === "all" ? demo : demo.filter((x) => x.kind === logsFilter);
+    if (!items.length) {
+      box.innerHTML = `<div class="logs-empty"><div class="t">Нет записей</div>В этом фильтре пока нет событий</div>`;
+      return;
+    }
+    box.innerHTML = items
+      .map(
+        (l) => `<div class="log-row">
+        <div class="log-time">${esc(l.time)}</div>
+        <div class="log-msg"><div class="log-title">${esc(l.title)}</div><div class="log-detail">${esc(l.detail)}</div></div>
+        <span class="log-kind ${esc(l.kind)}">${esc({ sync: "Синхр.", mail: "Рассылка", error: "Ошибка", info: "Инфо" }[l.kind] || l.kind)}</span>
+      </div>`
+      )
+      .join("");
+  }
+
+  async function loadIntegrationsPane() {
+    const box = $("#integrationsList");
+    if (!box) return;
+    box.innerHTML = '<div class="loading">Загрузка…</div>';
+    let syncLabel = "Статус неизвестен";
+    let syncOk = false;
+    let ai = {
+      configured: false,
+      provider: "openai",
+      providers: [
+        {
+          id: "openai",
+          label: "OpenAI",
+          api_base: "https://api.openai.com/v1",
+          model: "gpt-4o-mini",
+          hint: "Ключ с platform.openai.com",
+          needs_folder: false,
+        },
+        {
+          id: "openrouter",
+          label: "OpenRouter",
+          api_base: "https://openrouter.ai/api/v1",
+          model: "openai/gpt-4o-mini",
+          hint: "Ключ с openrouter.ai/keys",
+          needs_folder: false,
+        },
+        {
+          id: "yandexgpt",
+          label: "YandexGPT",
+          api_base: "https://llm.api.cloud.yandex.net/v1",
+          model: "yandexgpt-lite/latest",
+          hint: "API-ключ и Folder ID из Yandex Cloud",
+          needs_folder: true,
+        },
+        {
+          id: "custom",
+          label: "Свой API",
+          api_base: "https://api.openai.com/v1",
+          model: "gpt-4o-mini",
+          hint: "Любой OpenAI-совместимый endpoint",
+          needs_folder: false,
+        },
+      ],
+      api_base: "https://api.openai.com/v1",
+      model: "gpt-4o-mini",
+      folder_id: "",
+      api_key_masked: null,
+      from_env: false,
+    };
+    try {
+      const [stats, aiSettings] = await Promise.all([
+        AdminAPI.stats(),
+        AdminAPI.aiSettings().catch(() => null),
+      ]);
+      const sync = stats.sync || {};
+      if (sync.at) {
+        syncOk = !sync.error;
+        syncLabel = syncOk
+          ? "Последняя синхронизация · " + String(sync.at).replace("T", " ").slice(0, 16)
+          : "Ошибка · " + String(sync.error || "unknown");
+      } else if (sync.error) {
+        syncLabel = "Ошибка · " + String(sync.error);
+      } else {
+        syncLabel = "Ещё не синхронизировали";
+      }
+      if (aiSettings) {
+        ai = Object.assign(ai, aiSettings);
+        if (Array.isArray(aiSettings.providers) && aiSettings.providers.length) {
+          ai.providers = aiSettings.providers;
+        }
+      }
+    } catch (_) {}
+
+    const providerLabel =
+      (ai.providers || []).find((p) => p.id === ai.provider)?.label || ai.provider || "ИИ";
+    const aiBadge = ai.configured
+      ? '<span class="badge-soft ok">OK</span>'
+      : '<span class="badge-soft warn">Настроить</span>';
+    const aiMeta = ai.configured
+      ? esc(providerLabel) +
+        " · " +
+        (ai.from_env ? "ключ из .env · " : "") +
+        esc(ai.api_key_masked || "••••") +
+        " · " +
+        esc(ai.model || "")
+      : "Выберите оператора и укажите API-ключ";
+
+    const providerChips = (ai.providers || [])
+      .map(
+        (p) =>
+          `<button type="button" class="ai-prov ${
+            p.id === ai.provider ? "on" : ""
+          }" data-provider="${esc(p.id)}" data-base="${esc(p.api_base)}" data-model="${esc(
+            p.model
+          )}" data-hint="${esc(p.hint)}" data-folder="${p.needs_folder ? "1" : "0"}">${esc(
+            p.label
+          )}</button>`
+      )
+      .join("");
+
+    const curProv =
+      (ai.providers || []).find((p) => p.id === ai.provider) || ai.providers[0] || {};
+    const needsFolder = !!curProv.needs_folder || ai.provider === "yandexgpt";
+    const showBase = ai.provider === "custom";
+
+    box.innerHTML = `
+      <div class="integ-card">
+        <div class="integ-card-top">
+          <div class="integ-ico pf">PF</div>
+          <div style="flex:1;min-width:0">
+            <div class="n">Posiflora</div>
+            <div class="p">Клиенты, события и заказы для сегментов и поводов написать</div>
+          </div>
+          <span class="badge-soft ${syncOk ? "ok" : "warn"}">${syncOk ? "OK" : "Настроить"}</span>
+        </div>
+        <div class="meta">${esc(syncLabel)}</div>
+        <div class="integ-actions">
+          <button class="btn" type="button" id="integSyncBtn">Синхронизировать сейчас</button>
+          <button class="btn" type="button" onclick="go('clients')">Открыть клиентов</button>
+        </div>
+      </div>
+      <div class="integ-card integ-card-form">
+        <div class="integ-card-top">
+          <div class="integ-ico ai">AI</div>
+          <div style="flex:1;min-width:0">
+            <div class="n">ИИ-редактор</div>
+            <div class="p">Тексты рассылок · OpenAI, OpenRouter, YandexGPT</div>
+          </div>
+          ${aiBadge}
+        </div>
+        <div class="meta" id="aiSettingsMeta">${aiMeta}</div>
+        <div class="integ-ai-form" id="aiSettingsForm">
+          <label>Оператор</label>
+          <div class="ai-prov-row" id="aiProviderRow">${providerChips}</div>
+          <p class="ai-prov-hint" id="aiProvHint">${esc(curProv.hint || "")}</p>
+          <label for="aiApiKey">API-ключ</label>
+          <input id="aiApiKey" type="password" autocomplete="off" placeholder="${
+            ai.configured
+              ? "Оставьте пустым, чтобы не менять · " + esc(ai.api_key_masked || "••••")
+              : "Вставьте ключ оператора"
+          }">
+          <div class="form-grid-2" id="aiFolderRow" ${needsFolder ? "" : "hidden"}>
+            <div style="grid-column:1/-1">
+              <label for="aiFolderId">Folder ID (Yandex Cloud)</label>
+              <input id="aiFolderId" type="text" autocomplete="off" value="${esc(
+                ai.folder_id || ""
+              )}" placeholder="b1g…">
+            </div>
+          </div>
+          <div class="form-grid-2">
+            <div id="aiBaseWrap" ${showBase ? "" : "hidden"}>
+              <label for="aiApiBase">Базовый URL</label>
+              <input id="aiApiBase" type="url" autocomplete="off" value="${esc(
+                ai.api_base || ""
+              )}" placeholder="https://…/v1">
+            </div>
+            <div ${showBase ? "" : 'style="grid-column:1/-1"'}>
+              <label for="aiModel">Модель</label>
+              <input id="aiModel" type="text" autocomplete="off" value="${esc(
+                ai.model || ""
+              )}" placeholder="${esc(curProv.model || "model")}">
+            </div>
+          </div>
+          <div class="form-actions">
+            <button type="button" class="btn primary" id="aiSettingsSave">Сохранить</button>
+            <button type="button" class="btn" id="aiSettingsClear" ${
+              ai.configured ? "" : "disabled"
+            }>Отключить</button>
+            <button type="button" class="btn" onclick="go('aichat')">ИИ чат</button>
+          </div>
+          <p class="form-foot">OpenRouter — модели вида <code>openai/gpt-4o-mini</code>. YandexGPT — <code>yandexgpt-lite/latest</code> или <code>yandexgpt/latest</code>.</p>
+        </div>
+      </div>
+      <div class="integ-card">
+        <div class="integ-card-top">
+          <div class="integ-ico tg">TG</div>
+          <div style="flex:1;min-width:0">
+            <div class="n">Каналы отправки</div>
+            <div class="p">Telegram-номера и MAX-бот настраиваются в соседних разделах</div>
+          </div>
+          <span class="badge-soft muted">Быстрый переход</span>
+        </div>
+        <div class="integ-actions">
+          <button class="btn" type="button" data-goto-settings="accounts">Telegram</button>
+          <button class="btn" type="button" data-goto-settings="bots">MAX</button>
+        </div>
+      </div>`;
+
+    let selectedProvider = ai.provider || "openai";
+
+    function applyProviderUi(btn) {
+      selectedProvider = btn.dataset.provider;
+      $$("#aiProviderRow .ai-prov").forEach((b) => b.classList.remove("on"));
+      btn.classList.add("on");
+      const hint = $("#aiProvHint");
+      if (hint) hint.textContent = btn.dataset.hint || "";
+      const model = $("#aiModel");
+      if (model && (!model.value || model.dataset.autofill !== "0")) {
+        model.value = btn.dataset.model || "";
+      }
+      const base = $("#aiApiBase");
+      if (base) base.value = btn.dataset.base || "";
+      const folderRow = $("#aiFolderRow");
+      if (folderRow) folderRow.hidden = btn.dataset.folder !== "1";
+      const baseWrap = $("#aiBaseWrap");
+      if (baseWrap) baseWrap.hidden = selectedProvider !== "custom";
+      const modelWrap = baseWrap?.parentElement?.querySelector("#aiModel")?.parentElement;
+      if (modelWrap) {
+        if (selectedProvider === "custom") modelWrap.removeAttribute("style");
+        else modelWrap.style.gridColumn = "1 / -1";
+      }
+    }
+
+    $$("#aiProviderRow .ai-prov").forEach((btn) => {
+      btn.addEventListener("click", () => applyProviderUi(btn));
+    });
+    $("#aiModel")?.addEventListener("input", () => {
+      if ($("#aiModel")) $("#aiModel").dataset.autofill = "0";
+    });
+
+    $("#integSyncBtn")?.addEventListener("click", async () => {
+      const btn = $("#integSyncBtn");
+      if (btn) {
+        btn.disabled = true;
+        btn.textContent = "Синхронизация…";
+      }
+      try {
+        const res = await AdminAPI.sync();
+        alert(
+          res.ok
+            ? `Готово: ${res.customers} клиентов, ${res.events} событий, ${res.orders || 0} заказов`
+            : "Ошибка: " + (res.error || "unknown")
+        );
+        loadIntegrationsPane();
+      } catch (err) {
+        alert("Ошибка: " + (err.data?.error || err.message));
+      }
+      if (btn) {
+        btn.disabled = false;
+        btn.textContent = "Синхронизировать сейчас";
+      }
+    });
+
+    $("#aiSettingsSave")?.addEventListener("click", async () => {
+      const btn = $("#aiSettingsSave");
+      if (btn) {
+        btn.disabled = true;
+        btn.textContent = "Сохраняю…";
+      }
+      try {
+        const body = {
+          provider: selectedProvider,
+          api_key: ($("#aiApiKey")?.value || "").trim(),
+          api_base: ($("#aiApiBase")?.value || "").trim(),
+          model: ($("#aiModel")?.value || "").trim(),
+          folder_id: ($("#aiFolderId")?.value || "").trim(),
+        };
+        if (!body.api_key && !ai.configured) {
+          alert("Укажите API-ключ");
+        } else if (selectedProvider === "yandexgpt" && !body.folder_id && !ai.folder_id) {
+          alert("Для YandexGPT укажите Folder ID");
+        } else {
+          await AdminAPI.aiSaveSettings(body);
+          alert("Настройки ИИ сохранены");
+          loadIntegrationsPane();
+          return;
+        }
+      } catch (err) {
+        alert(err.data?.detail || err.data?.error || err.message || "Ошибка");
+      }
+      if (btn) {
+        btn.disabled = false;
+        btn.textContent = "Сохранить";
+      }
+    });
+
+    $("#aiSettingsClear")?.addEventListener("click", async () => {
+      if (!confirm("Отключить ИИ в панели? Останется ключ из .env, если он задан.")) return;
+      try {
+        await AdminAPI.aiSaveSettings({ clear: true });
+        loadIntegrationsPane();
+      } catch (err) {
+        alert(err.data?.detail || err.message || "Ошибка");
+      }
+    });
+
+    box.querySelectorAll("[data-goto-settings]").forEach((b) => {
+      b.addEventListener("click", () => setSettingsTab(b.dataset.gotoSettings));
+    });
   }
 
   async function loadTgApiStatus() {
@@ -727,16 +1341,16 @@
     try {
       const s = await AdminAPI.tgSettings();
       if (s.configured) {
-        const src = s.from_env ? " (из .env)" : "";
+        const src = s.from_env ? " · .env" : "";
         box.innerHTML =
-          '<span style="color:var(--ok)">✓ Ключи заданы' +
+          '<span class="status-pill ok"><span class="d"></span>Заданы' +
           src +
-          (s.api_id ? ", API ID " + esc(String(s.api_id)) : "") +
+          (s.api_id ? " · ID " + esc(String(s.api_id)) : "") +
           "</span>";
         if (s.api_id && !$("#tgApiId").value) $("#tgApiId").value = s.api_id;
       } else {
         box.innerHTML =
-          '<span style="color:var(--warn)">Ключи ещё не заданы</span>';
+          '<span class="status-pill warn"><span class="d"></span>Не заданы</span>';
       }
     } catch (_) {}
   }
@@ -747,16 +1361,18 @@
     try {
       const s = await AdminAPI.maxSettings();
       if (s.configured) {
-        const parts = ["✓ Бот подключён"];
-        if (s.from_env) parts.push("(из .env)");
-        if (s.bot_username) parts.push("@" + s.bot_username);
-        else if (s.bot_name) parts.push(s.bot_name);
-        if (s.token_masked) parts.push("· " + s.token_masked);
+        const bits = [];
+        if (s.from_env) bits.push(".env");
+        if (s.bot_username) bits.push("@" + s.bot_username);
+        else if (s.bot_name) bits.push(s.bot_name);
+        if (s.token_masked) bits.push(s.token_masked);
         box.innerHTML =
-          '<span style="color:var(--ok)">' + esc(parts.join(" ")) + "</span>";
+          '<span class="status-pill ok"><span class="d"></span>Активен' +
+          (bits.length ? " · " + esc(bits.join(" · ")) : "") +
+          "</span>";
       } else {
         box.innerHTML =
-          '<span style="color:var(--warn)">Токен ещё не задан</span>';
+          '<span class="status-pill warn"><span class="d"></span>Вставьте токен и нажмите «Сохранить»</span>';
       }
     } catch (_) {}
   }
@@ -788,6 +1404,7 @@
         : res.bot_name || "бот";
       alert("MAX подключён: " + who);
       loadAccounts();
+      loadBotsPane();
     } catch (err) {
       const msg =
         err.data?.detail ||
@@ -805,14 +1422,45 @@
       await AdminAPI.maxClearSettings();
       $("#maxBotToken").value = "";
       loadAccounts();
+      loadBotsPane();
     } catch (err) {
       alert(err.data?.error || err.message);
     }
   });
 
+  function setConnectStep(step) {
+    $$(".connect-step").forEach((el) => {
+      el.classList.toggle("on", Number(el.dataset.cstep) <= step);
+    });
+  }
+
+  function openConnectForm(show) {
+    const form = $("#acctForm");
+    if (!form) return;
+    form.classList.toggle("hidden", !show);
+    if (show) {
+      setConnectStep(1);
+      $("#tgPhone")?.focus();
+    } else {
+      $("#tgCodeStep")?.classList.add("hidden");
+      $("#tg2faWrap")?.classList.add("hidden");
+      setConnectStep(1);
+    }
+  }
+
   $("#btnConnectTg")?.addEventListener("click", () => {
-    $("#acctForm").classList.toggle("hidden");
+    const locked = $("#btnConnectTg")?.classList.contains("is-locked");
+    if (locked) {
+      const api = $("#tgApiForm");
+      if (api && api.tagName === "DETAILS") api.open = true;
+      api?.scrollIntoView({ behavior: "smooth", block: "nearest" });
+      alert("Сначала сохраните ключи Telegram API в блоке ниже.");
+      return;
+    }
+    openConnectForm($("#acctForm")?.classList.contains("hidden"));
   });
+
+  $("#tgConnectCancel")?.addEventListener("click", () => openConnectForm(false));
 
   $("#tgSendCode")?.addEventListener("click", async () => {
     const phone = $("#tgPhone").value.trim();
@@ -822,6 +1470,8 @@
       if (!res.ok) return alert(res.error || "Ошибка");
       state.tgPhone = res.phone || phone;
       $("#tgCodeStep").classList.remove("hidden");
+      setConnectStep(2);
+      $("#tgCode")?.focus();
       alert("Код отправлен в Telegram / SMS");
     } catch (err) {
       alert(err.data?.error || err.message);
@@ -902,6 +1552,130 @@
     })
   );
 
+  // ── AI editor (compose step) ─────────────────────────────────────────────
+  let aiPrevText = "";
+  const aiEditor = $("#aiEditor");
+  const aiToggle = $("#aiToggle");
+  const aiPrompt = $("#aiPrompt");
+  const aiStatus = $("#aiStatus");
+  const aiUndoRow = $("#aiUndoRow");
+
+  function setAiOpen(open) {
+    if (!aiEditor || !aiToggle) return;
+    aiEditor.hidden = !open;
+    aiToggle.setAttribute("aria-expanded", open ? "true" : "false");
+    if (open) {
+      aiPrompt?.focus();
+      // на мобиле прокрутить к панели
+      aiEditor.scrollIntoView({ behavior: "smooth", block: "nearest" });
+    }
+  }
+
+  function setAiStatus(text, kind) {
+    if (!aiStatus) return;
+    if (!text) {
+      aiStatus.hidden = true;
+      aiStatus.textContent = "";
+      aiStatus.className = "ai-editor-status";
+      return;
+    }
+    aiStatus.hidden = false;
+    aiStatus.textContent = text;
+    aiStatus.className = "ai-editor-status" + (kind ? " " + kind : "");
+  }
+
+  function setAiBusy(busy) {
+    ["aiGenerate", "aiImprove", "aiToggle"].forEach((id) => {
+      const el = document.getElementById(id);
+      if (el) el.disabled = busy;
+    });
+    $$("#aiChips .ai-chip").forEach((c) => {
+      c.disabled = busy;
+    });
+    if (aiPrompt) aiPrompt.disabled = busy;
+    const gen = $("#aiGenerate");
+    if (gen) {
+      gen.innerHTML = busy
+        ? "Генерирую…"
+        : `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M12 3v3M12 18v3M3 12h3M18 12h3M5.6 5.6l2.1 2.1M16.3 16.3l2.1 2.1M18.4 5.6l-2.1 2.1M7.7 16.3l-2.1 2.1"/><circle cx="12" cy="12" r="3.2"/></svg> Сгенерировать`;
+    }
+  }
+
+  async function runAiCompose(mode) {
+    const prompt = (aiPrompt?.value || "").trim();
+    const current = msgTa?.value || "";
+    if (mode === "write" && !prompt) {
+      setAiStatus("Кратко опишите, о чём сообщение — или нажмите подсказку сверху", "err");
+      aiPrompt?.focus();
+      return;
+    }
+    if (mode === "improve" && !current.trim()) {
+      setAiStatus("Сначала напишите или вставьте черновик в поле ниже", "err");
+      msgTa?.focus();
+      return;
+    }
+    const segment = $("#s0 .choice.on")?.dataset.seg || state.wizard.segment || "all";
+    setAiBusy(true);
+    setAiStatus(mode === "improve" ? "Улучшаю текст…" : "Пишу текст…");
+    try {
+      const res = await AdminAPI.aiCompose({
+        prompt,
+        current_text: current,
+        segment,
+        mode,
+      });
+      const text = (res.text || "").trim();
+      if (!text) throw new Error("empty");
+      aiPrevText = current;
+      msgTa.value = text;
+      updatePreview();
+      if (aiUndoRow) aiUndoRow.hidden = false;
+      setAiStatus("Готово — текст вставлен в сообщение. Справа — превью.", "ok");
+      msgTa.focus();
+    } catch (err) {
+      const detail =
+        err.data?.detail ||
+        (err.data?.error === "ai_not_configured"
+          ? "Подключите ИИ в Настройках → Сервисы"
+          : null) ||
+        err.message ||
+        "Не удалось сгенерировать";
+      setAiStatus(detail, "err");
+    }
+    setAiBusy(false);
+  }
+
+  aiToggle?.addEventListener("click", () => {
+    const open = aiToggle.getAttribute("aria-expanded") !== "true";
+    setAiOpen(open);
+    if (open) setAiStatus("");
+  });
+  $("#aiClose")?.addEventListener("click", () => setAiOpen(false));
+  $("#aiGenerate")?.addEventListener("click", () => runAiCompose("write"));
+  $("#aiImprove")?.addEventListener("click", () => runAiCompose("improve"));
+  $("#aiUndo")?.addEventListener("click", () => {
+    if (msgTa && aiPrevText !== undefined) {
+      msgTa.value = aiPrevText;
+      updatePreview();
+    }
+    if (aiUndoRow) aiUndoRow.hidden = true;
+    setAiStatus("Вернули предыдущий текст", "ok");
+  });
+  $$("#aiChips .ai-chip").forEach((chip) => {
+    chip.addEventListener("click", () => {
+      $$("#aiChips .ai-chip").forEach((c) => c.classList.remove("on"));
+      chip.classList.add("on");
+      if (aiPrompt) aiPrompt.value = chip.dataset.prompt || chip.textContent;
+      runAiCompose("write");
+    });
+  });
+  aiPrompt?.addEventListener("keydown", (e) => {
+    if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
+      e.preventDefault();
+      runAiCompose("write");
+    }
+  });
+
   // дата по умолчанию — завтра
   (function initDate() {
     const d = new Date();
@@ -928,6 +1702,7 @@
       s.classList.toggle("done", idx < i);
     });
     barEls.forEach((b, idx) => {
+      b.classList.toggle("done", idx < i);
       b.style.background = idx < i ? "var(--accent)" : "var(--line)";
     });
     wback.style.display = i > 0 && i < 3 ? "inline-flex" : "none";
@@ -985,6 +1760,10 @@
   });
   $("#wexit")?.addEventListener("click", () => go("home"));
   $("#wdone")?.addEventListener("click", () => go("home"));
+  $("#wagain")?.addEventListener("click", () => {
+    go("compose");
+    setStep(0);
+  });
 
   $("#wgAll")?.addEventListener("click", async () => {
     try {
@@ -992,6 +1771,35 @@
       renderEvents(data.items || []);
     } catch (_) {}
   });
+
+  // ── AI chat (scaffold) ───────────────────────────────────────────────────
+
+  let aiChatReady = false;
+
+  function initAiChat() {
+    if (aiChatReady) return;
+    aiChatReady = true;
+    const form = $("#aiChatForm");
+    const input = $("#aiInput");
+    form?.addEventListener("submit", (e) => {
+      e.preventDefault();
+      // Backend подключается позже
+    });
+    input?.addEventListener("keydown", (e) => {
+      if (e.key === "Enter" && !e.shiftKey) e.preventDefault();
+    });
+    $("#aiClearChat")?.addEventListener("click", () => {
+      const box = $("#aiMessages");
+      if (!box) return;
+      box.innerHTML = `
+        <div class="ai-msg ai-msg-bot">
+          <div class="ai-bubble">
+            <div class="ai-bubble-label">Veresk ИИ</div>
+            <p>Диалог очищен. Чат для аналитики и помощи появится здесь после подключения ИИ.</p>
+          </div>
+        </div>`;
+    });
+  }
 
   // boot
   tryAuth();
