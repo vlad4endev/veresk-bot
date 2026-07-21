@@ -12,7 +12,7 @@ from typing import Any
 
 from aiohttp import web
 
-from config import ADMIN_PASSWORD, ADMIN_USERNAME, MAX_BOT_TOKEN
+from config import ADMIN_PASSWORD, ADMIN_USERNAME
 from mailing_db import (
     add_campaign_recipients,
     count_customers,
@@ -41,6 +41,7 @@ from mailing_db import (
 )
 import runtime_settings
 from posiflora_sync import last_sync_info, sync_from_posiflora
+from senders.max_bot import get_max_bot_token, is_max_configured
 from senders.telegram_userbot import (
     confirm_telegram_login,
     get_api_credentials,
@@ -593,6 +594,7 @@ async def handle_accounts_list(request: web.Request) -> web.Response:
         )
     # Заглушка MAX, если токена нет и аккаунта нет
     has_max = any(a["kind"] == "max_bot" for a in rows)
+    max_ok = is_max_configured()
     if not has_max:
         items.append(
             {
@@ -603,7 +605,7 @@ async def handle_accounts_list(request: web.Request) -> web.Response:
                 "phone_masked": "MAX",
                 "daily_limit": 150,
                 "sent_today": 0,
-                "status": "ready" if MAX_BOT_TOKEN else "unavailable",
+                "status": "ready" if max_ok else "unavailable",
                 "warmup_until": None,
                 "placeholder": True,
             }
@@ -612,7 +614,7 @@ async def handle_accounts_list(request: web.Request) -> web.Response:
         {
             "items": items,
             "telethon_configured": is_telethon_configured(),
-            "max_configured": bool(MAX_BOT_TOKEN),
+            "max_configured": max_ok,
         }
     )
 
@@ -710,6 +712,101 @@ async def handle_telegram_settings_save(request: web.Request) -> web.Response:
     return _json({"ok": True, "configured": is_telethon_configured()})
 
 
+def _mask_token(token: str) -> str:
+    if len(token) <= 10:
+        return "••••••••"
+    return token[:4] + "…" + token[-4:]
+
+
+async def handle_max_settings_get(request: web.Request) -> web.Response:
+    err = await _require_admin(request)
+    if err:
+        return err
+    token = get_max_bot_token()
+    from_panel = bool(runtime_settings.get("max_bot_token"))
+    from_env = bool(token) and not from_panel
+    bot_name = None
+    bot_username = None
+    if token:
+        try:
+            from max_bot.api import MaxBotAPI
+
+            api = MaxBotAPI(token)
+            try:
+                me = await api.get_me()
+                bot_name = me.get("name") or me.get("first_name")
+                bot_username = me.get("username")
+            finally:
+                await api.close()
+        except Exception:
+            logger.debug("Не удалось проверить MAX-токен при GET settings", exc_info=True)
+    return _json(
+        {
+            "configured": bool(token),
+            "token_set": bool(token),
+            "token_masked": _mask_token(token) if token else None,
+            "from_env": from_env,
+            "from_panel": from_panel,
+            "bot_name": bot_name,
+            "bot_username": bot_username,
+        }
+    )
+
+
+async def handle_max_settings_save(request: web.Request) -> web.Response:
+    err = await _require_admin(request)
+    if err:
+        return err
+    try:
+        body = await request.json()
+    except Exception:
+        return _json({"error": "invalid_json"}, status=400)
+
+    # clear=true — убрать токен из панели (останется .env, если задан)
+    if body.get("clear"):
+        runtime_settings.delete_keys("max_bot_token")
+        return _json(
+            {
+                "ok": True,
+                "configured": is_max_configured(),
+                "cleared": True,
+            }
+        )
+
+    token = str(body.get("token") or "").strip()
+    if not token:
+        return _json({"error": "token_required"}, status=400)
+
+    # Проверяем токен через GET /me перед сохранением
+    from max_bot.api import MaxAPIError, MaxBotAPI
+
+    api = MaxBotAPI(token)
+    try:
+        me = await api.get_me()
+    except MaxAPIError as exc:
+        return _json(
+            {
+                "ok": False,
+                "error": "invalid_token",
+                "detail": str(exc),
+            },
+            status=400,
+        )
+    finally:
+        await api.close()
+
+    runtime_settings.set_many({"max_bot_token": token})
+    return _json(
+        {
+            "ok": True,
+            "configured": True,
+            "bot_name": me.get("name") or me.get("first_name"),
+            "bot_username": me.get("username"),
+            "bot_id": me.get("user_id"),
+        }
+    )
+
+
 async def handle_segment_counts(request: web.Request) -> web.Response:
     err = await _require_admin(request)
     if err:
@@ -746,6 +843,8 @@ def setup_admin_routes(app: web.Application) -> None:
         ("/api/admin/accounts/telegram/settings", handle_telegram_settings_save, "POST"),
         ("/api/admin/accounts/telegram/start", handle_telegram_connect_start, "POST"),
         ("/api/admin/accounts/telegram/confirm", handle_telegram_connect_confirm, "POST"),
+        ("/api/admin/accounts/max/settings", handle_max_settings_get, "GET"),
+        ("/api/admin/accounts/max/settings", handle_max_settings_save, "POST"),
         ("/api/admin/segments", handle_segment_counts, "GET"),
     ]
     options_done: set[str] = set()

@@ -682,6 +682,7 @@
           "Подключите личный номер Telegram: телефон → код из SMS → (при необходимости) пароль 2FA.";
       }
       loadTgApiStatus();
+      loadMaxTokenStatus();
       const connectBtn = $("#btnConnectTg");
       if (connectBtn) connectBtn.style.display = configured ? "" : "none";
       box.innerHTML = (data.items || [])
@@ -702,7 +703,9 @@
           }
           const sub = isMax
             ? a.placeholder
-              ? "MAX · зарезервировано под будущего бота"
+              ? data.max_configured
+                ? "MAX · бот подключён, готов к рассылкам"
+                : "MAX · укажите токен ниже"
               : `MAX · сегодня ${a.sent_today} из ${a.daily_limit}`
             : `Telegram · сегодня ${a.sent_today} из ${a.daily_limit}`;
           return `<div class="acct">
@@ -738,6 +741,26 @@
     } catch (_) {}
   }
 
+  async function loadMaxTokenStatus() {
+    const box = $("#maxTokenStatus");
+    if (!box) return;
+    try {
+      const s = await AdminAPI.maxSettings();
+      if (s.configured) {
+        const parts = ["✓ Бот подключён"];
+        if (s.from_env) parts.push("(из .env)");
+        if (s.bot_username) parts.push("@" + s.bot_username);
+        else if (s.bot_name) parts.push(s.bot_name);
+        if (s.token_masked) parts.push("· " + s.token_masked);
+        box.innerHTML =
+          '<span style="color:var(--ok)">' + esc(parts.join(" ")) + "</span>";
+      } else {
+        box.innerHTML =
+          '<span style="color:var(--warn)">Токен ещё не задан</span>';
+      }
+    } catch (_) {}
+  }
+
   $("#tgApiSave")?.addEventListener("click", async () => {
     const apiId = $("#tgApiId").value.trim();
     const apiHash = $("#tgApiHash").value.trim();
@@ -747,6 +770,40 @@
       if (!res.ok) return alert(res.error || "Ошибка");
       $("#tgApiHash").value = "";
       alert("Ключи сохранены");
+      loadAccounts();
+    } catch (err) {
+      alert(err.data?.error || err.message);
+    }
+  });
+
+  $("#maxTokenSave")?.addEventListener("click", async () => {
+    const token = $("#maxBotToken").value.trim();
+    if (!token) return alert("Вставьте токен от @MasterBot");
+    try {
+      const res = await AdminAPI.maxSaveSettings(token);
+      if (!res.ok) return alert(res.detail || res.error || "Ошибка");
+      $("#maxBotToken").value = "";
+      const who = res.bot_username
+        ? "@" + res.bot_username
+        : res.bot_name || "бот";
+      alert("MAX подключён: " + who);
+      loadAccounts();
+    } catch (err) {
+      const msg =
+        err.data?.detail ||
+        (err.data?.error === "invalid_token"
+          ? "Неверный токен — проверьте у @MasterBot"
+          : err.data?.error || err.message);
+      alert(msg);
+    }
+  });
+
+  $("#maxTokenClear")?.addEventListener("click", async () => {
+    if (!confirm("Отключить токен MAX из панели? (значение из .env останется)"))
+      return;
+    try {
+      await AdminAPI.maxClearSettings();
+      $("#maxBotToken").value = "";
       loadAccounts();
     } catch (err) {
       alert(err.data?.error || err.message);

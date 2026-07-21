@@ -54,3 +54,23 @@ def set_many(values: dict[str, Any]) -> None:
             json.dump(data, f, ensure_ascii=False, indent=2)
         tmp.replace(_SETTINGS_PATH)
         _cache = data
+
+
+def delete_keys(*keys: str) -> None:
+    """Удалить ключи из runtime-настроек."""
+    global _cache
+    with _lock:
+        data = dict(_load())
+        changed = False
+        for key in keys:
+            if key in data:
+                del data[key]
+                changed = True
+        if not changed:
+            return
+        _SETTINGS_PATH.parent.mkdir(parents=True, exist_ok=True)
+        tmp = _SETTINGS_PATH.with_suffix(".tmp")
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(data, f, ensure_ascii=False, indent=2)
+        tmp.replace(_SETTINGS_PATH)
+        _cache = data

@@ -94,6 +94,17 @@ const AdminAPI = (() => {
         method: "POST",
         body: JSON.stringify({ api_id, api_hash }),
       }),
+    maxSettings: () => request("/api/admin/accounts/max/settings"),
+    maxSaveSettings: (token) =>
+      request("/api/admin/accounts/max/settings", {
+        method: "POST",
+        body: JSON.stringify({ token }),
+      }),
+    maxClearSettings: () =>
+      request("/api/admin/accounts/max/settings", {
+        method: "POST",
+        body: JSON.stringify({ clear: true }),
+      }),
     tgStart: (phone) =>
       request("/api/admin/accounts/telegram/start", {
         method: "POST",

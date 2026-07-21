@@ -224,6 +224,21 @@
           <button class="btn primary" id="tgConfirm" style="margin-top:12px">Подтвердить</button>
         </div>
       </div>
+
+      <div class="acct-form" id="maxTokenForm" style="margin-top:22px">
+        <div style="font-weight:600;margin-bottom:6px">MAX-бот</div>
+        <p class="page-desc" style="margin:0 0 12px">
+          Создайте бота у <strong>@MasterBot</strong> в мессенджере MAX и вставьте токен сюда.
+          Рассылки уходят только тем, кто уже писал боту (прошёл анкету).
+        </p>
+        <div id="maxTokenStatus" class="page-desc" style="margin:0 0 12px"></div>
+        <label>Токен бота</label>
+        <input id="maxBotToken" type="password" autocomplete="off" placeholder="Токен от @MasterBot">
+        <div style="display:flex;gap:10px;margin-top:12px;flex-wrap:wrap">
+          <button class="btn primary" id="maxTokenSave">Сохранить и проверить</button>
+          <button class="btn" id="maxTokenClear" type="button">Отключить</button>
+        </div>
+      </div>
     </section>
 
     <!-- DETAIL -->
