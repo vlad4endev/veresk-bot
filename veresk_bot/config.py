@@ -75,7 +75,11 @@ SESSIONS_DIR = os.getenv("SESSIONS_DIR", str(_default_sessions))
 MAX_BOT_TOKEN = os.getenv("MAX_BOT_TOKEN", "").strip()
 # Чат флориста в MAX для уведомлений об анкетах (0 — выключено)
 MAX_FLORIST_CHAT_ID = int(os.getenv("MAX_FLORIST_CHAT_ID", "0") or "0")
-# HTTPS URL webhook (порт 443), напр. https://florist.skypath.fun/api/max/webhook
+# Публичный HTTPS-домен (админка + miniapp + API)
+PUBLIC_BASE_URL = os.getenv(
+    "PUBLIC_BASE_URL", "https://admin.veresk-flowers.ru"
+).strip().rstrip("/")
+# HTTPS URL webhook (порт 443), напр. https://admin.veresk-flowers.ru/api/max/webhook
 # Если задан — Max шлёт события на bot-сервис; long polling у max_bot отключается.
 MAX_WEBHOOK_URL = os.getenv("MAX_WEBHOOK_URL", "").strip()
 # Секрет для заголовка X-Max-Bot-Api-Secret (5–256: A-Z a-z 0-9 _ -)

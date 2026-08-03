@@ -11,6 +11,7 @@ services:
     volumes:
       - ./logs:/app/logs
       - ./data:/app/data
+      - ./certs:/app/certs:ro
     depends_on:
       - redis
 
@@ -27,19 +28,22 @@ services:
     volumes:
       - ./logs:/app/logs
       - ./data:/app/data
+      - ./certs:/app/certs:ro
 
   nginx:
     image: nginx:alpine
     restart: unless-stopped
     ports:
+      # Внутренний HTTP — проксируйте сюда с хоста (admin.veresk-flowers.ru → :3005)
       - "3005:3005"
-      # 80/443 — только если нет другого веб-сервера (см. nginx.ssl.conf.example)
+      # SSL внутри Docker: раскомментируйте и используйте nginx.ssl.conf.example
       # - "80:80"
       # - "443:443"
     volumes:
       - ./miniapp:/usr/share/nginx/html/miniapp:ro
       - ./adminapp:/usr/share/nginx/html/admin:ro
       - ./nginx.conf:/etc/nginx/conf.d/default.conf:ro
+      # - ./ssl:/etc/nginx/ssl:ro
     depends_on:
       - bot
 

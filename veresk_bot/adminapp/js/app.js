@@ -1142,7 +1142,7 @@
     if (hint) {
       hint.textContent = s.suggested_webhook_url
         ? "Обычно: " + s.suggested_webhook_url
-        : "Пример: https://florist.skypath.fun/api/max/webhook";
+        : "Пример: https://admin.veresk-flowers.ru/api/max/webhook";
       hint.dataset.suggest = s.suggested_webhook_url || "";
     }
 
@@ -1936,7 +1936,7 @@
     const url =
       window.__maxSuggestedWebhook ||
       $("#maxWebhookHint")?.dataset.suggest ||
-      "https://florist.skypath.fun/api/max/webhook";
+      "https://admin.veresk-flowers.ru/api/max/webhook";
     const input = $("#maxWebhookUrl");
     if (!input) return;
     input.value = url;

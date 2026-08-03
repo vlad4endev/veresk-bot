@@ -2,6 +2,9 @@
 .env
 .env.local
 *.pem
+# SSL-сертификаты Docker (оставляем ssl/.gitkeep)
+veresk_bot/ssl/*
+!veresk_bot/ssl/.gitkeep
 
 # Python
 __pycache__/
@@ -9,6 +12,7 @@ __pycache__/
 *$py.class
 .Python
 .venv/
+.venv312/
 venv/
 env/
 *.egg-info/

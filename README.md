@@ -1,6 +1,9 @@
-# Veresk — Telegram-бот цветочного магазина
+# Veresk — Telegram / MAX бот цветочного магазина
 
-Бот для приёма заявок на букеты: пошаговая анкета для клиента, уведомление флориста в Telegram и создание заказа в [Posiflora](https://posiflora.com).
+Бот для приёма заявок на букеты: пошаговая анкета для клиента, уведомление флориста и создание заказа в [Posiflora](https://posiflora.com).
+
+**Продакшен-домен:** [admin.veresk-flowers.ru](https://admin.veresk-flowers.ru)  
+Подробный деплой: [`veresk_bot/DEPLOY.md`](veresk_bot/DEPLOY.md)
 
 ## Возможности
 
@@ -12,6 +15,7 @@
 - Уведомления клиенту при принятии или отклонении заказа
 - **Telegram Mini App** — 4 экрана: главная, заказ, статус, подтверждение (брендбук Veresk)
 - Трекер заказа в реальном времени через API
+- **Админ-панель** — рассылки, сегменты, аккаунты, чаты MAX: `https://admin.veresk-flowers.ru/admin/`
 - **MAX-бот** (`max_bot/`) — та же анкета в мессенджере MAX, без Mini App
 - **Чаты MAX в админке** — вкладка «Чаты» → MAX: история из Max API, realtime через webhook → SSE
 
@@ -20,39 +24,34 @@
 Аналог Telegram-бота в мессенджере MAX (тот же сценарий анкеты, Posiflora, SQLite), без Mini App.
 
 1. Создайте бота у `@MasterBot` в MAX и получите токен.
-2. В `.env` заполните `MAX_BOT_TOKEN=` (и опционально `MAX_FLORIST_CHAT_ID=` — чат флориста в MAX для уведомлений об анкетах).
+2. В `.env` заполните `MAX_BOT_TOKEN=` (и опционально `MAX_FLORIST_CHAT_ID=`) или задайте в админке.
 3. Запуск:
-   - Docker: `docker compose up -d max_bot` (сервис уже описан в `docker-compose.yml`);
+   - Docker: `docker compose up -d max_bot` (сервис уже в `docker-compose.yml`);
    - локально: из папки `veresk_bot` — `python -m max_bot.main`.
 
-**Realtime / webhook (рекомендуется для продакшена):** задайте в `.env`
+**Realtime / webhook (продакшен):**
 
 ```
-MAX_WEBHOOK_URL=https://florist.skypath.fun/api/max/webhook
+MAX_WEBHOOK_URL=https://admin.veresk-flowers.ru/api/max/webhook
 MAX_WEBHOOK_SECRET=длинный_секрет_5_256
 ```
 
-При активной подписке Max перестаёт отдавать long polling: анкета и инбокс обрабатывает сервис `bot` (`POST /api/max/webhook` → SSE в админку). Список диалогов хранится локально (`max_dialogs`), история сообщений — `GET /messages`.
-
-Особенности MAX Bot API: клавиатуры только inline (выбор — кнопки под сообщением), телефон запрашивается кнопкой `request_contact`. Без webhook обновления читаются через long polling `GET /updates`, а SSE-хаб админки получает события через `MAX_HUB_NOTIFY_URL`. Анкеты — таблица `max_profiles`; рассылки MAX доставляются клиентам, прошедшим анкету.
+При активной подписке Max перестаёт отдавать long polling: анкета и инбокс обрабатывает сервис `bot` (`POST /api/max/webhook` → SSE в админку).
 
 ## Структура проекта
 
 ```
 veresk_bot/
 ├── miniapp/            # Telegram Mini App (HTML/CSS/JS)
-│   ├── index.html
-│   ├── css/style.css
-│   └── js/ (app.js, order.js, status.js)
-├── bot.py              # бот + приём web_app_data
-├── config.py
-├── webapp_server.py    # API /api/order-status, /api/order/active
-├── nginx.conf          # HTTPS + раздача miniapp/
-├── client_db.py        # SQLite: клиенты и история заказов
-├── order_service.py    # создание заказа (Posiflora + Redis + БД)
-├── notifications.py
-├── posiflora.py
-├── docker-compose.yml  # bot + nginx + redis
+├── adminapp/           # Админ-панель (/admin/)
+├── max_bot/            # MAX-бот
+├── bot.py              # Telegram-бот + API
+├── admin_api.py        # API админки
+├── nginx.conf          # раздача static + proxy API (:3005)
+├── nginx.host-proxy.conf.example  # SSL на хосте → :3005
+├── nginx.ssl.conf.example         # SSL внутри Docker
+├── docker-compose.yml  # bot + max_bot + nginx + redis
+├── DEPLOY.md           # пошаговый деплой
 └── .env.example
 ```
 
@@ -70,17 +69,12 @@ cp .env.example .env
 |------------|----------|
 | `BOT_TOKEN` | Токен бота от [@BotFather](https://t.me/BotFather) |
 | `FLORIST_CHAT_ID` | Telegram ID чата/группы флориста |
-| `POSIFLORA_USERNAME` | Логин Posiflora |
-| `POSIFLORA_PASSWORD` | Пароль Posiflora |
-| `POSIFLORA_STORE_ID` | ID магазина в Posiflora |
-| `POSIFLORA_BASE_URL` | URL API (по умолчанию demo) |
-| `REDIS_URL` | Redis для FSM, polling и Mini App |
-| `MINIAPP_URL` | Публичный **HTTPS**-адрес Mini App (`https://florist.skypath.fun/miniapp/`) |
-| `WEBAPP_PORT` | Порт API внутри контейнера `bot` (по умолчанию `3005`) |
-| `DATABASE_PATH` | Путь к SQLite (в Docker: `/app/data/veresk.db`, том `./data`) |
-| `ADMIN_USERNAME` / `ADMIN_PASSWORD` | Логин и пароль админки (`https://florist.skypath.fun/admin/`) |
-
-**Как узнать `FLORIST_CHAT_ID`:** напишите боту [@userinfobot](https://t.me/userinfobot) из нужного чата или добавьте бота в группу и посмотрите `chat.id` в логах.
+| `POSIFLORA_*` | Учётные данные Posiflora |
+| `PUBLIC_BASE_URL` | `https://admin.veresk-flowers.ru` |
+| `MINIAPP_URL` | `https://admin.veresk-flowers.ru/miniapp/` |
+| `REDIS_URL` | Redis для FSM и Mini App |
+| `ADMIN_USERNAME` / `ADMIN_PASSWORD` | Вход в админку |
+| `MAX_BOT_TOKEN` / `MAX_WEBHOOK_*` | MAX-бот и webhook |
 
 ### 2. Docker (рекомендуется)
 
@@ -92,53 +86,49 @@ docker compose logs -f bot
 
 ### 3. Локальный запуск
 
-Требуется **Python 3.10+** (в Docker используется 3.11).
+Требуется **Python 3.10+** (в Docker — 3.11).
 
 ```bash
 cd veresk_bot
 python3 -m venv .venv
-source .venv/bin/activate   # Windows: .venv\Scripts\activate
+source .venv/bin/activate
 pip install -r requirements.txt
 python bot.py
+# админка локально: python run_admin_local.py → http://127.0.0.1:3005/admin/
 ```
 
-## Mini App
+## Mini App и админка
 
-Домен проекта: **florist.skypath.fun**.
+Домен: **admin.veresk-flowers.ru**.
 
-1. Для HTTPS используйте `nginx.ssl.conf.example` (уже с `server_name florist.skypath.fun`) или проксируйте 443 → контейнер.
-2. Положите сертификаты Let's Encrypt в `veresk_bot/ssl/` (`fullchain.pem`, `privkey.pem`), если SSL на этом nginx.
-3. В `.env`: `MINIAPP_URL=https://florist.skypath.fun/miniapp/` — **тот же URL**, что открывает Telegram (со слэшем в конце).
-4. `docker compose up -d --build`
-5. В [@BotFather](https://t.me/BotFather) → ваш бот → **Bot Settings** → **Domain** — `florist.skypath.fun`.
-6. Mini App открывается **только inline-кнопками** в чате (`/start`, после заказа, `/orders`).
-7. Админка рассылок: `https://florist.skypath.fun/admin/` (логин/пароль — `ADMIN_USERNAME` / `ADMIN_PASSWORD` в `.env`).
+1. HTTPS: хост-прокси (`nginx.host-proxy.conf.example` + certbot) или SSL в Docker (`nginx.ssl.conf.example`).
+2. В `.env`: `MINIAPP_URL=https://admin.veresk-flowers.ru/miniapp/`
+3. `docker compose up -d --build`
+4. BotFather → **Domain** → `admin.veresk-flowers.ru`
+5. Админка: `https://admin.veresk-flowers.ru/admin/`
 
-Команды бота: `/start` — inline «Статус заказа», `/order` — заказ в чате.
-
-Заказ из Mini App уходит в бот через `tg.sendData()` или запасной `POST /api/order/submit` (с подписью `initData`). Статус на главной — `/api/order/active` (polling каждые 15 с).
+Mini App открывается **только** из Telegram (inline Web App), не из обычного браузера.
 
 ### Если Mini App «как обычный сайт»
 
 | Симптом | Причина |
 |--------|---------|
-| Нет профиля и истории заказов | Открыли URL в Safari/Chrome, а не в Telegram — `initData` пустой |
-| Заказ не доходит до бота | То же: вне Telegram нет `sendData` и авторизации API |
-| Всё пусто после деплоя | `MINIAPP_URL` не совпадает с реальным адресом или домен не добавлен в BotFather |
-| API 401 | Другой `BOT_TOKEN` на сервере, не тот бот, из которого открыли приложение |
-
-**Правильно:** Telegram → ваш бот → `/start` → inline «📋 Статус заказа» или «Следить за заказом» после заказа.  
-**Неправильно:** вставить ссылку `https://.../miniapp/` в браузер.
-
-Для Mini App нужен **HTTPS** (не `http://`), кроме локальной отладки.
+| Нет профиля и истории | Открыли URL вне Telegram — нет `initData` |
+| Заказ не доходит | Нет `sendData` вне Telegram |
+| Пусто после деплоя | `MINIAPP_URL` / Domain в BotFather не совпадают |
+| API 401 | Другой `BOT_TOKEN` на сервере |
 
 ## Деплой на сервер
 
+См. **[veresk_bot/DEPLOY.md](veresk_bot/DEPLOY.md)** — DNS, `.env`, HTTPS, Telegram, MAX, проверка.
+
+Кратко:
+
 ```bash
-git clone <url-репозитория>
 cd veresk_bot
-cp .env.example .env && nano .env
+# обновить PUBLIC_BASE_URL / MINIAPP_URL / ADMIN_* / MAX_WEBHOOK_* в .env
 docker compose up -d --build
+# на хосте: nginx.host-proxy + certbot -d admin.veresk-flowers.ru
 ```
 
 ## Лицензия

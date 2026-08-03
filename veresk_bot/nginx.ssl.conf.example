@@ -1,29 +1,47 @@
-# Опционально: скопируйте в nginx.conf и добавьте в docker-compose порты 80:80, 443:443
-# и volume ./ssl:/etc/nginx/ssl:ro (fullchain.pem + privkey.pem).
+# HTTPS для admin.veresk-flowers.ru (контейнер nginx).
+# Использование:
+#   1. Положите fullchain.pem и privkey.pem в ./ssl/
+#   2. cp nginx.ssl.conf.example nginx.conf
+#   3. В docker-compose раскомментируйте порты 80/443 и volume ./ssl
+# Альтернатива: SSL на хосте (certbot) и прокси на :3005 — см. nginx.host-proxy.conf.example
 
 server {
     listen 80;
-    server_name florist.skypath.fun;
+    server_name admin.veresk-flowers.ru;
     return 301 https://$host$request_uri;
 }
 
 server {
     listen 443 ssl;
-    server_name florist.skypath.fun;
+    server_name admin.veresk-flowers.ru;
 
     ssl_certificate     /etc/nginx/ssl/fullchain.pem;
     ssl_certificate_key /etc/nginx/ssl/privkey.pem;
+    ssl_protocols       TLSv1.2 TLSv1.3;
+    ssl_ciphers         HIGH:!aNULL:!MD5;
+
+    client_max_body_size 25m;
 
     location /miniapp/ {
         root /usr/share/nginx/html;
         try_files $uri $uri/ /miniapp/index.html;
-        add_header Cache-Control "no-cache";
+        add_header Cache-Control "no-cache, no-store, must-revalidate";
+    }
+
+    location ~* /miniapp/.*\.(css|js)$ {
+        root /usr/share/nginx/html;
+        add_header Cache-Control "no-cache, no-store, must-revalidate";
     }
 
     location /admin/ {
         root /usr/share/nginx/html;
         try_files $uri $uri/ /admin/index.html;
-        add_header Cache-Control "no-cache";
+        add_header Cache-Control "no-cache, no-store, must-revalidate";
+    }
+
+    location ~* /admin/.*\.(css|js)$ {
+        root /usr/share/nginx/html;
+        add_header Cache-Control "no-cache, no-store, must-revalidate";
     }
 
     location /api/admin/max-chats/events {
@@ -49,5 +67,10 @@ server {
         proxy_set_header X-Forwarded-Proto $scheme;
         proxy_set_header X-Telegram-Init-Data $http_x_telegram_init_data;
         proxy_set_header Authorization $http_authorization;
+    }
+
+    # редирект корня на админку
+    location = / {
+        return 302 /admin/;
     }
 }

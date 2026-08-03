@@ -1185,10 +1185,12 @@ async def handle_max_settings_get(request: web.Request) -> web.Response:
 
 def _suggested_max_webhook_url(request: web.Request) -> str | None:
     """Подсказка URL webhook по Host запроса (если не localhost)."""
+    from config import PUBLIC_BASE_URL
+
     host = (request.headers.get("X-Forwarded-Host") or request.host or "").split(",")[0].strip()
     proto = (request.headers.get("X-Forwarded-Proto") or request.scheme or "https").split(",")[0].strip()
     if not host or host.startswith("127.") or "localhost" in host:
-        return "https://florist.skypath.fun/api/max/webhook"
+        return f"{PUBLIC_BASE_URL}/api/max/webhook"
     if ":" in host and not host.startswith("["):
         # убрать нестандартный порт из подсказки
         name, _, port = host.rpartition(":")
