@@ -1216,7 +1216,41 @@
   @keyframes spin{to{transform:rotate(360deg)}}
   .loading{padding:24px;text-align:center;color:var(--ink-3);}
   .hidden{display:none !important;}
-  #appShell.hidden,#loginScreen.hidden{display:none !important;}
+  #appShell.hidden,#loginScreen.hidden,#authBoot.hidden{display:none !important;}
+
+  /* Пока html.auth-pending — токен есть, ждём /me: не показываем форму входа */
+  .auth-boot{
+    display:none;
+    position:fixed;
+    inset:0;
+    z-index:50;
+    flex-direction:column;
+    align-items:center;
+    justify-content:center;
+    gap:18px;
+    pointer-events:none;
+  }
+  html.auth-pending #loginScreen{display:none !important;}
+  html.auth-pending #authBoot{display:flex;}
+  .auth-boot-logo{width:96px;opacity:.92;}
+  .auth-boot-logo svg{width:100%;height:auto;display:block;}
+  .auth-boot-spinner{
+    width:28px;height:28px;
+    border:2.5px solid rgba(64,44,96,.15);
+    border-top-color:var(--accent);
+    border-radius:50%;
+    animation:spin .75s linear infinite;
+  }
+  .auth-boot-label{
+    margin:0;
+    font-size:13.5px;
+    font-weight:550;
+    color:var(--ink-3);
+    letter-spacing:.02em;
+  }
+  @media (prefers-reduced-motion:reduce){
+    .auth-boot-spinner{animation:none;border-top-color:var(--plum-soft);}
+  }
 
   .acct-form{width:100%;margin-top:16px;padding:18px;border:1px solid var(--line);border-radius:var(--radius);background:var(--surface);box-shadow:var(--shadow);}
   .acct-form label{display:block;font-size:12.5px;font-weight:600;color:var(--ink-2);margin:10px 0 5px;}

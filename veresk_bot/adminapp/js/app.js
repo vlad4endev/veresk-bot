@@ -82,7 +82,7 @@
   const navItems = $$(".nav-item, .bnav-item[data-nav]");
 
   const PERM_CATALOG_FALLBACK = [
-    { id: "home", label: "Рассылки" },
+    { id: "home", label: "Главная" },
     { id: "clients", label: "Клиенты" },
     { id: "chats", label: "Чаты" },
     { id: "bots", label: "Боты" },
@@ -275,7 +275,13 @@
     }
   }
 
+  function clearAuthPending() {
+    document.documentElement.classList.remove("auth-pending");
+    $("#authBoot")?.classList.add("hidden");
+  }
+
   async function showApp() {
+    clearAuthPending();
     $("#loginScreen").classList.add("hidden");
     $("#appShell").classList.remove("hidden");
     startAdminKeepalive();
@@ -287,6 +293,7 @@
 
   function showLogin() {
     stopAdminKeepalive();
+    clearAuthPending();
     $("#appShell").classList.add("hidden");
     $("#loginScreen").classList.remove("hidden");
     setTimeout(focusLogin, 50);

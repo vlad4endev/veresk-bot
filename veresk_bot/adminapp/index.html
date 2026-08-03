@@ -10,9 +10,34 @@
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,500;9..144,600;9..144,700&family=Manrope:wght@400;500;600;700&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="css/admin.css?v=47">
+<!-- Критичный CSS до paint: иначе логин мелькнёт, пока качается admin.css -->
+<style>
+  #authBoot{display:none;position:fixed;inset:0;z-index:50;flex-direction:column;align-items:center;justify-content:center;gap:18px}
+  html.auth-pending #loginScreen{display:none!important}
+  html.auth-pending #authBoot{display:flex}
+</style>
+<!-- Скрываем логин до paint, если в localStorage уже есть токен — иначе при refresh мигает форма входа -->
+<script>
+(function () {
+  try {
+    if (localStorage.getItem("veresk_admin_token")) {
+      document.documentElement.classList.add("auth-pending");
+    }
+  } catch (_) { /* private mode / blocked storage */ }
+})();
+</script>
 </head>
 <body>
 <svg width="0" height="0" style="position:absolute"><defs><g id="veresk"><circle cx="100" cy="106" r="50" fill="none" stroke="#F47DB9" stroke-width="7.5"/><path d="M100 158 C 92 130 82 100 76 66" fill="none" stroke="#F47DB9" stroke-width="4" stroke-linecap="round"/><path d="M0 -9 C 6 -4.5 6 4.5 0 9 C -6 4.5 -6 -4.5 0 -9 Z" fill="#F47DB9" transform="translate(76,70) rotate(-32) scale(1.05)"/><path d="M0 -9 C 6 -4.5 6 4.5 0 9 C -6 4.5 -6 -4.5 0 -9 Z" fill="#F47DB9" transform="translate(79,86) rotate(-38) scale(1.05)"/><path d="M0 -9 C 6 -4.5 6 4.5 0 9 C -6 4.5 -6 -4.5 0 -9 Z" fill="#F47DB9" transform="translate(82,102) rotate(-44) scale(1.05)"/><path d="M0 -9 C 6 -4.5 6 4.5 0 9 C -6 4.5 -6 -4.5 0 -9 Z" fill="#F47DB9" transform="translate(86,118) rotate(-52) scale(1.05)"/><path d="M0 -9 C 6 -4.5 6 4.5 0 9 C -6 4.5 -6 -4.5 0 -9 Z" fill="#F47DB9" transform="translate(91,133) rotate(-60) scale(1.05)"/><path d="M0 -9 C 6 -4.5 6 4.5 0 9 C -6 4.5 -6 -4.5 0 -9 Z" fill="#F47DB9" transform="translate(90,92) rotate(20) scale(1.05)"/><path d="M0 -9 C 6 -4.5 6 4.5 0 9 C -6 4.5 -6 -4.5 0 -9 Z" fill="#F47DB9" transform="translate(92,108) rotate(14) scale(1.05)"/><path d="M0 -9 C 6 -4.5 6 4.5 0 9 C -6 4.5 -6 -4.5 0 -9 Z" fill="#F47DB9" transform="translate(94,124) rotate(8) scale(1.05)"/><path d="M100 158 C 108 130 118 100 124 66" fill="none" stroke="#F47DB9" stroke-width="4" stroke-linecap="round"/><path d="M0 -9 C 6 -4.5 6 4.5 0 9 C -6 4.5 -6 -4.5 0 -9 Z" fill="#F47DB9" transform="translate(124,70) rotate(32) scale(1.05)"/><path d="M0 -9 C 6 -4.5 6 4.5 0 9 C -6 4.5 -6 -4.5 0 -9 Z" fill="#F47DB9" transform="translate(121,86) rotate(38) scale(1.05)"/><path d="M0 -9 C 6 -4.5 6 4.5 0 9 C -6 4.5 -6 -4.5 0 -9 Z" fill="#F47DB9" transform="translate(118,102) rotate(44) scale(1.05)"/><path d="M0 -9 C 6 -4.5 6 4.5 0 9 C -6 4.5 -6 -4.5 0 -9 Z" fill="#F47DB9" transform="translate(114,118) rotate(52) scale(1.05)"/><path d="M0 -9 C 6 -4.5 6 4.5 0 9 C -6 4.5 -6 -4.5 0 -9 Z" fill="#F47DB9" transform="translate(109,133) rotate(60) scale(1.05)"/><path d="M0 -9 C 6 -4.5 6 4.5 0 9 C -6 4.5 -6 -4.5 0 -9 Z" fill="#F47DB9" transform="translate(110,92) rotate(-20) scale(1.05)"/><path d="M0 -9 C 6 -4.5 6 4.5 0 9 C -6 4.5 -6 -4.5 0 -9 Z" fill="#F47DB9" transform="translate(108,108) rotate(-14) scale(1.05)"/><path d="M0 -9 C 6 -4.5 6 4.5 0 9 C -6 4.5 -6 -4.5 0 -9 Z" fill="#F47DB9" transform="translate(106,124) rotate(-8) scale(1.05)"/><circle cx="30.7" cy="66.0" r="3" fill="#402C60"/><circle cx="22.7" cy="85.3" r="3" fill="#402C60"/><circle cx="20.0" cy="106.0" r="3" fill="#402C60"/><circle cx="22.7" cy="126.7" r="3" fill="#402C60"/><circle cx="30.7" cy="146.0" r="3" fill="#402C60"/><circle cx="169.3" cy="66.0" r="3" fill="#402C60"/><circle cx="177.3" cy="85.3" r="3" fill="#402C60"/><circle cx="180.0" cy="106.0" r="3" fill="#402C60"/><circle cx="177.3" cy="126.7" r="3" fill="#402C60"/><circle cx="169.3" cy="146.0" r="3" fill="#402C60"/><path id="topArc" d="M 33.7 61.3 A 80 80 0 0 1 166.3 61.3" fill="none"/><path id="botArc" d="M 28.7 154.1 A 86 86 0 0 0 171.3 154.1" fill="none"/><text font-family="Georgia,serif" font-size="34" font-weight="700" fill="#402C60" letter-spacing="1"><textPath href="#topArc" startOffset="50%" text-anchor="middle">Veresk</textPath></text><text font-family="Georgia,serif" font-style="italic" font-size="15.5" fill="#402C60" letter-spacing="1.5"><textPath href="#botArc" startOffset="50%" text-anchor="middle">trail of happiness</textPath></text></g></defs></svg>
+
+<!-- BOOT: пока проверяем сохранённую сессию -->
+<div id="authBoot" class="auth-boot" aria-live="polite" aria-busy="true">
+  <div class="auth-boot-logo" aria-hidden="true">
+    <svg viewBox="0 0 200 205"><use href="#veresk"/></svg>
+  </div>
+  <div class="auth-boot-spinner" aria-hidden="true"></div>
+  <p class="auth-boot-label">Загрузка…</p>
+</div>
 
 <!-- LOGIN -->
 <div id="loginScreen" class="login-wrap">
@@ -64,7 +89,7 @@
       Создать рассылку
     </button>
     <nav class="nav">
-      <button class="nav-item active" data-nav="home" onclick="go('home')"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="m3 11 18-8-8 18-2-8z"/></svg>Рассылки</button>
+      <button class="nav-item active" data-nav="home" onclick="go('home')"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="m3 11 18-8-8 18-2-8z"/></svg>Главная</button>
       <button class="nav-item" data-nav="clients" onclick="go('clients')"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="9" cy="8" r="3"/><path d="M3 20c0-3 3-5 6-5s6 2 6 5"/><path d="M16 6a3 3 0 010 6"/><path d="M18 20c0-2-.6-3.5-2-4.5"/></svg>Клиенты</button>
       <button class="nav-item" data-nav="chats" onclick="go('chats')"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M21 11.5a8.4 8.4 0 01-.9 3.8 8.5 8.5 0 01-7.6 4.7 8.4 8.4 0 01-3.8-.9L3 21l1.9-5.7a8.4 8.4 0 01-.9-3.8 8.5 8.5 0 014.7-7.6 8.4 8.4 0 013.8-.9h.5a8.5 8.5 0 018 8v.5z"/></svg>Чаты</button>
       <button class="nav-item" data-nav="bots" onclick="go('bots')"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3" y="11" width="18" height="10" rx="2"/><circle cx="8.5" cy="16" r="1"/><circle cx="15.5" cy="16" r="1"/><path d="M12 11V7"/><path d="M8 7h8"/></svg>Боты</button>
@@ -112,7 +137,7 @@
         </button>
       </div>
       <div class="head-row dk-flex">
-        <div><h1>Рассылки</h1><p>Массовые сообщения и поводы написать клиентам в Telegram и MAX</p></div>
+        <div><h1>Главная</h1><p>Массовые сообщения и поводы написать клиентам в Telegram и MAX</p></div>
         <div class="spacer"></div>
         <button class="btn primary big" onclick="go('compose')"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M12 5v14M5 12h14"/></svg>Создать рассылку</button>
       </div>
@@ -1079,7 +1104,7 @@
     </button>
     <button type="button" class="bnav-item active" data-nav="home" onclick="go('home')">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="m3 11 18-8-8 18-2-8z"/></svg>
-      <span>Рассылки</span>
+      <span>Главная</span>
     </button>
     <button type="button" class="bnav-item" data-nav="aichat" onclick="go('aichat')">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M21 15a2 2 0 01-2 2H7l-4 4V5a2 2 0 012-2h14a2 2 0 012 2z"/></svg>
@@ -1129,8 +1154,8 @@
   </div>
 </div>
 
-<script>window.__VERESK_BUILD__="staff-modal-v38";</script>
+<script>window.__VERESK_BUILD__="auth-boot-v39";</script>
 <script src="js/api.js?v=35"></script>
-<script src="js/app.js?v=44"></script>
+<script src="js/app.js?v=46"></script>
 </body>
 </html>

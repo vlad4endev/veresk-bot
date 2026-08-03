@@ -1530,7 +1530,7 @@ ADMIN_USER_ROLES = ("admin", "employee")
 
 # Разделы панели, которыми можно управлять для сотрудника
 ADMIN_PERMISSION_DEFS: tuple[tuple[str, str], ...] = (
-    ("home", "Рассылки"),
+    ("home", "Главная"),
     ("clients", "Клиенты"),
     ("chats", "Чаты"),
     ("bots", "Боты"),
