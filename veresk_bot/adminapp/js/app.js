@@ -1470,26 +1470,19 @@
   const staffState = {
     items: [],
     envAdmin: null,
-    selectedKey: null, // "u:12" | "env"
+    selectedId: null,
     search: "",
-    me: null,
+    pendingPassword: null,
   };
 
-  function staffKey(u) {
-    if (!u) return null;
-    if (u.source === "env" || u.id == null) return "env";
-    return "u:" + u.id;
-  }
-
   function fmtStaffDate(iso) {
-    if (!iso) return "—";
+    if (!iso) return "ещё не входил";
     try {
       const d = new Date(iso);
       if (Number.isNaN(d.getTime())) return String(iso).slice(0, 16);
       return d.toLocaleString("ru-RU", {
-        day: "2-digit",
+        day: "numeric",
         month: "short",
-        year: "numeric",
         hour: "2-digit",
         minute: "2-digit",
       });
@@ -1500,203 +1493,152 @@
 
   function staffDisplayName(u) {
     if (!u) return "—";
-    if (u.source === "env") return u.name || "Системный администратор";
     return u.name || formatPhoneDisplay(u.phone) || "Без имени";
   }
 
-  function staffSubtitle(u) {
-    if (!u) return "";
-    if (u.source === "env") return "Логин: " + (u.username || "admin") + " · из .env";
-    const phone = formatPhoneDisplay(u.phone) || u.phone || "";
-    return (u.role_label || "Сотрудник") + (phone ? " · " + phone : "");
-  }
-
   function filteredStaffItems() {
-    const q = (staffState.search || "").trim().toLowerCase().replace(/\s+/g, "");
-    const rows = [];
-    if (staffState.envAdmin) rows.push({ ...staffState.envAdmin, source: "env" });
-    (staffState.items || []).forEach((u) => rows.push({ ...u, source: "db" }));
+    const q = (staffState.search || "").trim().toLowerCase();
+    const rows = staffState.items || [];
     if (!q) return rows;
+    const qDigits = q.replace(/\D/g, "");
     return rows.filter((u) => {
-      const blob = [
-        u.name,
-        u.phone,
-        u.username,
-        u.role_label,
-        formatPhoneDisplay(u.phone),
-      ]
-        .join(" ")
-        .toLowerCase()
-        .replace(/\s+/g, "");
-      return blob.includes(q) || blob.replace(/\D/g, "").includes(q.replace(/\D/g, ""));
+      const name = String(u.name || "").toLowerCase();
+      const phone = formatPhoneDisplay(u.phone) || u.phone || "";
+      const digits = String(u.phone || "").replace(/\D/g, "");
+      return name.includes(q) || phone.toLowerCase().includes(q) || (qDigits && digits.includes(qDigits));
     });
   }
 
   function selectedStaff() {
-    const key = staffState.selectedKey;
-    if (!key) return null;
-    if (key === "env") return staffState.envAdmin ? { ...staffState.envAdmin, source: "env" } : null;
-    const id = Number(String(key).replace(/^u:/, ""));
-    const u = (staffState.items || []).find((x) => Number(x.id) === id);
-    return u ? { ...u, source: "db" } : null;
+    if (staffState.selectedId == null) return null;
+    return (staffState.items || []).find((x) => Number(x.id) === Number(staffState.selectedId)) || null;
   }
 
   function renderStaffList() {
     const box = $("#staffList");
+    const toolbar = $("#staffToolbar");
+    const countEl = $("#staffCount");
     if (!box) return;
+    const total = (staffState.items || []).length;
+    if (toolbar) toolbar.hidden = total < 4;
+    const hint = $("#staffHint");
+    if (hint) hint.hidden = total > 0;
+    if (countEl) countEl.textContent = total ? total + " " + (total === 1 ? "человек" : total < 5 ? "человека" : "человек") : "";
+
     const items = filteredStaffItems();
+    if (!total) {
+      box.innerHTML = `<div class="staff-empty">
+        <div class="t">Пока никого нет</div>
+        <p>Добавьте первого сотрудника — он сможет входить по телефону.</p>
+        <button type="button" class="btn primary" id="staffEmptyAdd">Добавить сотрудника</button>
+      </div>`;
+      $("#staffEmptyAdd")?.addEventListener("click", () => openStaffCreateModal(true));
+      renderStaffCard();
+      renderStaffSysNote();
+      return;
+    }
     if (!items.length) {
-      box.innerHTML = `<div class="staff-list-empty"><div class="t">Никого не найдено</div>Измените поиск или добавьте сотрудника</div>`;
+      box.innerHTML = `<div class="staff-empty"><div class="t">Никого не найдено</div><p>Попробуйте другой запрос</p></div>`;
+      renderStaffCard();
       return;
     }
     box.innerHTML = items
       .map((u) => {
-        const key = staffKey(u);
-        const on = key === staffState.selectedKey ? "on" : "";
-        const active = u.is_active !== false;
-        const avClass = [
-          "av",
-          u.source === "env" ? "env" : "",
-          active ? "" : "off",
-        ]
-          .filter(Boolean)
-          .join(" ");
-        return `<button type="button" class="staff-item ${on}" data-staff-key="${esc(key)}">
-          <div class="${avClass}">${esc(initials(staffDisplayName(u)))}</div>
+        const active = !!u.is_active;
+        const phone = formatPhoneDisplay(u.phone) || u.phone || "—";
+        const on = Number(u.id) === Number(staffState.selectedId) ? "on" : "";
+        return `<button type="button" class="staff-person ${on} ${active ? "" : "off"}" data-staff-id="${esc(u.id)}">
+          <div class="av">${esc(initials(staffDisplayName(u)))}</div>
           <div class="meta">
             <div class="nm">${esc(staffDisplayName(u))}</div>
-            <div class="rl">${esc(staffSubtitle(u))}</div>
+            <div class="ph">${esc(phone)}</div>
           </div>
-          <span class="dot ${active ? "" : "off"}" title="${active ? "Активен" : "Отключён"}"></span>
+          <span class="st ${active ? "" : "off"}">${active ? "Может входить" : "Отключён"}</span>
+          <span class="chev" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 6l6 6-6 6"/></svg></span>
         </button>`;
       })
       .join("");
-    box.querySelectorAll("[data-staff-key]").forEach((btn) => {
-      btn.addEventListener("click", () => selectStaff(btn.dataset.staffKey));
-    });
-  }
-
-  function renderStaffCard() {
-    const empty = $("#staffCardEmpty");
-    const card = $("#staffCard");
-    const layout = $("#staffLayout");
-    const u = selectedStaff();
-    if (!u) {
-      if (empty) empty.hidden = false;
-      if (card) {
-        card.hidden = true;
-        card.innerHTML = "";
-      }
-      layout?.classList.remove("card-open");
-      return;
-    }
-    if (empty) empty.hidden = true;
-    if (card) card.hidden = false;
-    layout?.classList.add("card-open");
-
-    if (u.source === "env") {
-      card.innerHTML = `
-        <button type="button" class="btn staff-back-mobile" id="staffBackBtn">← К списку</button>
-        <div class="staff-card-head">
-          <div class="av env">${esc(initials(staffDisplayName(u)))}</div>
-          <div class="info">
-            <div class="nm">${esc(staffDisplayName(u))}</div>
-            <div class="phone">Логин: ${esc(u.username || "admin")}</div>
-            <div class="staff-card-badges">
-              <span class="badge-soft ok">Активен</span>
-              <span class="badge-soft">${esc(u.role_label || "Администратор")}</span>
-            </div>
-          </div>
-        </div>
-        <div class="staff-card-body">
-          <p class="staff-env-note">
-            Системный аккаунт из <code>.env</code>
-            (<code>ADMIN_USERNAME</code> / <code>ADMIN_PASSWORD</code>.
-            Обычных сотрудников создавайте кнопкой «Добавить» — они входят по номеру телефона.
-          </p>
-        </div>`;
-      $("#staffBackBtn")?.addEventListener("click", () => {
-        staffState.selectedKey = null;
+    box.querySelectorAll("[data-staff-id]").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        const id = Number(btn.dataset.staffId);
+        staffState.selectedId = Number(staffState.selectedId) === id ? null : id;
+        staffState.pendingPassword = null;
         renderStaffList();
         renderStaffCard();
       });
+    });
+    renderStaffCard();
+    renderStaffSysNote();
+  }
+
+  function renderStaffSysNote() {
+    const el = $("#staffSysNote");
+    if (!el) return;
+    if (!staffState.envAdmin) {
+      el.hidden = true;
+      el.innerHTML = "";
       return;
     }
+    el.hidden = false;
+    el.innerHTML = `Ещё есть <b>основной вход</b> на сервере (логин <b>${esc(staffState.envAdmin.username || "admin")}</b>) — он всегда работает.`;
+  }
 
-    const phoneDisp = formatPhoneDisplay(u.phone) || u.phone || "—";
+  function renderStaffCard() {
+    const card = $("#staffCard");
+    if (!card) return;
+    const u = selectedStaff();
+    if (!u) {
+      card.hidden = true;
+      card.innerHTML = "";
+      return;
+    }
+    card.hidden = false;
+    const phone = formatPhoneDisplay(u.phone) || u.phone || "—";
     const active = !!u.is_active;
+    const pending = staffState.pendingPassword;
     card.innerHTML = `
-      <button type="button" class="btn staff-back-mobile" id="staffBackBtn">← К списку</button>
-      <div class="staff-card-head">
+      <div class="staff-detail-head">
         <div class="av">${esc(initials(staffDisplayName(u)))}</div>
         <div class="info">
           <div class="nm">${esc(staffDisplayName(u))}</div>
-          <div class="phone">${esc(phoneDisp)}</div>
-          <div class="staff-card-badges">
-            <span class="badge-soft ${active ? "ok" : ""}">${active ? "Активен" : "Отключён"}</span>
-            <span class="badge-soft">${esc(u.role_label || "Сотрудник")}</span>
-          </div>
+          <div class="ph">${esc(phone)}</div>
         </div>
+        <button type="button" class="close" id="staffCloseCard" aria-label="Закрыть">✕</button>
       </div>
-      <div class="staff-card-body">
-        <div class="staff-fields">
-          <label class="field">
-            <span>Имя</span>
-            <input type="text" id="staffEditName" value="${esc(u.name || "")}" autocomplete="name">
-          </label>
-          <label class="field">
-            <span>Роль</span>
-            <select id="staffEditRole">
-              <option value="employee" ${u.role === "employee" ? "selected" : ""}>Сотрудник</option>
-              <option value="admin" ${u.role === "admin" ? "selected" : ""}>Администратор</option>
-            </select>
-          </label>
-          <label class="field" style="grid-column:1/-1">
-            <span>Телефон (логин)</span>
-            <input type="text" value="${esc(phoneDisp)}" disabled>
-          </label>
-        </div>
-        <div class="staff-meta-grid">
-          <div><div class="mk">Создан</div><div class="mv">${esc(fmtStaffDate(u.created_at))}</div></div>
-          <div><div class="mk">Последний вход</div><div class="mv">${esc(fmtStaffDate(u.last_login_at))}</div></div>
+      <div class="staff-detail-body">
+        <label class="field">
+          <span>Имя</span>
+          <input type="text" id="staffEditName" value="${esc(u.name || "")}" autocomplete="name">
+        </label>
+        <div class="staff-facts">
+          <span>Телефон: <b>${esc(phone)}</b></span>
+          <span>Входил: <b>${esc(fmtStaffDate(u.last_login_at))}</b></span>
         </div>
         <div class="staff-pass-box">
-          <div class="ttl">Пароль</div>
-          <div class="sub">Старый пароль не показывается. Можно сгенерировать новый и сразу скопировать.</div>
-          <div class="staff-pass-row">
-            <input type="text" id="staffResetPass" placeholder="Новый пароль" autocomplete="new-password" spellcheck="false">
-            <button type="button" class="btn" id="staffCardGenPass">Сгенерировать</button>
-            <button type="button" class="btn primary" id="staffCardResetPass">Сбросить</button>
-          </div>
-          <div class="staff-pass-reveal" id="staffPassReveal" hidden>
-            <span>Новый пароль: <code id="staffPassRevealVal"></code></span>
-            <button type="button" class="btn btn-sm" id="staffPassCopy">Копировать</button>
+          <div class="ttl">Пароль для входа</div>
+          <div class="sub">Старый пароль скрыт. Можно выдать новый и сразу скопировать.</div>
+          <button type="button" class="btn primary" id="staffCardResetPass">Выдать новый пароль</button>
+          <div class="staff-pass-reveal" id="staffPassReveal" ${pending ? "" : "hidden"}>
+            <div>
+              <div class="lbl">Новый пароль — передайте сотруднику</div>
+              <code id="staffPassRevealVal">${esc(pending || "")}</code>
+            </div>
+            <button type="button" class="btn" id="staffPassCopy">Копировать</button>
           </div>
         </div>
-        <div class="staff-card-actions">
-          <button type="button" class="btn" id="staffToggleActive">${active ? "Отключить" : "Включить"}</button>
+        <div class="staff-actions">
+          <button type="button" class="btn" id="staffToggleActive">${active ? "Отключить вход" : "Включить вход"}</button>
           <button type="button" class="btn danger" id="staffDeleteBtn">Удалить</button>
+          <span class="spacer"></span>
           <button type="button" class="btn primary" id="staffSaveBtn">Сохранить</button>
         </div>
         <div class="form-status" id="staffCardStatus"></div>
       </div>`;
 
-    $("#staffBackBtn")?.addEventListener("click", () => {
-      staffState.selectedKey = null;
+    $("#staffCloseCard")?.addEventListener("click", () => {
+      staffState.selectedId = null;
+      staffState.pendingPassword = null;
       renderStaffList();
-      renderStaffCard();
-    });
-    $("#staffCardGenPass")?.addEventListener("click", async () => {
-      try {
-        const res = await AdminAPI.generatePassword();
-        const inp = $("#staffResetPass");
-        if (inp) {
-          inp.value = res.password || "";
-          inp.select();
-        }
-      } catch (_) {
-        setStaffCardStatus("Не удалось сгенерировать пароль", true);
-      }
     });
     $("#staffCardResetPass")?.addEventListener("click", () => resetStaffPassword(u.id));
     $("#staffPassCopy")?.addEventListener("click", () => {
@@ -1704,10 +1646,9 @@
       if (val) copyText(val);
     });
     $("#staffSaveBtn")?.addEventListener("click", () => saveStaffUser(u.id));
-    $("#staffToggleActive")?.addEventListener("click", () =>
-      toggleStaffActive(u.id, !active)
-    );
+    $("#staffToggleActive")?.addEventListener("click", () => toggleStaffActive(u.id, !active));
     $("#staffDeleteBtn")?.addEventListener("click", () => deleteStaffUser(u.id));
+    if (pending) setStaffCardStatus("Скопируйте пароль и передайте сотруднику");
   }
 
   function setStaffCardStatus(text, isError) {
@@ -1720,16 +1661,10 @@
   async function copyText(text) {
     try {
       await navigator.clipboard.writeText(text);
-      setStaffCardStatus("Скопировано", false);
+      setStaffCardStatus("Пароль скопирован", false);
     } catch (_) {
-      setStaffCardStatus("Не удалось скопировать", true);
+      setStaffCardStatus("Не удалось скопировать — выделите вручную", true);
     }
-  }
-
-  function selectStaff(key) {
-    staffState.selectedKey = key || null;
-    renderStaffList();
-    renderStaffCard();
   }
 
   async function loadUsersPane() {
@@ -1737,23 +1672,17 @@
     if (!list) return;
     list.innerHTML = '<div class="loading">Загрузка…</div>';
     try {
-      const [users, me] = await Promise.all([AdminAPI.users(), AdminAPI.me()]);
+      const users = await AdminAPI.users();
       staffState.items = users.items || [];
       staffState.envAdmin = users.env_admin || null;
-      staffState.me = me;
       if (
-        staffState.selectedKey &&
-        staffState.selectedKey !== "env" &&
-        !staffState.items.some((u) => staffKey(u) === staffState.selectedKey)
+        staffState.selectedId != null &&
+        !staffState.items.some((u) => Number(u.id) === Number(staffState.selectedId))
       ) {
-        staffState.selectedKey = null;
-      }
-      if (!staffState.selectedKey) {
-        if (staffState.items.length) staffState.selectedKey = staffKey(staffState.items[0]);
-        else if (staffState.envAdmin) staffState.selectedKey = "env";
+        staffState.selectedId = null;
+        staffState.pendingPassword = null;
       }
       renderStaffList();
-      renderStaffCard();
     } catch (err) {
       if (err.status === 401) return showLogin();
       list.innerHTML = '<div class="empty-state">Не удалось загрузить</div>';
@@ -1766,7 +1695,7 @@
     modal.hidden = !show;
     if (show) {
       $("#staffCreateForm")?.reset();
-      $("#staffRole").value = "employee";
+      if ($("#staffRole")) $("#staffRole").value = "employee";
       $("#staffPassHint").hidden = true;
       $("#staffName")?.focus();
       generateStaffCreatePassword();
@@ -1782,7 +1711,7 @@
         $("#staffPassHint").hidden = false;
       }
     } catch (_) {
-      /* ignore — можно ввести вручную */
+      /* ignore */
     }
   }
 
@@ -1791,14 +1720,11 @@
     try {
       const res = await AdminAPI.updateUser(id, {
         name: $("#staffEditName")?.value?.trim() || "",
-        role: $("#staffEditRole")?.value || "employee",
       });
       const idx = staffState.items.findIndex((x) => Number(x.id) === Number(id));
       if (idx >= 0) staffState.items[idx] = res.user;
-      else staffState.items.push(res.user);
-      staffState.selectedKey = staffKey(res.user);
+      staffState.selectedId = res.user.id;
       renderStaffList();
-      renderStaffCard();
       setStaffCardStatus("Сохранено");
     } catch (err) {
       if (err.status === 401) return showLogin();
@@ -1812,50 +1738,41 @@
       const res = await AdminAPI.updateUser(id, { is_active: next });
       const idx = staffState.items.findIndex((x) => Number(x.id) === Number(id));
       if (idx >= 0) staffState.items[idx] = res.user;
-      staffState.selectedKey = staffKey(res.user);
+      staffState.selectedId = res.user.id;
       renderStaffList();
-      renderStaffCard();
-      setStaffCardStatus(next ? "Доступ включён" : "Доступ отключён");
+      setStaffCardStatus(next ? "Вход включён" : "Вход отключён");
     } catch (err) {
       if (err.status === 401) return showLogin();
-      setStaffCardStatus(err.data?.detail || "Не удалось изменить статус", true);
+      setStaffCardStatus(err.data?.detail || "Не удалось изменить", true);
     }
   }
 
   async function resetStaffPassword(id) {
-    const manual = $("#staffResetPass")?.value?.trim() || "";
-    setStaffCardStatus("Сбрасываю пароль…");
+    setStaffCardStatus("Создаю пароль…");
     try {
-      const res = await AdminAPI.resetUserPassword(id, manual ? { password: manual } : {});
-      const reveal = $("#staffPassReveal");
-      const val = $("#staffPassRevealVal");
-      if (reveal && val) {
-        val.textContent = res.password || "";
-        reveal.hidden = false;
-      }
-      if ($("#staffResetPass")) $("#staffResetPass").value = res.password || "";
-      setStaffCardStatus("Пароль обновлён — скопируйте его");
+      const res = await AdminAPI.resetUserPassword(id, {});
+      staffState.pendingPassword = res.password || "";
+      const idx = staffState.items.findIndex((x) => Number(x.id) === Number(id));
+      if (idx >= 0 && res.user) staffState.items[idx] = res.user;
+      renderStaffCard();
+      setStaffCardStatus("Новый пароль готов — скопируйте");
     } catch (err) {
       if (err.status === 401) return showLogin();
-      setStaffCardStatus(err.data?.detail || "Не удалось сбросить пароль", true);
+      setStaffCardStatus(err.data?.detail || "Не удалось выдать пароль", true);
     }
   }
 
   async function deleteStaffUser(id) {
     const u = selectedStaff();
     const label = staffDisplayName(u) || "сотрудника";
-    if (!confirm(`Удалить ${label}? Вход по этому телефону станет недоступен.`)) return;
+    if (!confirm(`Удалить ${label}? Войти с этим телефоном больше нельзя.`)) return;
     setStaffCardStatus("Удаляю…");
     try {
       await AdminAPI.deleteUser(id);
       staffState.items = staffState.items.filter((x) => Number(x.id) !== Number(id));
-      staffState.selectedKey = staffState.items.length
-        ? staffKey(staffState.items[0])
-        : staffState.envAdmin
-          ? "env"
-          : null;
+      staffState.selectedId = null;
+      staffState.pendingPassword = null;
       renderStaffList();
-      renderStaffCard();
     } catch (err) {
       if (err.status === 401) return showLogin();
       setStaffCardStatus(err.data?.detail || "Не удалось удалить", true);
@@ -1881,15 +1798,14 @@
     e.preventDefault();
     const name = $("#staffName")?.value?.trim() || "";
     const phone = $("#staffPhone")?.value?.trim() || "";
-    const role = $("#staffRole")?.value || "employee";
     const password = $("#staffPassword")?.value?.trim() || "";
     if (!phoneNationalDigits(phone)) {
-      alert("Укажите корректный номер телефона");
+      alert("Укажите номер телефона");
       $("#staffPhone")?.focus();
       return;
     }
     if (!password || password.length < 6) {
-      alert("Сгенерируйте или введите пароль (от 6 символов)");
+      alert("Сгенерируйте или введите пароль");
       $("#staffPassword")?.focus();
       return;
     }
@@ -1899,26 +1815,19 @@
       const res = await AdminAPI.createUser({
         name,
         phone,
-        role,
+        role: "employee",
         password,
         return_password: true,
       });
       staffState.items.unshift(res.user);
-      staffState.selectedKey = staffKey(res.user);
+      staffState.selectedId = res.user.id;
+      staffState.pendingPassword = res.password || password;
       openStaffCreateModal(false);
       renderStaffList();
-      renderStaffCard();
-      // Показать пароль на карточке сразу после создания
       setTimeout(() => {
-        const reveal = $("#staffPassReveal");
-        const val = $("#staffPassRevealVal");
-        if (reveal && val && res.password) {
-          val.textContent = res.password;
-          reveal.hidden = false;
-          if ($("#staffResetPass")) $("#staffResetPass").value = res.password;
-          setStaffCardStatus("Сотрудник создан — скопируйте пароль");
-        }
-      }, 0);
+        const card = $("#staffCard");
+        if (card) card.scrollIntoView({ behavior: "smooth", block: "nearest" });
+      }, 50);
     } catch (err) {
       if (err.status === 401) return showLogin();
       alert(err.data?.detail || "Не удалось создать сотрудника");

@@ -24,7 +24,7 @@
     <div class="login-field">
       <label for="loginUsername">Логин</label>
       <input type="text" id="loginUsername" name="username" placeholder="+7(999)999-99-99" autocomplete="username" autocapitalize="none" autocorrect="off" spellcheck="false" required enterkeyhint="next">
-      <div class="login-hint">Номер телефона сотрудника или системный логин</div>
+      <div class="login-hint">Телефон сотрудника или основной логин</div>
     </div>
     <div class="login-field">
       <label for="loginPassword">Пароль</label>
@@ -287,7 +287,7 @@
           </button>
           <button type="button" class="settings-tab" data-settings="users">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="8" r="3"/><path d="M5 20c0-4 3-6 7-6s7 2 7 6"/></svg>
-            <span class="settings-tab-text"><span class="settings-tab-t">Доступ</span><span class="settings-tab-s">Сотрудники</span></span>
+            <span class="settings-tab-text"><span class="settings-tab-t">Доступ</span><span class="settings-tab-s">Кто входит</span></span>
           </button>
           <button type="button" class="settings-tab" data-settings="logs">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><path d="M14 2v6h6M16 13H8M16 17H8M10 9H8"/></svg>
@@ -554,34 +554,31 @@
           <div class="settings-pane" id="set-users" data-pane="users">
             <div class="set-hero">
               <div>
-                <h3>Сотрудники</h3>
-                <p>Вход в панель по номеру телефона. Пароль можно сгенерировать в один клик.</p>
+                <h3>Доступ</h3>
+                <p>Кто может входить в панель. Логин — номер телефона.</p>
               </div>
               <button type="button" class="btn primary" id="staffAddBtn">
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16"><path d="M12 5v14M5 12h14"/></svg>
-                Добавить
+                Добавить сотрудника
               </button>
             </div>
 
-            <div class="staff-layout" id="staffLayout">
-              <div class="staff-sidebar">
-                <div class="staff-search">
-                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="M20 20l-3-3"/></svg>
-                  <input type="search" id="staffSearch" placeholder="Поиск по имени или телефону" autocomplete="off">
-                </div>
-                <div class="staff-list" id="staffList"></div>
-              </div>
-              <div class="staff-card-wrap" id="staffCardWrap">
-                <div class="staff-card-empty" id="staffCardEmpty">
-                  <div class="staff-card-empty-icon">
-                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><circle cx="12" cy="8" r="3.2"/><path d="M5.5 19.5c0-3.6 2.9-5.5 6.5-5.5s6.5 1.9 6.5 5.5"/></svg>
-                  </div>
-                  <div class="t">Выберите сотрудника</div>
-                  <p>Или добавьте нового — логин будет номер телефона.</p>
-                </div>
-                <div class="staff-card" id="staffCard" hidden></div>
-              </div>
+            <div class="staff-hint" id="staffHint">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><path d="M12 8v.01M12 11v5"/></svg>
+              <div>Создайте сотрудника → передайте ему телефон и пароль → он входит в панель.</div>
             </div>
+
+            <div class="staff-toolbar" id="staffToolbar" hidden>
+              <div class="staff-search">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="M20 20l-3-3"/></svg>
+                <input type="search" id="staffSearch" placeholder="Найти по имени или телефону" autocomplete="off">
+              </div>
+              <div class="staff-count" id="staffCount"></div>
+            </div>
+
+            <div class="staff-people" id="staffList"></div>
+            <div class="staff-detail" id="staffCard" hidden></div>
+            <div class="staff-sys" id="staffSysNote" hidden></div>
           </div>
 
           <!-- Logs -->
@@ -790,35 +787,26 @@
             <h3 id="staffCreateTitle">Новый сотрудник</h3>
             <button type="button" class="btn" data-staff-close aria-label="Закрыть">✕</button>
           </div>
-          <p class="page-desc">Логин — номер телефона. Пароль можно сгенерировать кнопкой.</p>
+          <p class="page-desc">Он войдёт в панель по номеру телефона и паролю.</p>
           <form id="staffCreateForm" class="tg-new-form">
             <label class="field">
               <span>Имя</span>
-              <input type="text" id="staffName" placeholder="Анна Иванова" autocomplete="name" required>
+              <input type="text" id="staffName" placeholder="Анна" autocomplete="name" required>
             </label>
             <label class="field">
-              <span>Телефон (логин)</span>
+              <span>Телефон</span>
               <input type="tel" id="staffPhone" placeholder="+7(999)999-99-99" autocomplete="tel" inputmode="tel" required>
             </label>
-            <label class="field">
-              <span>Роль</span>
-              <select id="staffRole">
-                <option value="employee">Сотрудник</option>
-                <option value="admin">Администратор</option>
-              </select>
-            </label>
+            <input type="hidden" id="staffRole" value="employee">
             <label class="field">
               <span>Пароль</span>
               <div class="staff-pass-row">
-                <input type="text" id="staffPassword" placeholder="Сгенерируйте или введите" autocomplete="new-password" spellcheck="false" required>
-                <button type="button" class="btn" id="staffGenPassBtn" title="Сгенерировать пароль">
-                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16"><path d="M21 12a9 9 0 11-3-6.7"/><path d="M21 3v6h-6"/></svg>
-                  Сгенерировать
-                </button>
+                <input type="text" id="staffPassword" placeholder="Пароль" autocomplete="new-password" spellcheck="false" required>
+                <button type="button" class="btn" id="staffGenPassBtn" title="Сгенерировать пароль">Сгенерировать</button>
               </div>
             </label>
             <div class="staff-pass-hint" id="staffPassHint" hidden>
-              Скопируйте пароль сейчас — потом его не увидеть, только сбросить.
+              Скопируйте пароль и передайте сотруднику — потом его не увидеть.
             </div>
             <div class="tg-modal-actions">
               <button type="button" class="btn" data-staff-close>Отмена</button>
