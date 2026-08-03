@@ -130,10 +130,28 @@
     }, ADMIN_KEEPALIVE_MS);
   }
 
+  async function refreshSideUser() {
+    try {
+      const me = await AdminAPI.me();
+      const name =
+        me.name ||
+        formatPhoneDisplay(me.phone || me.username) ||
+        me.username ||
+        "Админ";
+      const role = me.role_label || (me.source === "env" ? "Системный" : "Veresk");
+      if ($("#sideUserName")) $("#sideUserName").textContent = name;
+      if ($("#sideUserRole")) $("#sideUserRole").textContent = role;
+      if ($("#sideUserAv")) $("#sideUserAv").textContent = initials(name);
+    } catch (_) {
+      /* ignore */
+    }
+  }
+
   async function showApp() {
     $("#loginScreen").classList.add("hidden");
     $("#appShell").classList.remove("hidden");
     startAdminKeepalive();
+    await refreshSideUser();
     await loadHome();
   }
 
@@ -236,6 +254,8 @@
     } catch (err) {
       if (err.status === 503) {
         showLoginError("Админка не настроена: задайте ADMIN_USERNAME и ADMIN_PASSWORD в .env");
+      } else if (err.status === 403) {
+        showLoginError("Доступ отключён. Обратитесь к администратору.");
       } else if (err.status === 401) {
         showLoginError("Неверный логин или пароль");
         $("#loginPassword").select();
@@ -1447,27 +1467,465 @@
     updateSettingsGlance(tgConfigured, tgCount);
   }
 
-  async function loadUsersPane() {
-    const box = $("#usersList");
-    if (!box) return;
-    box.innerHTML = '<div class="loading">Загрузка…</div>';
+  const staffState = {
+    items: [],
+    envAdmin: null,
+    selectedKey: null, // "u:12" | "env"
+    search: "",
+    me: null,
+  };
+
+  function staffKey(u) {
+    if (!u) return null;
+    if (u.source === "env" || u.id == null) return "env";
+    return "u:" + u.id;
+  }
+
+  function fmtStaffDate(iso) {
+    if (!iso) return "—";
     try {
-      const me = await AdminAPI.me();
-      const name = me.username || "admin";
-      const saved = localStorage.getItem("veresk_admin_login") || name;
-      box.innerHTML = `<div class="user-row">
-        <div class="av">${esc(initials(saved))}</div>
-        <div style="flex:1;min-width:0">
-          <div class="nm">${esc(saved)}</div>
-          <div class="rl">Администратор · вход из .env</div>
-        </div>
-        <span class="badge-soft ok">Активен</span>
-      </div>`;
-    } catch (err) {
-      if (err.status === 401) return showLogin();
-      box.innerHTML = '<div class="empty-state">Не удалось загрузить</div>';
+      const d = new Date(iso);
+      if (Number.isNaN(d.getTime())) return String(iso).slice(0, 16);
+      return d.toLocaleString("ru-RU", {
+        day: "2-digit",
+        month: "short",
+        year: "numeric",
+        hour: "2-digit",
+        minute: "2-digit",
+      });
+    } catch (_) {
+      return String(iso).slice(0, 16);
     }
   }
+
+  function staffDisplayName(u) {
+    if (!u) return "—";
+    if (u.source === "env") return u.name || "Системный администратор";
+    return u.name || formatPhoneDisplay(u.phone) || "Без имени";
+  }
+
+  function staffSubtitle(u) {
+    if (!u) return "";
+    if (u.source === "env") return "Логин: " + (u.username || "admin") + " · из .env";
+    const phone = formatPhoneDisplay(u.phone) || u.phone || "";
+    return (u.role_label || "Сотрудник") + (phone ? " · " + phone : "");
+  }
+
+  function filteredStaffItems() {
+    const q = (staffState.search || "").trim().toLowerCase().replace(/\s+/g, "");
+    const rows = [];
+    if (staffState.envAdmin) rows.push({ ...staffState.envAdmin, source: "env" });
+    (staffState.items || []).forEach((u) => rows.push({ ...u, source: "db" }));
+    if (!q) return rows;
+    return rows.filter((u) => {
+      const blob = [
+        u.name,
+        u.phone,
+        u.username,
+        u.role_label,
+        formatPhoneDisplay(u.phone),
+      ]
+        .join(" ")
+        .toLowerCase()
+        .replace(/\s+/g, "");
+      return blob.includes(q) || blob.replace(/\D/g, "").includes(q.replace(/\D/g, ""));
+    });
+  }
+
+  function selectedStaff() {
+    const key = staffState.selectedKey;
+    if (!key) return null;
+    if (key === "env") return staffState.envAdmin ? { ...staffState.envAdmin, source: "env" } : null;
+    const id = Number(String(key).replace(/^u:/, ""));
+    const u = (staffState.items || []).find((x) => Number(x.id) === id);
+    return u ? { ...u, source: "db" } : null;
+  }
+
+  function renderStaffList() {
+    const box = $("#staffList");
+    if (!box) return;
+    const items = filteredStaffItems();
+    if (!items.length) {
+      box.innerHTML = `<div class="staff-list-empty"><div class="t">Никого не найдено</div>Измените поиск или добавьте сотрудника</div>`;
+      return;
+    }
+    box.innerHTML = items
+      .map((u) => {
+        const key = staffKey(u);
+        const on = key === staffState.selectedKey ? "on" : "";
+        const active = u.is_active !== false;
+        const avClass = [
+          "av",
+          u.source === "env" ? "env" : "",
+          active ? "" : "off",
+        ]
+          .filter(Boolean)
+          .join(" ");
+        return `<button type="button" class="staff-item ${on}" data-staff-key="${esc(key)}">
+          <div class="${avClass}">${esc(initials(staffDisplayName(u)))}</div>
+          <div class="meta">
+            <div class="nm">${esc(staffDisplayName(u))}</div>
+            <div class="rl">${esc(staffSubtitle(u))}</div>
+          </div>
+          <span class="dot ${active ? "" : "off"}" title="${active ? "Активен" : "Отключён"}"></span>
+        </button>`;
+      })
+      .join("");
+    box.querySelectorAll("[data-staff-key]").forEach((btn) => {
+      btn.addEventListener("click", () => selectStaff(btn.dataset.staffKey));
+    });
+  }
+
+  function renderStaffCard() {
+    const empty = $("#staffCardEmpty");
+    const card = $("#staffCard");
+    const layout = $("#staffLayout");
+    const u = selectedStaff();
+    if (!u) {
+      if (empty) empty.hidden = false;
+      if (card) {
+        card.hidden = true;
+        card.innerHTML = "";
+      }
+      layout?.classList.remove("card-open");
+      return;
+    }
+    if (empty) empty.hidden = true;
+    if (card) card.hidden = false;
+    layout?.classList.add("card-open");
+
+    if (u.source === "env") {
+      card.innerHTML = `
+        <button type="button" class="btn staff-back-mobile" id="staffBackBtn">← К списку</button>
+        <div class="staff-card-head">
+          <div class="av env">${esc(initials(staffDisplayName(u)))}</div>
+          <div class="info">
+            <div class="nm">${esc(staffDisplayName(u))}</div>
+            <div class="phone">Логин: ${esc(u.username || "admin")}</div>
+            <div class="staff-card-badges">
+              <span class="badge-soft ok">Активен</span>
+              <span class="badge-soft">${esc(u.role_label || "Администратор")}</span>
+            </div>
+          </div>
+        </div>
+        <div class="staff-card-body">
+          <p class="staff-env-note">
+            Системный аккаунт из <code>.env</code>
+            (<code>ADMIN_USERNAME</code> / <code>ADMIN_PASSWORD</code>.
+            Обычных сотрудников создавайте кнопкой «Добавить» — они входят по номеру телефона.
+          </p>
+        </div>`;
+      $("#staffBackBtn")?.addEventListener("click", () => {
+        staffState.selectedKey = null;
+        renderStaffList();
+        renderStaffCard();
+      });
+      return;
+    }
+
+    const phoneDisp = formatPhoneDisplay(u.phone) || u.phone || "—";
+    const active = !!u.is_active;
+    card.innerHTML = `
+      <button type="button" class="btn staff-back-mobile" id="staffBackBtn">← К списку</button>
+      <div class="staff-card-head">
+        <div class="av">${esc(initials(staffDisplayName(u)))}</div>
+        <div class="info">
+          <div class="nm">${esc(staffDisplayName(u))}</div>
+          <div class="phone">${esc(phoneDisp)}</div>
+          <div class="staff-card-badges">
+            <span class="badge-soft ${active ? "ok" : ""}">${active ? "Активен" : "Отключён"}</span>
+            <span class="badge-soft">${esc(u.role_label || "Сотрудник")}</span>
+          </div>
+        </div>
+      </div>
+      <div class="staff-card-body">
+        <div class="staff-fields">
+          <label class="field">
+            <span>Имя</span>
+            <input type="text" id="staffEditName" value="${esc(u.name || "")}" autocomplete="name">
+          </label>
+          <label class="field">
+            <span>Роль</span>
+            <select id="staffEditRole">
+              <option value="employee" ${u.role === "employee" ? "selected" : ""}>Сотрудник</option>
+              <option value="admin" ${u.role === "admin" ? "selected" : ""}>Администратор</option>
+            </select>
+          </label>
+          <label class="field" style="grid-column:1/-1">
+            <span>Телефон (логин)</span>
+            <input type="text" value="${esc(phoneDisp)}" disabled>
+          </label>
+        </div>
+        <div class="staff-meta-grid">
+          <div><div class="mk">Создан</div><div class="mv">${esc(fmtStaffDate(u.created_at))}</div></div>
+          <div><div class="mk">Последний вход</div><div class="mv">${esc(fmtStaffDate(u.last_login_at))}</div></div>
+        </div>
+        <div class="staff-pass-box">
+          <div class="ttl">Пароль</div>
+          <div class="sub">Старый пароль не показывается. Можно сгенерировать новый и сразу скопировать.</div>
+          <div class="staff-pass-row">
+            <input type="text" id="staffResetPass" placeholder="Новый пароль" autocomplete="new-password" spellcheck="false">
+            <button type="button" class="btn" id="staffCardGenPass">Сгенерировать</button>
+            <button type="button" class="btn primary" id="staffCardResetPass">Сбросить</button>
+          </div>
+          <div class="staff-pass-reveal" id="staffPassReveal" hidden>
+            <span>Новый пароль: <code id="staffPassRevealVal"></code></span>
+            <button type="button" class="btn btn-sm" id="staffPassCopy">Копировать</button>
+          </div>
+        </div>
+        <div class="staff-card-actions">
+          <button type="button" class="btn" id="staffToggleActive">${active ? "Отключить" : "Включить"}</button>
+          <button type="button" class="btn danger" id="staffDeleteBtn">Удалить</button>
+          <button type="button" class="btn primary" id="staffSaveBtn">Сохранить</button>
+        </div>
+        <div class="form-status" id="staffCardStatus"></div>
+      </div>`;
+
+    $("#staffBackBtn")?.addEventListener("click", () => {
+      staffState.selectedKey = null;
+      renderStaffList();
+      renderStaffCard();
+    });
+    $("#staffCardGenPass")?.addEventListener("click", async () => {
+      try {
+        const res = await AdminAPI.generatePassword();
+        const inp = $("#staffResetPass");
+        if (inp) {
+          inp.value = res.password || "";
+          inp.select();
+        }
+      } catch (_) {
+        setStaffCardStatus("Не удалось сгенерировать пароль", true);
+      }
+    });
+    $("#staffCardResetPass")?.addEventListener("click", () => resetStaffPassword(u.id));
+    $("#staffPassCopy")?.addEventListener("click", () => {
+      const val = $("#staffPassRevealVal")?.textContent || "";
+      if (val) copyText(val);
+    });
+    $("#staffSaveBtn")?.addEventListener("click", () => saveStaffUser(u.id));
+    $("#staffToggleActive")?.addEventListener("click", () =>
+      toggleStaffActive(u.id, !active)
+    );
+    $("#staffDeleteBtn")?.addEventListener("click", () => deleteStaffUser(u.id));
+  }
+
+  function setStaffCardStatus(text, isError) {
+    const el = $("#staffCardStatus");
+    if (!el) return;
+    el.textContent = text || "";
+    el.className = "form-status" + (text ? (isError ? " err" : " ok") : "");
+  }
+
+  async function copyText(text) {
+    try {
+      await navigator.clipboard.writeText(text);
+      setStaffCardStatus("Скопировано", false);
+    } catch (_) {
+      setStaffCardStatus("Не удалось скопировать", true);
+    }
+  }
+
+  function selectStaff(key) {
+    staffState.selectedKey = key || null;
+    renderStaffList();
+    renderStaffCard();
+  }
+
+  async function loadUsersPane() {
+    const list = $("#staffList");
+    if (!list) return;
+    list.innerHTML = '<div class="loading">Загрузка…</div>';
+    try {
+      const [users, me] = await Promise.all([AdminAPI.users(), AdminAPI.me()]);
+      staffState.items = users.items || [];
+      staffState.envAdmin = users.env_admin || null;
+      staffState.me = me;
+      if (
+        staffState.selectedKey &&
+        staffState.selectedKey !== "env" &&
+        !staffState.items.some((u) => staffKey(u) === staffState.selectedKey)
+      ) {
+        staffState.selectedKey = null;
+      }
+      if (!staffState.selectedKey) {
+        if (staffState.items.length) staffState.selectedKey = staffKey(staffState.items[0]);
+        else if (staffState.envAdmin) staffState.selectedKey = "env";
+      }
+      renderStaffList();
+      renderStaffCard();
+    } catch (err) {
+      if (err.status === 401) return showLogin();
+      list.innerHTML = '<div class="empty-state">Не удалось загрузить</div>';
+    }
+  }
+
+  function openStaffCreateModal(show) {
+    const modal = $("#staffCreateModal");
+    if (!modal) return;
+    modal.hidden = !show;
+    if (show) {
+      $("#staffCreateForm")?.reset();
+      $("#staffRole").value = "employee";
+      $("#staffPassHint").hidden = true;
+      $("#staffName")?.focus();
+      generateStaffCreatePassword();
+    }
+  }
+
+  async function generateStaffCreatePassword() {
+    try {
+      const res = await AdminAPI.generatePassword();
+      const inp = $("#staffPassword");
+      if (inp) {
+        inp.value = res.password || "";
+        $("#staffPassHint").hidden = false;
+      }
+    } catch (_) {
+      /* ignore — можно ввести вручную */
+    }
+  }
+
+  async function saveStaffUser(id) {
+    setStaffCardStatus("Сохраняю…");
+    try {
+      const res = await AdminAPI.updateUser(id, {
+        name: $("#staffEditName")?.value?.trim() || "",
+        role: $("#staffEditRole")?.value || "employee",
+      });
+      const idx = staffState.items.findIndex((x) => Number(x.id) === Number(id));
+      if (idx >= 0) staffState.items[idx] = res.user;
+      else staffState.items.push(res.user);
+      staffState.selectedKey = staffKey(res.user);
+      renderStaffList();
+      renderStaffCard();
+      setStaffCardStatus("Сохранено");
+    } catch (err) {
+      if (err.status === 401) return showLogin();
+      setStaffCardStatus(err.data?.detail || "Не удалось сохранить", true);
+    }
+  }
+
+  async function toggleStaffActive(id, next) {
+    setStaffCardStatus(next ? "Включаю…" : "Отключаю…");
+    try {
+      const res = await AdminAPI.updateUser(id, { is_active: next });
+      const idx = staffState.items.findIndex((x) => Number(x.id) === Number(id));
+      if (idx >= 0) staffState.items[idx] = res.user;
+      staffState.selectedKey = staffKey(res.user);
+      renderStaffList();
+      renderStaffCard();
+      setStaffCardStatus(next ? "Доступ включён" : "Доступ отключён");
+    } catch (err) {
+      if (err.status === 401) return showLogin();
+      setStaffCardStatus(err.data?.detail || "Не удалось изменить статус", true);
+    }
+  }
+
+  async function resetStaffPassword(id) {
+    const manual = $("#staffResetPass")?.value?.trim() || "";
+    setStaffCardStatus("Сбрасываю пароль…");
+    try {
+      const res = await AdminAPI.resetUserPassword(id, manual ? { password: manual } : {});
+      const reveal = $("#staffPassReveal");
+      const val = $("#staffPassRevealVal");
+      if (reveal && val) {
+        val.textContent = res.password || "";
+        reveal.hidden = false;
+      }
+      if ($("#staffResetPass")) $("#staffResetPass").value = res.password || "";
+      setStaffCardStatus("Пароль обновлён — скопируйте его");
+    } catch (err) {
+      if (err.status === 401) return showLogin();
+      setStaffCardStatus(err.data?.detail || "Не удалось сбросить пароль", true);
+    }
+  }
+
+  async function deleteStaffUser(id) {
+    const u = selectedStaff();
+    const label = staffDisplayName(u) || "сотрудника";
+    if (!confirm(`Удалить ${label}? Вход по этому телефону станет недоступен.`)) return;
+    setStaffCardStatus("Удаляю…");
+    try {
+      await AdminAPI.deleteUser(id);
+      staffState.items = staffState.items.filter((x) => Number(x.id) !== Number(id));
+      staffState.selectedKey = staffState.items.length
+        ? staffKey(staffState.items[0])
+        : staffState.envAdmin
+          ? "env"
+          : null;
+      renderStaffList();
+      renderStaffCard();
+    } catch (err) {
+      if (err.status === 401) return showLogin();
+      setStaffCardStatus(err.data?.detail || "Не удалось удалить", true);
+    }
+  }
+
+  $("#staffAddBtn")?.addEventListener("click", () => openStaffCreateModal(true));
+  $$("[data-staff-close]").forEach((el) => {
+    el.addEventListener("click", () => openStaffCreateModal(false));
+  });
+  $("#staffGenPassBtn")?.addEventListener("click", () => generateStaffCreatePassword());
+  $("#staffSearch")?.addEventListener("input", (e) => {
+    staffState.search = e.target.value || "";
+    renderStaffList();
+  });
+  $("#staffPhone")?.addEventListener("blur", () => {
+    const inp = $("#staffPhone");
+    if (!inp) return;
+    const formatted = formatPhoneDisplay(inp.value);
+    if (formatted) inp.value = formatted;
+  });
+  $("#staffCreateForm")?.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const name = $("#staffName")?.value?.trim() || "";
+    const phone = $("#staffPhone")?.value?.trim() || "";
+    const role = $("#staffRole")?.value || "employee";
+    const password = $("#staffPassword")?.value?.trim() || "";
+    if (!phoneNationalDigits(phone)) {
+      alert("Укажите корректный номер телефона");
+      $("#staffPhone")?.focus();
+      return;
+    }
+    if (!password || password.length < 6) {
+      alert("Сгенерируйте или введите пароль (от 6 символов)");
+      $("#staffPassword")?.focus();
+      return;
+    }
+    const btn = $("#staffCreateSubmit");
+    if (btn) btn.disabled = true;
+    try {
+      const res = await AdminAPI.createUser({
+        name,
+        phone,
+        role,
+        password,
+        return_password: true,
+      });
+      staffState.items.unshift(res.user);
+      staffState.selectedKey = staffKey(res.user);
+      openStaffCreateModal(false);
+      renderStaffList();
+      renderStaffCard();
+      // Показать пароль на карточке сразу после создания
+      setTimeout(() => {
+        const reveal = $("#staffPassReveal");
+        const val = $("#staffPassRevealVal");
+        if (reveal && val && res.password) {
+          val.textContent = res.password;
+          reveal.hidden = false;
+          if ($("#staffResetPass")) $("#staffResetPass").value = res.password;
+          setStaffCardStatus("Сотрудник создан — скопируйте пароль");
+        }
+      }, 0);
+    } catch (err) {
+      if (err.status === 401) return showLogin();
+      alert(err.data?.detail || "Не удалось создать сотрудника");
+    } finally {
+      if (btn) btn.disabled = false;
+    }
+  });
 
   function renderLogsPane() {
     const box = $("#logsList");
@@ -2135,10 +2593,45 @@
   function maxErrorText(errOrRes) {
     if (!errOrRes) return "Ошибка";
     const data = errOrRes.data || errOrRes;
+    const status = errOrRes.status || data.status;
     if (data.error === "pymax_missing" || /pymax|maxapi/i.test(String(data.error || ""))) {
       return (
         data.detail ||
-        "Библиотека maxapi-python не установлена (нужен Python ≥3.10). pip install maxapi-python>=2.3.0"
+        "Библиотека maxapi-python не установлена (нужен Python ≥3.10). pip install maxapi-python≥2.3.0 и пересоберите bot."
+      );
+    }
+    if (data.error === "cancelled" || data.error === "confirm_timeout") {
+      return (
+        data.detail ||
+        "Вход прерван. Нажмите «Получить код» ещё раз и введите SMS-код, затем пароль 2FA (если спросит)."
+      );
+    }
+    if (data.error === "bad_2fa" || data.error === "need_2fa") {
+      return data.detail || "Введите пароль двухфакторной защиты MAX (это не код из SMS).";
+    }
+    if (
+      data.error === "bad_response" ||
+      data.error === "request_failed" ||
+      errOrRes.message === "request_failed"
+    ) {
+      if (status === 404) {
+        return (
+          "API личного номера MAX не найден (404). UI уже новый, а контейнер bot — старый. " +
+          "На сервере: docker compose build bot && docker compose up -d bot"
+        );
+      }
+      if (status === 502 || status === 504) {
+        return (
+          "Шлюз не дождался ответа бота (HTTP " +
+          status +
+          "). Перезапустите bot или увеличьте timeout nginx."
+        );
+      }
+      return (
+        data.detail ||
+        "Не удалось выполнить запрос" +
+          (status ? " (HTTP " + status + ")" : "") +
+          ". Если только что обновили код — пересоберите контейнер bot."
       );
     }
     return data.detail || data.message || data.error || errOrRes.message || "Ошибка";
@@ -2360,7 +2853,8 @@
       btn.textContent = "Отправка…";
     }
     try {
-      const res = await AdminAPI.maxUserbotStart(phone);
+      // reset:true — снести битую сессию после прошлой неудачи на этом номере
+      const res = await AdminAPI.maxUserbotStart(phone, { reset: true });
       if (!res.ok) return alert(maxErrorText(res));
       state.maxPhone = res.phone || phone;
       if (res.already_authorized) {
@@ -2392,17 +2886,26 @@
       btn.textContent = "Подключение…";
     }
     try {
+      if (!state.maxPhone) {
+        alert("Сначала нажмите «Получить код»");
+        return;
+      }
+      // На шаге 2FA достаточно пароля — код уже принят на сервере
       const res = await AdminAPI.maxUserbotConfirm(state.maxPhone, code, password);
       if (res.need_2fa) {
         $("#max2faWrap").classList.remove("hidden");
-        alert("Введите пароль 2FA MAX");
+        setMaxConnectStep(2);
+        $("#max2fa")?.focus();
+        alert(maxErrorText(res));
         return;
       }
       if (!res.ok) {
         alert(maxErrorText(res));
         if (res.need_new_code) {
           if ($("#maxCode")) $("#maxCode").value = "";
-          $("#maxCode")?.focus();
+          $("#maxCodeStep")?.classList.add("hidden");
+          setMaxConnectStep(1);
+          $("#maxPhone")?.focus();
         }
         return;
       }
@@ -2412,9 +2915,14 @@
       const data = err.data || {};
       if (data.need_2fa) {
         $("#max2faWrap").classList.remove("hidden");
-        alert("Введите пароль 2FA");
+        $("#max2fa")?.focus();
+        alert(maxErrorText(err));
       } else {
         alert(maxErrorText(err));
+        if (data.need_new_code) {
+          $("#maxCodeStep")?.classList.add("hidden");
+          setMaxConnectStep(1);
+        }
       }
     } finally {
       if (btn) {

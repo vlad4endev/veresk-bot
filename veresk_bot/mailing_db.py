@@ -5,8 +5,11 @@ SQLite-хранилище для админки рассылок: клиенты
 from __future__ import annotations
 
 import asyncio
+import base64
+import hashlib
 import logging
 import re
+import secrets
 import sqlite3
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -127,8 +130,26 @@ CREATE TABLE IF NOT EXISTS send_accounts (
 CREATE TABLE IF NOT EXISTS admin_sessions (
     token TEXT PRIMARY KEY,
     created_at TEXT NOT NULL,
-    expires_at TEXT NOT NULL
+    expires_at TEXT NOT NULL,
+    user_id INTEGER,
+    login TEXT NOT NULL DEFAULT ''
 );
+
+CREATE TABLE IF NOT EXISTS admin_users (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    phone TEXT NOT NULL UNIQUE,
+    phone_digits TEXT NOT NULL UNIQUE,
+    password_hash TEXT NOT NULL,
+    name TEXT NOT NULL DEFAULT '',
+    role TEXT NOT NULL DEFAULT 'employee',
+    is_active INTEGER NOT NULL DEFAULT 1,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    last_login_at TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_admin_users_digits ON admin_users (phone_digits);
+CREATE INDEX IF NOT EXISTS idx_admin_users_active ON admin_users (is_active);
 
 CREATE TABLE IF NOT EXISTS personal_messages (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -200,6 +221,11 @@ async def init_mailing_db() -> None:
                 ("last_error", "TEXT"),
             ):
                 _ensure_column(db, "send_accounts", col, typedef)
+            for col, typedef in (
+                ("user_id", "INTEGER"),
+                ("login", "TEXT DEFAULT ''"),
+            ):
+                _ensure_column(db, "admin_sessions", col, typedef)
             # Миграция: приводим ранее сохранённые телефоны к +7(999)999-99-99
             rows = db.execute("SELECT id, phone FROM customers").fetchall()
             for row in rows:
@@ -1438,15 +1464,257 @@ async def delete_send_account(account_id: int) -> dict[str, Any] | None:
     return await _run_db(_delete)
 
 
-# ── admin sessions ─────────────────────────────────────────────────────────
+# ── admin users & sessions ─────────────────────────────────────────────────
 
 
 ADMIN_SESSION_HOURS = 72
 # Продлеваем вход не чаще раза в час, чтобы не писать в БД на каждый запрос
 ADMIN_SESSION_TOUCH_MIN_SECONDS = 3600
 
+_ADMIN_PASSWORD_ITERS = 120_000
+_ADMIN_PASSWORD_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789"
+ADMIN_USER_ROLES = ("admin", "employee")
 
-async def create_admin_session(token: str, hours: int = ADMIN_SESSION_HOURS) -> None:
+
+def generate_admin_password(length: int = 10) -> str:
+    """Читаемый пароль без неоднозначных символов (O/0, I/l/1)."""
+    n = max(8, min(int(length or 10), 32))
+    return "".join(secrets.choice(_ADMIN_PASSWORD_ALPHABET) for _ in range(n))
+
+
+def hash_admin_password(password: str) -> str:
+    salt = secrets.token_bytes(16)
+    dk = hashlib.pbkdf2_hmac(
+        "sha256",
+        password.encode("utf-8"),
+        salt,
+        _ADMIN_PASSWORD_ITERS,
+    )
+    return (
+        f"pbkdf2_sha256${_ADMIN_PASSWORD_ITERS}$"
+        f"{base64.b64encode(salt).decode('ascii')}$"
+        f"{base64.b64encode(dk).decode('ascii')}"
+    )
+
+
+def verify_admin_password(password: str, stored: str) -> bool:
+    try:
+        algo, iters_s, salt_b64, hash_b64 = str(stored or "").split("$", 3)
+        if algo != "pbkdf2_sha256":
+            return False
+        iters = int(iters_s)
+        salt = base64.b64decode(salt_b64.encode("ascii"))
+        expected = base64.b64decode(hash_b64.encode("ascii"))
+    except (ValueError, TypeError):
+        return False
+    got = hashlib.pbkdf2_hmac("sha256", password.encode("utf-8"), salt, iters)
+    return secrets.compare_digest(got, expected)
+
+
+def _admin_user_public(row: sqlite3.Row | dict[str, Any]) -> dict[str, Any]:
+    d = dict(row)
+    return {
+        "id": int(d["id"]),
+        "phone": d.get("phone") or "",
+        "name": d.get("name") or "",
+        "role": d.get("role") or "employee",
+        "is_active": bool(d.get("is_active")),
+        "created_at": d.get("created_at"),
+        "updated_at": d.get("updated_at"),
+        "last_login_at": d.get("last_login_at"),
+    }
+
+
+async def list_admin_users(*, include_inactive: bool = True) -> list[dict[str, Any]]:
+    def _list() -> list[dict[str, Any]]:
+        with _connect() as db:
+            if include_inactive:
+                rows = db.execute(
+                    "SELECT * FROM admin_users ORDER BY is_active DESC, name COLLATE NOCASE, id"
+                ).fetchall()
+            else:
+                rows = db.execute(
+                    "SELECT * FROM admin_users WHERE is_active = 1 "
+                    "ORDER BY name COLLATE NOCASE, id"
+                ).fetchall()
+            return [_admin_user_public(r) for r in rows]
+
+    return await _run_db(_list)
+
+
+async def get_admin_user(user_id: int) -> dict[str, Any] | None:
+    def _get() -> dict[str, Any] | None:
+        with _connect() as db:
+            row = db.execute(
+                "SELECT * FROM admin_users WHERE id = ?",
+                (int(user_id),),
+            ).fetchone()
+            return _admin_user_public(row) if row else None
+
+    return await _run_db(_get)
+
+
+async def get_admin_user_by_phone(phone: str) -> dict[str, Any] | None:
+    digits = _phone_digits(phone)
+    if len(digits) != 10:
+        return None
+
+    def _get() -> dict[str, Any] | None:
+        with _connect() as db:
+            row = db.execute(
+                "SELECT * FROM admin_users WHERE phone_digits = ?",
+                (digits,),
+            ).fetchone()
+            if not row:
+                return None
+            d = dict(row)
+            d["password_hash"] = row["password_hash"]
+            return d
+
+    return await _run_db(_get)
+
+
+async def create_admin_user(
+    *,
+    phone: str,
+    password: str,
+    name: str = "",
+    role: str = "employee",
+) -> dict[str, Any]:
+    phone_fmt = normalize_phone_db(phone)
+    digits = _phone_digits(phone_fmt)
+    if len(digits) != 10:
+        raise ValueError("invalid_phone")
+    role_n = (role or "employee").strip().lower()
+    if role_n not in ADMIN_USER_ROLES:
+        raise ValueError("invalid_role")
+    if not password or len(password) < 6:
+        raise ValueError("weak_password")
+    now = _now()
+    pw_hash = hash_admin_password(password)
+    name_n = str(name or "").strip()
+
+    def _create() -> dict[str, Any]:
+        with _connect() as db:
+            exists = db.execute(
+                "SELECT id FROM admin_users WHERE phone_digits = ?",
+                (digits,),
+            ).fetchone()
+            if exists:
+                raise ValueError("phone_taken")
+            cur = db.execute(
+                """
+                INSERT INTO admin_users
+                    (phone, phone_digits, password_hash, name, role, is_active, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, 1, ?, ?)
+                """,
+                (phone_fmt, digits, pw_hash, name_n, role_n, now, now),
+            )
+            db.commit()
+            row = db.execute(
+                "SELECT * FROM admin_users WHERE id = ?",
+                (cur.lastrowid,),
+            ).fetchone()
+            return _admin_user_public(row)
+
+    return await _run_db(_create)
+
+
+async def update_admin_user(
+    user_id: int,
+    *,
+    name: str | None = None,
+    role: str | None = None,
+    is_active: bool | None = None,
+    password: str | None = None,
+) -> dict[str, Any] | None:
+    now = _now()
+
+    def _upd() -> dict[str, Any] | None:
+        with _connect() as db:
+            row = db.execute(
+                "SELECT * FROM admin_users WHERE id = ?",
+                (int(user_id),),
+            ).fetchone()
+            if not row:
+                return None
+            fields: list[str] = []
+            vals: list[Any] = []
+            if name is not None:
+                fields.append("name = ?")
+                vals.append(str(name).strip())
+            if role is not None:
+                role_n = str(role).strip().lower()
+                if role_n not in ADMIN_USER_ROLES:
+                    raise ValueError("invalid_role")
+                fields.append("role = ?")
+                vals.append(role_n)
+            if is_active is not None:
+                fields.append("is_active = ?")
+                vals.append(1 if is_active else 0)
+            if password is not None:
+                if len(password) < 6:
+                    raise ValueError("weak_password")
+                fields.append("password_hash = ?")
+                vals.append(hash_admin_password(password))
+            if not fields:
+                return _admin_user_public(row)
+            fields.append("updated_at = ?")
+            vals.append(now)
+            vals.append(int(user_id))
+            db.execute(
+                f"UPDATE admin_users SET {', '.join(fields)} WHERE id = ?",
+                vals,
+            )
+            db.commit()
+            updated = db.execute(
+                "SELECT * FROM admin_users WHERE id = ?",
+                (int(user_id),),
+            ).fetchone()
+            return _admin_user_public(updated) if updated else None
+
+    return await _run_db(_upd)
+
+
+async def delete_admin_user(user_id: int) -> bool:
+    def _del() -> bool:
+        with _connect() as db:
+            cur = db.execute(
+                "DELETE FROM admin_users WHERE id = ?",
+                (int(user_id),),
+            )
+            # Сбрасываем привязку сессий удалённого пользователя
+            db.execute(
+                "UPDATE admin_sessions SET user_id = NULL WHERE user_id = ?",
+                (int(user_id),),
+            )
+            db.commit()
+            return cur.rowcount > 0
+
+    return await _run_db(_del)
+
+
+async def touch_admin_user_login(user_id: int) -> None:
+    now = _now()
+
+    def _touch() -> None:
+        with _connect() as db:
+            db.execute(
+                "UPDATE admin_users SET last_login_at = ?, updated_at = ? WHERE id = ?",
+                (now, now, int(user_id)),
+            )
+            db.commit()
+
+    await _run_db(_touch)
+
+
+async def create_admin_session(
+    token: str,
+    hours: int = ADMIN_SESSION_HOURS,
+    *,
+    user_id: int | None = None,
+    login: str = "",
+) -> None:
     now = datetime.now()
     expires = (now + timedelta(hours=hours)).isoformat(timespec="seconds")
 
@@ -1454,14 +1722,46 @@ async def create_admin_session(token: str, hours: int = ADMIN_SESSION_HOURS) -> 
         with _connect() as db:
             db.execute(
                 """
-                INSERT OR REPLACE INTO admin_sessions (token, created_at, expires_at)
-                VALUES (?, ?, ?)
+                INSERT OR REPLACE INTO admin_sessions (token, created_at, expires_at, user_id, login)
+                VALUES (?, ?, ?, ?, ?)
                 """,
-                (token, now.isoformat(timespec="seconds"), expires),
+                (
+                    token,
+                    now.isoformat(timespec="seconds"),
+                    expires,
+                    int(user_id) if user_id is not None else None,
+                    str(login or ""),
+                ),
             )
             db.commit()
 
     await _run_db(_create)
+
+
+async def get_admin_session(token: str) -> dict[str, Any] | None:
+    now = _now()
+
+    def _get() -> dict[str, Any] | None:
+        with _connect() as db:
+            row = db.execute(
+                "SELECT token, created_at, expires_at, user_id, login FROM admin_sessions WHERE token = ?",
+                (token,),
+            ).fetchone()
+            if not row:
+                return None
+            if row["expires_at"] < now:
+                db.execute("DELETE FROM admin_sessions WHERE token = ?", (token,))
+                db.commit()
+                return None
+            return {
+                "token": row["token"],
+                "created_at": row["created_at"],
+                "expires_at": row["expires_at"],
+                "user_id": row["user_id"],
+                "login": row["login"] or "",
+            }
+
+    return await _run_db(_get)
 
 
 async def touch_admin_session(

@@ -29,11 +29,17 @@ from mailing_db import (
     add_campaign_recipients,
     count_customers,
     create_admin_session,
+    create_admin_user,
     create_campaign,
     create_personal_message,
     create_send_account,
     delete_admin_session,
+    delete_admin_user,
     delete_send_account,
+    generate_admin_password,
+    get_admin_session,
+    get_admin_user,
+    get_admin_user_by_phone,
     get_campaign,
     get_customer,
     get_customer_by_phone,
@@ -41,6 +47,7 @@ from mailing_db import (
     get_event,
     get_send_account,
     get_stats,
+    list_admin_users,
     list_campaign_recipients,
     list_campaigns,
     list_customers,
@@ -55,12 +62,16 @@ from mailing_db import (
     set_customer_tg_by_phone,
     set_event_auto_send,
     touch_admin_session,
+    touch_admin_user_login,
+    update_admin_user,
     update_campaign,
     update_send_account,
     upsert_customer,
     validate_admin_session,
+    verify_admin_password,
     customers_for_segment,
     ADMIN_SESSION_HOURS,
+    ADMIN_USER_ROLES,
     normalize_phone_db,
 )
 import runtime_settings
@@ -120,8 +131,6 @@ def _extract_token(request: web.Request) -> str:
 
 async def _require_admin(request: web.Request) -> web.Response | None:
     """Возвращает Response с ошибкой или None, если OK."""
-    if not ADMIN_PASSWORD:
-        return _json({"error": "admin_not_configured"}, status=503)
     token = _extract_token(request)
     if not token or not await validate_admin_session(token):
         return _json({"error": "unauthorized"}, status=401)
@@ -186,23 +195,70 @@ def _when_label(days_until: int) -> tuple[str, str]:
 # ── auth ───────────────────────────────────────────────────────────────────
 
 
+def _role_label(role: str) -> str:
+    return {"admin": "Администратор", "employee": "Сотрудник"}.get(role, role)
+
+
 async def handle_login(request: web.Request) -> web.Response:
-    if not ADMIN_PASSWORD:
-        return _json({"error": "admin_not_configured"}, status=503)
     try:
         body = await request.json()
     except Exception:
         return _json({"error": "invalid_json"}, status=400)
     username = str(body.get("username") or body.get("login") or "").strip()
     password = str(body.get("password") or body.get("token") or "").strip()
-    # Логин сравниваем без учёта регистра (удобно с телефона), пароль — строго
-    user_ok = secrets.compare_digest(username.lower(), ADMIN_USERNAME.lower())
-    pass_ok = secrets.compare_digest(password, ADMIN_PASSWORD)
-    if not username or not password or not (user_ok and pass_ok):
+    if not username or not password:
         return _json({"error": "invalid_credentials"}, status=401)
-    session = secrets.token_urlsafe(32)
-    await create_admin_session(session)
-    return _json({"token": session, "expires_hours": 72, "username": ADMIN_USERNAME})
+
+    # 1) Сотрудник из БД — логин = номер телефона
+    db_user = await get_admin_user_by_phone(username)
+    if db_user:
+        if not db_user.get("is_active"):
+            return _json({"error": "user_disabled", "detail": "Доступ отключён"}, status=403)
+        if not verify_admin_password(password, db_user.get("password_hash") or ""):
+            return _json({"error": "invalid_credentials"}, status=401)
+        session = secrets.token_urlsafe(32)
+        await create_admin_session(
+            session,
+            user_id=int(db_user["id"]),
+            login=db_user.get("phone") or username,
+        )
+        await touch_admin_user_login(int(db_user["id"]))
+        return _json(
+            {
+                "token": session,
+                "expires_hours": ADMIN_SESSION_HOURS,
+                "username": db_user.get("phone") or username,
+                "name": db_user.get("name") or "",
+                "role": db_user.get("role") or "employee",
+                "user_id": int(db_user["id"]),
+                "source": "db",
+            }
+        )
+
+    # 2) Системный админ из .env
+    if ADMIN_PASSWORD:
+        user_ok = secrets.compare_digest(username.lower(), ADMIN_USERNAME.lower())
+        pass_ok = secrets.compare_digest(password, ADMIN_PASSWORD)
+        if user_ok and pass_ok:
+            session = secrets.token_urlsafe(32)
+            await create_admin_session(session, login=ADMIN_USERNAME)
+            return _json(
+                {
+                    "token": session,
+                    "expires_hours": ADMIN_SESSION_HOURS,
+                    "username": ADMIN_USERNAME,
+                    "name": "Администратор",
+                    "role": "admin",
+                    "user_id": None,
+                    "source": "env",
+                }
+            )
+
+    digits = re.sub(r"\D", "", username)
+    looks_like_phone = len(digits) in (10, 11)
+    if not ADMIN_PASSWORD and not looks_like_phone:
+        return _json({"error": "admin_not_configured"}, status=503)
+    return _json({"error": "invalid_credentials"}, status=401)
 
 
 async def handle_logout(request: web.Request) -> web.Response:
@@ -218,17 +274,240 @@ async def handle_me(request: web.Request) -> web.Response:
         return err
     token = _extract_token(request)
     expires_at = await touch_admin_session(token) if token else None
+    session = await get_admin_session(token) if token else None
+    if session and session.get("user_id"):
+        user = await get_admin_user(int(session["user_id"]))
+        if user and user.get("is_active"):
+            return _json(
+                {
+                    "ok": True,
+                    "role": user.get("role") or "employee",
+                    "role_label": _role_label(user.get("role") or "employee"),
+                    "username": user.get("phone") or session.get("login") or "",
+                    "name": user.get("name") or "",
+                    "user_id": user["id"],
+                    "phone": user.get("phone") or "",
+                    "source": "db",
+                    "session_hours": ADMIN_SESSION_HOURS,
+                    "expires_at": expires_at or session.get("expires_at"),
+                    "session_renewed": True,
+                }
+            )
     return _json(
         {
             "ok": True,
             "role": "admin",
-            "username": ADMIN_USERNAME,
+            "role_label": "Администратор",
+            "username": (session or {}).get("login") or ADMIN_USERNAME,
+            "name": "Администратор",
+            "user_id": None,
+            "phone": "",
             "source": "env",
             "session_hours": ADMIN_SESSION_HOURS,
             "expires_at": expires_at,
             "session_renewed": True,
         }
     )
+
+
+# ── admin users (сотрудники) ───────────────────────────────────────────────
+
+
+async def handle_users_list(request: web.Request) -> web.Response:
+    err = await _require_admin(request)
+    if err:
+        return err
+    items = await list_admin_users(include_inactive=True)
+    for u in items:
+        u["role_label"] = _role_label(u.get("role") or "employee")
+    env_admin = None
+    if ADMIN_PASSWORD:
+        env_admin = {
+            "id": None,
+            "phone": "",
+            "name": "Системный администратор",
+            "role": "admin",
+            "role_label": "Администратор",
+            "is_active": True,
+            "username": ADMIN_USERNAME,
+            "source": "env",
+            "created_at": None,
+            "updated_at": None,
+            "last_login_at": None,
+        }
+    return _json(
+        {
+            "items": items,
+            "env_admin": env_admin,
+            "roles": [{"id": r, "label": _role_label(r)} for r in ADMIN_USER_ROLES],
+        }
+    )
+
+
+async def handle_users_create(request: web.Request) -> web.Response:
+    err = await _require_admin(request)
+    if err:
+        return err
+    try:
+        body = await request.json()
+    except Exception:
+        return _json({"error": "invalid_json"}, status=400)
+    phone = str(body.get("phone") or "").strip()
+    name = str(body.get("name") or "").strip()
+    role = str(body.get("role") or "employee").strip().lower()
+    password = str(body.get("password") or "").strip()
+    generated = False
+    if not password:
+        password = generate_admin_password()
+        generated = True
+    try:
+        user = await create_admin_user(
+            phone=phone, password=password, name=name, role=role
+        )
+    except ValueError as exc:
+        code = str(exc)
+        status = 400
+        detail = {
+            "invalid_phone": "Укажите корректный номер телефона",
+            "invalid_role": "Некорректная роль",
+            "weak_password": "Пароль слишком короткий (минимум 6 символов)",
+            "phone_taken": "Сотрудник с таким телефоном уже есть",
+        }.get(code, code)
+        if code == "phone_taken":
+            status = 409
+        return _json({"error": code, "detail": detail}, status=status)
+    user["role_label"] = _role_label(user.get("role") or "employee")
+    return _json(
+        {
+            "ok": True,
+            "user": user,
+            "password": password if generated or body.get("return_password") else None,
+            "password_generated": generated,
+        },
+        status=201,
+    )
+
+
+async def handle_users_get(request: web.Request) -> web.Response:
+    err = await _require_admin(request)
+    if err:
+        return err
+    try:
+        user_id = int(request.match_info["id"])
+    except (TypeError, ValueError):
+        return _json({"error": "invalid_id"}, status=400)
+    user = await get_admin_user(user_id)
+    if not user:
+        return _json({"error": "not_found"}, status=404)
+    user["role_label"] = _role_label(user.get("role") or "employee")
+    return _json({"user": user})
+
+
+async def handle_users_patch(request: web.Request) -> web.Response:
+    err = await _require_admin(request)
+    if err:
+        return err
+    try:
+        user_id = int(request.match_info["id"])
+    except (TypeError, ValueError):
+        return _json({"error": "invalid_id"}, status=400)
+    try:
+        body = await request.json()
+    except Exception:
+        return _json({"error": "invalid_json"}, status=400)
+
+    kwargs: dict[str, Any] = {}
+    if "name" in body:
+        kwargs["name"] = str(body.get("name") or "")
+    if "role" in body:
+        kwargs["role"] = str(body.get("role") or "")
+    if "is_active" in body:
+        kwargs["is_active"] = bool(body.get("is_active"))
+    if "password" in body and body.get("password"):
+        kwargs["password"] = str(body.get("password"))
+
+    try:
+        user = await update_admin_user(user_id, **kwargs)
+    except ValueError as exc:
+        code = str(exc)
+        detail = {
+            "invalid_role": "Некорректная роль",
+            "weak_password": "Пароль слишком короткий (минимум 6 символов)",
+        }.get(code, code)
+        return _json({"error": code, "detail": detail}, status=400)
+    if not user:
+        return _json({"error": "not_found"}, status=404)
+    user["role_label"] = _role_label(user.get("role") or "employee")
+    return _json({"ok": True, "user": user})
+
+
+async def handle_users_reset_password(request: web.Request) -> web.Response:
+    err = await _require_admin(request)
+    if err:
+        return err
+    try:
+        user_id = int(request.match_info["id"])
+    except (TypeError, ValueError):
+        return _json({"error": "invalid_id"}, status=400)
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    password = str((body or {}).get("password") or "").strip()
+    generated = False
+    if not password:
+        password = generate_admin_password()
+        generated = True
+    try:
+        user = await update_admin_user(user_id, password=password)
+    except ValueError as exc:
+        return _json({"error": str(exc), "detail": "Слишком короткий пароль"}, status=400)
+    if not user:
+        return _json({"error": "not_found"}, status=404)
+    user["role_label"] = _role_label(user.get("role") or "employee")
+    return _json(
+        {
+            "ok": True,
+            "user": user,
+            "password": password,
+            "password_generated": generated,
+        }
+    )
+
+
+async def handle_users_delete(request: web.Request) -> web.Response:
+    err = await _require_admin(request)
+    if err:
+        return err
+    try:
+        user_id = int(request.match_info["id"])
+    except (TypeError, ValueError):
+        return _json({"error": "invalid_id"}, status=400)
+    # Нельзя удалить самого себя
+    token = _extract_token(request)
+    session = await get_admin_session(token) if token else None
+    if session and session.get("user_id") is not None and int(session["user_id"]) == user_id:
+        return _json(
+            {"error": "cannot_delete_self", "detail": "Нельзя удалить свой аккаунт"},
+            status=400,
+        )
+    ok = await delete_admin_user(user_id)
+    if not ok:
+        return _json({"error": "not_found"}, status=404)
+    return _json({"ok": True})
+
+
+async def handle_generate_password(request: web.Request) -> web.Response:
+    err = await _require_admin(request)
+    if err:
+        return err
+    length = 10
+    try:
+        body = await request.json()
+        length = int(body.get("length") or 10)
+    except Exception:
+        pass
+    return _json({"password": generate_admin_password(length)})
 
 
 # ── stats / sync ───────────────────────────────────────────────────────────
@@ -1015,21 +1294,62 @@ async def handle_max_userbot_connect_start(request: web.Request) -> web.Response
         return err
     if not is_pymax_installed():
         return _json(
-            {"ok": False, "error": "pymax_missing", "detail": "Установите maxapi-python≥2.3.0 (Python ≥3.10)"},
+            {
+                "ok": False,
+                "error": "pymax_missing",
+                "detail": (
+                    "Установите maxapi-python≥2.3.0 (Python ≥3.10) в образ bot "
+                    "и перезапустите: docker compose build bot && docker compose up -d bot"
+                ),
+            },
             status=503,
         )
     try:
         body = await request.json()
     except Exception:
-        return _json({"error": "invalid_json"}, status=400)
+        return _json({"ok": False, "error": "invalid_json"}, status=400)
     phone = str(body.get("phone") or "").strip()
     if not phone:
-        return _json({"error": "phone_required"}, status=400)
-    result = await start_max_login(phone)
+        return _json({"ok": False, "error": "phone_required", "detail": "Укажите телефон"}, status=400)
+    # По умолчанию сбрасываем незавершённую сессию — иначе повтор на том же номере зависает
+    reset_session = body.get("reset")
+    if reset_session is None:
+        reset_session = True
+    try:
+        result = await start_max_login(phone, reset_session=bool(reset_session))
+    except Exception as exc:
+        logger.exception("MAX userbot start failed")
+        return _json(
+            {
+                "ok": False,
+                "error": "max_login_failed",
+                "detail": f"Не удалось начать вход в MAX: {exc}",
+            },
+            status=502,
+        )
     if not result.get("ok"):
-        return _json(result, status=400)
+        return _json(
+            {
+                "ok": False,
+                "error": result.get("error") or "max_login_failed",
+                "detail": result.get("detail") or result.get("error") or "Не удалось отправить код",
+                **{k: v for k, v in result.items() if k not in ("ok",)},
+            },
+            status=400,
+        )
     if result.get("already_authorized"):
-        registered = await _register_max_userbot_account(result, phone)
+        try:
+            registered = await _register_max_userbot_account(result, phone)
+        except Exception as exc:
+            logger.exception("MAX userbot register failed")
+            return _json(
+                {
+                    "ok": False,
+                    "error": "register_failed",
+                    "detail": str(exc),
+                },
+                status=502,
+            )
         return _json(registered)
     return _json(result)
 
@@ -1041,24 +1361,53 @@ async def handle_max_userbot_connect_confirm(request: web.Request) -> web.Respon
     try:
         body = await request.json()
     except Exception:
-        return _json({"error": "invalid_json"}, status=400)
+        return _json({"ok": False, "error": "invalid_json"}, status=400)
     phone = str(body.get("phone") or "").strip()
     code = str(body.get("code") or "").strip()
     password = body.get("password")
     if not phone:
-        return _json({"error": "phone_required"}, status=400)
+        return _json({"ok": False, "error": "phone_required", "detail": "Укажите телефон"}, status=400)
     if not code and not password:
-        return _json({"error": "phone_and_code_required"}, status=400)
-    result = await confirm_max_login(
-        phone, code, password=str(password) if password else None
-    )
+        return _json(
+            {"ok": False, "error": "phone_and_code_required", "detail": "Введите код из SMS / MAX"},
+            status=400,
+        )
+    try:
+        result = await confirm_max_login(
+            phone, code, password=str(password) if password else None
+        )
+    except Exception as exc:
+        logger.exception("MAX userbot confirm failed")
+        return _json(
+            {
+                "ok": False,
+                "error": "max_login_failed",
+                "detail": f"Не удалось подтвердить вход: {exc}",
+            },
+            status=502,
+        )
     if not result.get("ok"):
         status = 400
         if result.get("need_2fa"):
             status = 200
-        return _json(result, status=status)
+        return _json(
+            {
+                "ok": bool(result.get("ok")),
+                "error": result.get("error") or "max_login_failed",
+                "detail": result.get("detail") or result.get("error"),
+                **{k: v for k, v in result.items() if k not in ("ok",)},
+            },
+            status=status,
+        )
 
-    registered = await _register_max_userbot_account(result, phone)
+    try:
+        registered = await _register_max_userbot_account(result, phone)
+    except Exception as exc:
+        logger.exception("MAX userbot register after confirm failed")
+        return _json(
+            {"ok": False, "error": "register_failed", "detail": str(exc)},
+            status=502,
+        )
     return _json(registered)
 
 
@@ -2996,6 +3345,13 @@ def setup_admin_routes(app: web.Application) -> None:
         ("/api/admin/login", handle_login, "POST"),
         ("/api/admin/logout", handle_logout, "POST"),
         ("/api/admin/me", handle_me, "GET"),
+        ("/api/admin/users", handle_users_list, "GET"),
+        ("/api/admin/users", handle_users_create, "POST"),
+        ("/api/admin/users/generate-password", handle_generate_password, "POST"),
+        ("/api/admin/users/{id}", handle_users_get, "GET"),
+        ("/api/admin/users/{id}", handle_users_patch, "PATCH"),
+        ("/api/admin/users/{id}", handle_users_delete, "DELETE"),
+        ("/api/admin/users/{id}/password", handle_users_reset_password, "POST"),
         ("/api/admin/stats", handle_stats, "GET"),
         ("/api/admin/bots/status", handle_bots_status, "GET"),
         ("/api/admin/sync", handle_sync, "POST"),
