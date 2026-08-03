@@ -466,7 +466,9 @@
 
   function syncEventsFilters() {
     $$("#wgFilters .wg-f").forEach((btn) => {
-      btn.classList.toggle("on", +btn.dataset.days === state.eventsDays);
+      const on = +btn.dataset.days === state.eventsDays;
+      btn.classList.toggle("on", on);
+      btn.setAttribute("aria-selected", on ? "true" : "false");
     });
     const allBtn = $("#wgAll");
     if (allBtn) {
@@ -482,54 +484,44 @@
       state.eventsDays = days;
       syncEventsFilters();
       renderEvents(data);
-    } catch {
-      box.innerHTML = '<div class="empty-state">Не удалось загрузить события</div>';
+    } catch (err) {
+      if (err.status === 401) return showLogin();
+      box.innerHTML =
+        '<div class="empty-state"><div class="t">Не удалось загрузить события</div><p class="d">Обновите страницу или синхронизируйте базу.</p></div>';
     }
   }
 
-  function recipientStatusMeta(status) {
-    const map = {
-      pending: { label: "В очереди", cls: "sending" },
-      sent: { label: "Отправлено", cls: "done" },
-      delivered: { label: "Доставлено", cls: "done" },
-      failed: { label: "Ошибка", cls: "err" },
-    };
-    return map[status] || { label: status || "—", cls: "neutral" };
+  function eventFromCache(id) {
+    return state.eventsCache.find((e) => +e.id === +id) || null;
   }
 
-  function formatSentAt(iso) {
-    if (!iso) return "—";
-    const s = String(iso);
-    // 2024-08-04T14:30:00 → 4 авг · 14:30
-    const m = s.match(/^(\d{4})-(\d{2})-(\d{2})[T ](\d{2}):(\d{2})/);
-    if (!m) return s.slice(0, 16);
-    const months = [
-      "янв",
-      "фев",
-      "мар",
-      "апр",
-      "мая",
-      "июн",
-      "июл",
-      "авг",
-      "сен",
-      "окт",
-      "ноя",
-      "дек",
-    ];
-    return `${+m[3]} ${months[+m[2] - 1] || m[2]} · ${m[4]}:${m[5]}`;
-  }
-
-  function msgStatusLabel(status) {
-    return (
-      {
-        pending: "В очереди",
-        sent: "Отправлено",
-        delivered: "Доставлено",
-        failed: "Ошибка",
-        queued: "В очереди",
-      }[status] || status || "—"
-    );
+  function openPersonalFromEvent(e) {
+    if (!e) return;
+    if (!e.customer_id) {
+      alert("Не найден клиент для этого события");
+      return;
+    }
+    if (e.channel_class === "none" || e.channel === "нет канала") {
+      alert("У клиента нет канала для отправки (Telegram или MAX)");
+      return;
+    }
+    const kindBit = e.kind_label || e.title || "Событие";
+    const dateBit = e.next_date_label || e.date_label || "";
+    const chanClass = e.channel_class === "max" ? "max" : "tg";
+    const chanLabel =
+      chanClass === "max" ? "MAX" : e.channel && e.channel.includes("MAX") && e.channel.includes("TG")
+        ? "Telegram"
+        : e.channel || "Telegram";
+    openPersonal({
+      type: e.kind === "anniv" ? "anniv" : e.kind === "bday" ? "bday" : "plain",
+      customer_id: e.customer_id,
+      name: e.customer_name,
+      contact: e.phone_masked,
+      chan: chanLabel === "TG · MAX" ? "Telegram" : chanLabel,
+      chanClass,
+      evText: `${kindBit} · ${e.when_label || ""}${dateBit ? " · " + dateBit : ""}`,
+      whenClass: e.when_class,
+    });
   }
 
   function renderEvents(payload) {
@@ -565,92 +557,132 @@
     box.innerHTML =
       shown
         .map((e) => {
-          const auto = e.auto_send ? " auto" : "";
-          const greeted = e.greeted_today ? " greeted" : "";
+          const unreachable = e.channel_class === "none" || e.channel === "нет канала";
           const dateBit = e.next_date_label || e.date_label || "";
-          const kindBit = e.kind_label || e.title || "";
-          const subBits = [
-            e.customer_name ? null : null,
-            e.phone_masked,
-            e.channel,
-            dateBit ? dateBit : null,
-          ]
-            .filter(Boolean)
-            .join(" · ");
-          let actionNote = "✓ Поздравим сами";
-          if (e.greeted_today) actionNote = "✓ Уже поздравили сегодня";
-          const sendLabel =
-            e.greeted_today
-              ? "Ещё раз"
-              : e.kind === "bday" || e.kind === "anniv"
-                ? "Поздравить"
-                : "Написать";
-          return `<div class="ev${auto}${greeted}" data-id="${e.id}">
-          <span class="ev-ic">${eventIcon(e.kind)}</span>
-          <div class="ev-b clickable" data-client="${e.customer_id}" title="Открыть карточку клиента">
-            <div class="ev-n"><span class="ev-kind">${esc(kindBit)}</span> · ${esc(e.customer_name || "Клиент")}</div>
+          const kindBit = e.kind_label || e.title || "Событие";
+          const subBits = [e.phone_masked, e.channel, dateBit].filter(Boolean).join(" · ");
+          const sendLabel = e.greeted_today
+            ? "Ещё раз"
+            : e.kind === "bday" || e.kind === "anniv"
+              ? "Поздравить"
+              : "Написать";
+          const statusBits = [];
+          if (e.auto_send) statusBits.push('<span class="ev-pill auto">Авто</span>');
+          if (e.greeted_today) statusBits.push('<span class="ev-pill ok">Уже сегодня</span>');
+          return `<article class="ev${e.auto_send ? " is-auto" : ""}${e.greeted_today ? " is-greeted" : ""}${unreachable ? " is-off" : ""}" data-id="${e.id}">
+          <div class="ev-ic" aria-hidden="true">${eventIcon(e.kind)}</div>
+          <button type="button" class="ev-main" data-client="${e.customer_id}" title="Открыть карточку клиента">
+            <div class="ev-n"><span class="ev-kind">${esc(kindBit)}</span><span class="ev-sep">·</span><span class="ev-who">${esc(e.customer_name || "Клиент")}</span></div>
             <div class="ev-s">${esc(subBits)}</div>
-          </div>
+            ${statusBits.length ? `<div class="ev-tags">${statusBits.join("")}</div>` : ""}
+          </button>
           <span class="ev-when ${esc(e.when_class || "later")}">${esc(e.when_label || "—")}</span>
           <div class="ev-act">
-            <label class="sw" title="Автопоздравление в день события">
+            <label class="ev-auto" title="Автопоздравление в день события">
               <input type="checkbox" data-auto="${e.id}" ${e.auto_send ? "checked" : ""}>
-              <span class="track"></span>Авто
+              <span class="ev-auto-ui" aria-hidden="true"><span class="ev-auto-knob"></span></span>
+              <span class="ev-auto-txt">Авто</span>
             </label>
-            <button class="ev-send" type="button" data-personal="${encodeURIComponent(
-              JSON.stringify({
-                type: e.kind === "anniv" ? "anniv" : e.kind === "bday" ? "bday" : "plain",
-                customer_id: e.customer_id,
-                name: e.customer_name,
-                contact: e.phone_masked,
-                chan: e.channel,
-                chanClass: e.channel_class,
-                evText: `${kindBit} · ${e.when_label || ""}${dateBit ? " · " + dateBit : ""}`,
-                whenClass: e.when_class,
-              })
-            )}">
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m3 11 18-8-8 18-2-8z"/></svg>
+            <button type="button" class="ev-cta${unreachable ? " is-disabled" : ""}" data-greet="${e.id}" ${unreachable ? "disabled" : ""}>
               ${esc(sendLabel)}
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" aria-hidden="true"><path d="M5 12h14M13 6l6 6-6 6"/></svg>
             </button>
-            <span class="auto-note">${esc(actionNote)}</span>
           </div>
-        </div>`;
+        </article>`;
         })
         .join("") +
       (hidden > 0
-        ? `<button type="button" class="wg-more" id="wgMore">Ещё ${hidden} ${
-            hidden === 1 ? "событие" : hidden < 5 ? "события" : "событий"
-          }</button>`
+        ? `<button type="button" class="wg-more" id="wgMore">Показать ещё ${hidden}</button>`
         : "");
+  }
 
-    box.querySelectorAll("[data-client]").forEach((el) => {
-      el.addEventListener("click", () => openClientById(+el.dataset.client));
-    });
-    box.querySelectorAll("[data-auto]").forEach((inp) => {
-      inp.addEventListener("change", async () => {
-        const id = +inp.dataset.auto;
-        inp.closest(".ev").classList.toggle("auto", inp.checked);
-        try {
-          await AdminAPI.setEventAuto(id, inp.checked);
-        } catch {
-          inp.checked = !inp.checked;
-          inp.closest(".ev").classList.toggle("auto", inp.checked);
-        }
-      });
-    });
-    box.querySelectorAll("[data-personal]").forEach((btn) => {
-      btn.addEventListener("click", () => {
-        try {
-          const d = JSON.parse(decodeURIComponent(btn.getAttribute("data-personal")));
-          openPersonal(d);
-        } catch (_) {}
-      });
-    });
-    $("#wgMore")?.addEventListener("click", () => {
+  // Делегирование кликов — не ломается при перерисовке списка
+  $("#eventsList")?.addEventListener("click", (ev) => {
+    const greet = ev.target.closest("[data-greet]");
+    if (greet) {
+      ev.preventDefault();
+      openPersonalFromEvent(eventFromCache(greet.dataset.greet));
+      return;
+    }
+    const clientBtn = ev.target.closest("[data-client]");
+    if (clientBtn && !ev.target.closest("[data-auto], [data-greet], .ev-auto")) {
+      openClientById(+clientBtn.dataset.client);
+      return;
+    }
+    if (ev.target.closest("#wgMore")) {
       state.eventsExpanded = true;
       syncEventsFilters();
-      renderEvents({ items, ...meta, total: items.length });
-    });
+      renderEvents({
+        items: state.eventsCache,
+        total: state.eventsCache.length,
+        today_count: state.eventsCache.filter((e) => e.days_until === 0).length,
+        auto_count: state.eventsCache.filter((e) => e.auto_send).length,
+      });
+    }
+  });
+
+  $("#eventsList")?.addEventListener("change", async (ev) => {
+    const inp = ev.target.closest("[data-auto]");
+    if (!inp) return;
+    const id = +inp.dataset.auto;
+    const row = inp.closest(".ev");
+    row?.classList.toggle("is-auto", inp.checked);
+    const cached = eventFromCache(id);
+    if (cached) cached.auto_send = inp.checked;
+    try {
+      await AdminAPI.setEventAuto(id, inp.checked);
+    } catch (err) {
+      inp.checked = !inp.checked;
+      row?.classList.toggle("is-auto", inp.checked);
+      if (cached) cached.auto_send = inp.checked;
+      alert("Не удалось сохранить автопоздравление");
+    }
+  });
+
+  function recipientStatusMeta(status) {
+    const map = {
+      pending: { label: "В очереди", cls: "sending" },
+      sent: { label: "Отправлено", cls: "done" },
+      delivered: { label: "Доставлено", cls: "done" },
+      failed: { label: "Ошибка", cls: "err" },
+    };
+    return map[status] || { label: status || "—", cls: "neutral" };
+  }
+
+  function formatSentAt(iso) {
+    if (!iso) return "—";
+    const s = String(iso);
+    const m = s.match(/^(\d{4})-(\d{2})-(\d{2})[T ](\d{2}):(\d{2})/);
+    if (!m) return s.slice(0, 16);
+    const months = [
+      "янв",
+      "фев",
+      "мар",
+      "апр",
+      "мая",
+      "июн",
+      "июл",
+      "авг",
+      "сен",
+      "окт",
+      "ноя",
+      "дек",
+    ];
+    return `${+m[3]} ${months[+m[2] - 1] || m[2]} · ${m[4]}:${m[5]}`;
+  }
+
+  function msgStatusLabel(status) {
+    return (
+      {
+        pending: "В очереди",
+        sent: "Отправлено",
+        delivered: "Доставлено",
+        failed: "Ошибка",
+        queued: "В очереди",
+      }[status] ||
+      status ||
+      "—"
+    );
   }
 
   function renderCampaigns(items) {
