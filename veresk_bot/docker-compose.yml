@@ -40,8 +40,9 @@ services:
       # - "80:80"
       # - "443:443"
     volumes:
+      # админка на корне домена; miniapp поверх /miniapp/
+      - ./adminapp:/usr/share/nginx/html:ro
       - ./miniapp:/usr/share/nginx/html/miniapp:ro
-      - ./adminapp:/usr/share/nginx/html/admin:ro
       - ./nginx.conf:/etc/nginx/conf.d/default.conf:ro
       # - ./ssl:/etc/nginx/ssl:ro
     depends_on:
