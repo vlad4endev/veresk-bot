@@ -1,10 +1,19 @@
-"""Фоновый диспетчер рассылок: очередь, расписание, авто-поздравления."""
+"""Фоновый диспетчер рассылок: очередь, расписание, авто-поздравления.
+
+Сценарий отправки:
+1. Берём pending-получателей из БД (клиенты сегмента уже сверены при создании кампании).
+2. Для Telegram — выбираем готовый userbot-аккаунт и шлём от его имени
+   (по tg_user_id или телефону через ImportContacts).
+3. Для MAX — шлём от имени подключённого MAX-бота
+   (по max_user_id клиента / max_profiles).
+"""
 
 from __future__ import annotations
 
 import asyncio
 import logging
 from datetime import datetime
+from typing import Any
 
 from config import MAILING_BATCH_SIZE, MAILING_SEND_INTERVAL
 from mailing_db import (
@@ -18,6 +27,7 @@ from mailing_db import (
     mark_recipient_status,
     pick_ready_account,
 )
+from senders.matching import normalize_channel, resolve_max_user_id_sync
 from senders.max_bot import MaxBotSender
 from senders.telegram_userbot import TelegramUserbotSender
 
@@ -34,6 +44,15 @@ def _personalize(text: str, name: str) -> str:
         .replace("{Имя}", first or "Друг")
         .replace("{name}", first or "друг")
     )
+
+
+def _parse_int(value: Any) -> int | None:
+    if value is None or value == "":
+        return None
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
 
 
 async def _get_tg_sender(account: dict) -> TelegramUserbotSender | None:
@@ -54,24 +73,52 @@ async def _send_via_channel(
     phone: str,
     name: str,
     text: str,
+    tg_user_id: int | None = None,
+    max_user_id: int | None = None,
 ) -> tuple[bool, str, str | None]:
     """Возвращает (ok, status, error)."""
     body = _personalize(text, name)
-    if channel in ("tg", "telegram"):
+    ch = normalize_channel(channel) or channel
+
+    if ch == "tg":
         account = await pick_ready_account("tg_userbot")
         if not account:
             return False, "failed", "Нет готовых Telegram-аккаунтов"
         sender = await _get_tg_sender(account)
         if not sender:
             return False, "failed", "Нет session_file у аккаунта"
-        result = await sender.send(phone=phone, name=name, text=body)
+        result = await sender.send(
+            phone=phone,
+            name=name,
+            text=body,
+            tg_user_id=tg_user_id,
+        )
         if result.ok:
             await bump_account_sent(int(account["id"]))
+            logger.info(
+                "TG рассылка: %s → %s (аккаунт %s)",
+                name or phone,
+                "ok",
+                account.get("label") or account["id"],
+            )
         return result.ok, result.status, result.error
 
-    if channel in ("max", "mx"):
+    if ch == "max":
+        # Дополнительная сверка: max_user_id из карточки или max_profiles
+        resolved = await asyncio.to_thread(
+            resolve_max_user_id_sync,
+            max_user_id=max_user_id,
+            phone=phone,
+        )
         sender = MaxBotSender()
-        result = await sender.send(phone=phone, name=name, text=body)
+        if not sender.available:
+            return False, "failed", "MAX-бот не подключён"
+        result = await sender.send(
+            phone=phone,
+            name=name,
+            text=body,
+            max_user_id=resolved,
+        )
         return result.ok, result.status, result.error
 
     return False, "failed", f"Неизвестный канал: {channel}"
@@ -86,14 +133,30 @@ async def process_campaign_batch() -> int:
         name = row.get("customer_name") or ""
         text = row.get("campaign_message") or ""
         channel = row.get("channel") or "tg"
-        if not phone:
+        tg_uid = _parse_int(row.get("tg_user_id"))
+        max_uid = _parse_int(row.get("max_user_id"))
+        ch = normalize_channel(channel) or channel
+
+        if ch == "tg" and not phone and tg_uid is None:
             await mark_recipient_status(
-                int(row["id"]), "failed", error="Нет телефона"
+                int(row["id"]), "failed", error="Нет телефона и Telegram id"
             )
             processed += 1
             continue
+        if ch == "max" and max_uid is None and not phone:
+            await mark_recipient_status(
+                int(row["id"]), "failed", error="Нет данных для MAX"
+            )
+            processed += 1
+            continue
+
         ok, status, error = await _send_via_channel(
-            channel, phone=phone, name=name, text=text
+            channel,
+            phone=phone,
+            name=name,
+            text=text,
+            tg_user_id=tg_uid,
+            max_user_id=max_uid,
         )
         await mark_recipient_status(
             int(row["id"]),
@@ -113,12 +176,30 @@ async def process_personal_batch() -> int:
         name = row.get("customer_name") or ""
         text = row.get("message") or ""
         channel = row.get("channel") or "tg"
-        if not phone:
-            await mark_personal_status(int(row["id"]), "failed", error="Нет телефона")
+        tg_uid = _parse_int(row.get("tg_user_id"))
+        max_uid = _parse_int(row.get("max_user_id"))
+        ch = normalize_channel(channel) or channel
+
+        if ch == "tg" and not phone and tg_uid is None:
+            await mark_personal_status(
+                int(row["id"]), "failed", error="Нет телефона и Telegram id"
+            )
             processed += 1
             continue
+        if ch == "max" and max_uid is None and not phone:
+            await mark_personal_status(
+                int(row["id"]), "failed", error="Нет данных для MAX"
+            )
+            processed += 1
+            continue
+
         ok, status, error = await _send_via_channel(
-            channel, phone=phone, name=name, text=text
+            channel,
+            phone=phone,
+            name=name,
+            text=text,
+            tg_user_id=tg_uid,
+            max_user_id=max_uid,
         )
         await mark_personal_status(
             int(row["id"]),
@@ -155,8 +236,12 @@ async def process_auto_greetings() -> int:
         else:
             text = f"Здравствуйте, {first}! 🌷\n\nВаш Veresk напоминает о важной дате."
         channel = "tg"
-        if ev.get("max_user_id") and not ev.get("tg_user_id"):
+        if ev.get("max_user_id") and not ev.get("tg_user_id") and not ev.get("customer_phone"):
             channel = "max"
+        elif ev.get("max_user_id") and not ev.get("tg_user_id"):
+            # Есть MAX id, телефона может хватить для TG — предпочитаем TG если есть phone
+            if not ev.get("customer_phone"):
+                channel = "max"
         await create_personal_message(int(ev["cust_id"]), text, channel=channel)
         created += 1
     _auto_done_day = today

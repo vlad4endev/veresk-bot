@@ -227,26 +227,29 @@ async def upsert_customer(
     last_order_at: str | None = None,
     created_in_pf_at: str | None = None,
     tg_user_id: int | None = None,
+    max_user_id: int | None = None,
     segment: str = "all",
 ) -> int:
     now = _now()
     phone = normalize_phone_db(phone)
+    max_id = str(int(max_user_id)) if max_user_id is not None else None
 
     def _upsert() -> int:
         with _connect() as db:
             row = db.execute(
-                "SELECT id, tg_user_id FROM customers WHERE posiflora_id = ?",
+                "SELECT id, tg_user_id, max_user_id FROM customers WHERE posiflora_id = ?",
                 (posiflora_id,),
             ).fetchone()
             if row:
                 new_tg = tg_user_id if tg_user_id is not None else row["tg_user_id"]
+                new_max = max_id if max_id is not None else row["max_user_id"]
                 db.execute(
                     """
                     UPDATE customers SET
                         name = ?, phone = ?, notes = ?,
                         last_order_at = COALESCE(?, last_order_at),
                         created_in_pf_at = COALESCE(?, created_in_pf_at),
-                        tg_user_id = ?, segment = ?, synced_at = ?
+                        tg_user_id = ?, max_user_id = ?, segment = ?, synced_at = ?
                     WHERE id = ?
                     """,
                     (
@@ -256,6 +259,7 @@ async def upsert_customer(
                         last_order_at,
                         created_in_pf_at,
                         new_tg,
+                        new_max,
                         segment,
                         now,
                         row["id"],
@@ -266,15 +270,16 @@ async def upsert_customer(
             cur = db.execute(
                 """
                 INSERT INTO customers (
-                    posiflora_id, name, phone, tg_user_id, notes,
+                    posiflora_id, name, phone, tg_user_id, max_user_id, notes,
                     last_order_at, created_in_pf_at, segment, synced_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     posiflora_id,
                     name,
                     phone,
                     tg_user_id,
+                    max_id,
                     notes,
                     last_order_at,
                     created_in_pf_at,
@@ -477,6 +482,32 @@ async def set_customer_tg_by_phone(phone: str, tg_user_id: int) -> None:
                 db.execute(
                     "UPDATE customers SET tg_user_id = ? WHERE id = ?",
                     (tg_user_id, cid),
+                )
+            db.commit()
+
+    await _run_db(_set)
+
+
+async def set_customer_max_by_phone(phone: str, max_user_id: int) -> None:
+    """Привязывает MAX user id к клиенту по телефону."""
+    target = _phone_digits(phone)
+    if not target:
+        return
+    try:
+        mid = str(int(max_user_id))
+    except (TypeError, ValueError):
+        return
+
+    def _set() -> None:
+        with _connect() as db:
+            rows = db.execute("SELECT id, phone FROM customers").fetchall()
+            ids = [
+                row["id"] for row in rows if _phone_digits(row["phone"]) == target
+            ]
+            for cid in ids:
+                db.execute(
+                    "UPDATE customers SET max_user_id = ? WHERE id = ?",
+                    (mid, cid),
                 )
             db.commit()
 

@@ -334,7 +334,7 @@ async def send_dialog_message(peer: str, text: str) -> dict[str, Any]:
 
 
 async def client_lookup_for_peer(peer: str) -> dict[str, Any]:
-    """Статус клиента CRM для MAX-диалога."""
+    """Статус клиента CRM для MAX-диалога (как Telegram client gate)."""
     from mailing_db import get_customer_by_phone
 
     peer_info = await resolve_peer_info(peer)
@@ -353,6 +353,15 @@ async def client_lookup_for_peer(peer: str) -> dict[str, Any]:
 
     if not customer and phone:
         customer = await get_customer_by_phone(str(phone))
+        # Допривяжем max_user_id, если нашли по телефону
+        if customer and max_user_id is not None and not customer.get("max_user_id"):
+            try:
+                from mailing_db import get_customer, set_customer_max_by_phone
+
+                await set_customer_max_by_phone(str(phone), int(max_user_id))
+                customer = await get_customer(int(customer["id"])) or customer
+            except Exception:
+                logger.debug("auto-bind max_user_id failed", exc_info=True)
 
     phone_ok = bool(re.sub(r"\D", "", str(phone or "")))
     if customer:
@@ -365,12 +374,12 @@ async def client_lookup_for_peer(peer: str) -> dict[str, Any]:
         status = "missing"
         label = "Клиента ещё нет в базе"
         if phone_ok:
-            hint = "Есть телефон из анкеты MAX — можно найти в клиентах"
-            can_create = False
+            hint = "Можно добавить в базу и Posiflora"
+            can_create = True
             need_phone = False
         else:
-            hint = "Клиент появится после заполнения анкеты в MAX"
-            can_create = False
+            hint = "В MAX нет номера — укажите телефон при создании"
+            can_create = True
             need_phone = True
 
     return {
@@ -383,4 +392,130 @@ async def client_lookup_for_peer(peer: str) -> dict[str, Any]:
         "peer": peer_info,
         "customer": customer,
         "configured": is_max_configured(),
+    }
+
+
+async def create_client_from_peer(
+    peer: str,
+    *,
+    phone: str | None = None,
+    name: str | None = None,
+) -> dict[str, Any]:
+    """Создать клиента из MAX-чата: Posiflora + локальная база + max_user_id."""
+    import aiohttp
+    from mailing_db import (
+        get_customer,
+        get_customer_by_phone,
+        set_customer_max_by_phone,
+        upsert_customer,
+    )
+    from mailing_db import get_customer_by_max_user_id
+    from posiflora import (
+        _get_access_token,
+        get_or_create_customer_id_by_phone,
+        get_or_create_customer_source,
+    )
+
+    peer_info = await resolve_peer_info(peer)
+    max_uid = peer_info.get("max_user_id")
+    if max_uid is None:
+        raise ValueError("unknown_max_user")
+
+    existing = await get_customer_by_max_user_id(int(max_uid))
+    if not existing:
+        phone_guess = (phone or peer_info.get("phone") or "").strip()
+        if phone_guess:
+            existing = await get_customer_by_phone(phone_guess)
+
+    if existing:
+        phone_bind = existing.get("phone") or phone or peer_info.get("phone") or ""
+        if phone_bind:
+            await set_customer_max_by_phone(str(phone_bind), int(max_uid))
+            existing = await get_customer(int(existing["id"])) or existing
+        return {
+            "ok": True,
+            "created": False,
+            "already_exists": True,
+            "label": "Клиент уже в базе",
+            "hint": "Привязали MAX id к карточке",
+            "customer": existing,
+            "peer": peer_info,
+        }
+
+    from mailing_db import normalize_phone_db
+
+    phone_raw = str(phone or peer_info.get("phone") or "").strip()
+    phone_fmt = normalize_phone_db(phone_raw)
+    digits = re.sub(r"\D", "", phone_fmt)
+    if len(digits) == 11 and digits[0] in ("7", "8"):
+        digits = digits[1:]
+    if len(digits) != 10:
+        return {
+            "error": "phone_required",
+            "message": "Нужен номер телефона клиента (+7…)",
+            "need_phone": True,
+            "peer": peer_info,
+        }
+
+    display_name = (
+        (name or "").strip()
+        or (peer_info.get("title") or "").strip()
+        or f"MAX {max_uid}"
+    )
+    notes = f"MAX ID: {max_uid}"
+
+    try:
+        async with aiohttp.ClientSession() as session:
+            token = await _get_access_token(session)
+            source_id = None
+            try:
+                source_id = await get_or_create_customer_source(session, token, "MAX")
+            except Exception:
+                logger.debug("customer source MAX unavailable", exc_info=True)
+            pf_id, pf_created = await get_or_create_customer_id_by_phone(
+                session,
+                token,
+                phone_fmt,
+                display_name,
+                notes=notes,
+                source_id=source_id,
+            )
+    except Exception as exc:
+        logger.exception("Posiflora create from MAX chat failed")
+        return {
+            "error": "posiflora_failed",
+            "message": f"Не удалось создать в Posiflora: {exc}",
+        }
+
+    customer_id = await upsert_customer(
+        posiflora_id=str(pf_id),
+        name=display_name,
+        phone=phone_fmt,
+        notes=notes,
+        max_user_id=int(max_uid),
+        segment="new",
+    )
+    await set_customer_max_by_phone(phone_fmt, int(max_uid))
+    customer = await get_customer(int(customer_id))
+
+    # Обновим телефон в индексе диалогов
+    try:
+        await upsert_dialog(
+            chat_id=peer_info.get("chat_id"),
+            max_user_id=int(max_uid),
+            name=display_name,
+            phone=phone_fmt,
+        )
+        peer_info = await resolve_peer_info(peer)
+    except Exception:
+        logger.debug("upsert_dialog after create failed", exc_info=True)
+
+    return {
+        "ok": True,
+        "created": True,
+        "posiflora_created": bool(pf_created),
+        "label": "Клиент добавлен",
+        "hint": "Сохранён в базе и в Posiflora",
+        "customer": customer,
+        "peer": peer_info,
     }

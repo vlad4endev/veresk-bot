@@ -154,7 +154,16 @@ def _extract_phone_from_contact(attachment: dict[str, Any]) -> str | None:
 class SurveyBot:
     def __init__(self, api: MaxBotAPI, florist_chat_id: int = 0):
         self.api = api
-        self.florist_chat_id = florist_chat_id
+        self._florist_chat_id_fallback = int(florist_chat_id or 0)
+
+    def _florist_chat_id(self) -> int:
+        """Chat ID флориста: панель (Настройки → MAX) → .env → fallback конструктора."""
+        try:
+            from max_bot.webhook_runtime import florist_chat_id as _from_settings
+
+            return int(_from_settings() or 0)
+        except Exception:
+            return self._florist_chat_id_fallback
 
     async def _send(self, user_id: int, text: str, keyboard=None) -> None:
         await self.api.send_message(user_id=user_id, text=text, keyboard=keyboard)
@@ -634,6 +643,16 @@ class SurveyBot:
 
         await save_max_profile(user_id, profile)
 
+        # Привязка к базе рассылок (по телефону), чтобы MAX попадал в каналы
+        try:
+            from mailing_db import set_customer_max_by_phone
+
+            phone = str(profile.get("phone") or "").strip()
+            if phone:
+                await set_customer_max_by_phone(phone, user_id)
+        except Exception:
+            logger.debug("Не удалось привязать MAX user к mailing customers", exc_info=True)
+
         try:
             from posiflora import sync_survey_profile_to_posiflora
 
@@ -700,7 +719,8 @@ class SurveyBot:
         posiflora_ok: bool,
         posiflora_meta: dict[str, Any],
     ) -> None:
-        if not self.florist_chat_id:
+        florist_id = self._florist_chat_id()
+        if not florist_id:
             return
         now = datetime.now().strftime("%d.%m.%Y %H:%M")
         events_block = _format_events_lines(profile.get("events") or [])
@@ -730,10 +750,10 @@ class SurveyBot:
                 "Создайте клиента и даты вручную по данным выше."
             )
         try:
-            await self.api.send_message(chat_id=self.florist_chat_id, text=text)
+            await self.api.send_message(chat_id=florist_id, text=text)
             logger.info("🔔 Флорист уведомлён об анкете MAX user_id=%s", user_id)
         except Exception:
             logger.exception(
                 "❌ Не удалось уведомить флориста в MAX chat_id=%s",
-                self.florist_chat_id,
+                florist_id,
             )

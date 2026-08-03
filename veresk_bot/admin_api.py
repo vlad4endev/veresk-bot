@@ -51,6 +51,7 @@ from mailing_db import (
     list_send_accounts,
     list_upcoming_events,
     next_events_for_customers,
+    pick_ready_account,
     set_customer_tg_by_phone,
     set_event_auto_send,
     touch_admin_session,
@@ -65,6 +66,13 @@ from mailing_db import (
 import runtime_settings
 from bot_metrics import get_bot_metrics, init_bot_metrics
 from posiflora_sync import last_sync_info, sync_from_posiflora
+from senders.matching import (
+    build_recipients_for_customers,
+    customer_can_receive,
+    normalize_channel,
+    parse_channels,
+    preview_mailing_match,
+)
 from senders.max_bot import get_max_bot_token, is_max_configured
 from senders.telegram_userbot import (
     check_telegram_session,
@@ -126,7 +134,7 @@ def _channel_for_customer(c: dict) -> str:
         parts.append("Telegram")
     if c.get("max_user_id"):
         parts.append("MAX")
-    return ",".join(parts) or "Telegram"
+    return ",".join(parts) or "—"
 
 
 def _segment_label(seg: str) -> str:
@@ -482,6 +490,24 @@ async def handle_campaign_get(request: web.Request) -> web.Response:
     return _json(_campaign_public(c))
 
 
+async def handle_mailing_preview(request: web.Request) -> web.Response:
+    """Превью сверки: сегмент × каналы × готовые аккаунты."""
+    err = await _require_admin(request)
+    if err:
+        return err
+    segment = str(request.query.get("segment") or "all")
+    seg_map = {
+        "Постоянные": "regular",
+        "Все клиенты": "all",
+        "Новые": "new",
+        "Давно не заказывали": "inactive",
+    }
+    segment = seg_map.get(segment, segment)
+    channels = str(request.query.get("channels") or "tg")
+    data = await preview_mailing_match(segment=segment, channels=channels)
+    return _json(data)
+
+
 async def handle_campaign_create(request: web.Request) -> web.Response:
     err = await _require_admin(request)
     if err:
@@ -502,7 +528,8 @@ async def handle_campaign_create(request: web.Request) -> web.Response:
         "Давно не заказывали": "inactive",
     }
     segment = seg_map.get(segment, segment)
-    channels = str(body.get("channels") or "tg")
+    ch_list = parse_channels(body.get("channels") or "tg")
+    channels = ",".join(ch_list)
     emoji = str(body.get("emoji") or "🌷")
     send_now = bool(body.get("send_now"))
     scheduled_at = body.get("scheduled_at")
@@ -511,6 +538,39 @@ async def handle_campaign_create(request: web.Request) -> web.Response:
         status = "sending"
     elif scheduled_at:
         status = "scheduled"
+
+    # Сверка клиентов с аккаунтами до постановки в очередь
+    customers = await customers_for_segment(segment)
+    tg_ready = await pick_ready_account("tg_userbot") if "tg" in ch_list else None
+    max_ok = is_max_configured() if "max" in ch_list else False
+    match = build_recipients_for_customers(
+        customers,
+        ch_list,
+        tg_accounts_ready=bool(tg_ready) if "tg" in ch_list else True,
+        max_configured=max_ok if "max" in ch_list else True,
+    )
+    recipients = match["recipients"]
+    if not recipients:
+        return _json(
+            {
+                "error": "no_reachable_recipients",
+                "message": (
+                    "Нет получателей для выбранных каналов. "
+                    "Проверьте аккаунты Telegram/MAX и привязки клиентов."
+                ),
+                "match": {
+                    "segment_total": match["segment_total"],
+                    "reachable": match["reachable"],
+                    "skipped": match["skipped"],
+                    "skipped_samples": match["skipped_samples"],
+                    "accounts": {
+                        "tg_ready": bool(tg_ready),
+                        "max_ready": max_ok,
+                    },
+                },
+            },
+            status=400,
+        )
 
     cid = await create_campaign(
         title=title,
@@ -521,18 +581,16 @@ async def handle_campaign_create(request: web.Request) -> web.Response:
         status=status,
         scheduled_at=scheduled_at,
     )
-    customers = await customers_for_segment(segment)
-    recipients: list[tuple[int, str]] = []
-    ch_list = [x.strip() for x in channels.replace("Telegram", "tg").replace("MAX", "max").split(",") if x.strip()]
-    if not ch_list:
-        ch_list = ["tg"]
-    for cust in customers:
-        for ch in ch_list:
-            recipients.append((int(cust["id"]), ch if ch in ("tg", "max") else "tg"))
-    if recipients:
-        await add_campaign_recipients(cid, recipients)
+    await add_campaign_recipients(cid, recipients)
     c = await get_campaign(cid)
-    return _json(_campaign_public(c), status=201)
+    payload = _campaign_public(c)
+    payload["match"] = {
+        "segment_total": match["segment_total"],
+        "reachable": match["reachable"],
+        "skipped": match["skipped"],
+        "will_send": match["reachable"]["total"],
+    }
+    return _json(payload, status=201)
 
 
 async def handle_campaign_patch(request: web.Request) -> web.Response:
@@ -609,16 +667,39 @@ async def handle_personal(request: web.Request) -> web.Response:
     message = str(body.get("message") or "").strip()
     if not message:
         return _json({"error": "message_required"}, status=400)
-    channel = str(body.get("channel") or "tg")
-    if channel in ("Telegram", "telegram"):
-        channel = "tg"
-    if channel in ("MAX", "max"):
-        channel = "max"
+    channel = normalize_channel(str(body.get("channel") or "tg")) or "tg"
     customer = await get_customer(customer_id)
     if not customer:
         return _json({"error": "not_found"}, status=404)
+    ok, reason = customer_can_receive(customer, channel)
+    if not ok:
+        return _json(
+            {
+                "error": "unreachable",
+                "message": reason or "Клиент недоступен в выбранном канале",
+                "channel": channel,
+            },
+            status=400,
+        )
+    if channel == "tg":
+        if not await pick_ready_account("tg_userbot"):
+            return _json(
+                {
+                    "error": "no_tg_account",
+                    "message": "Нет готовых Telegram-аккаунтов для отправки",
+                },
+                status=400,
+            )
+    elif channel == "max" and not is_max_configured():
+        return _json(
+            {
+                "error": "no_max_account",
+                "message": "MAX-бот не подключён",
+            },
+            status=400,
+        )
     msg_id = await create_personal_message(customer_id, message, channel=channel)
-    return _json({"ok": True, "id": msg_id})
+    return _json({"ok": True, "id": msg_id, "channel": channel})
 
 
 # ── accounts ───────────────────────────────────────────────────────────────
@@ -1076,6 +1157,32 @@ async def handle_max_settings_save(request: web.Request) -> web.Response:
                 },
                 status=400,
             )
+        except asyncio.TimeoutError:
+            return _json(
+                {
+                    "ok": False,
+                    "error": "max_unreachable",
+                    "detail": "MAX API не ответил вовремя. Проверьте интернет и повторите.",
+                },
+                status=502,
+            )
+        except Exception as exc:
+            # aiohttp.ClientError и сетевые сбои
+            if exc.__class__.__name__ in (
+                "ClientError",
+                "ClientConnectorError",
+                "ServerTimeoutError",
+                "ClientOSError",
+            ) or "aiohttp" in type(exc).__module__:
+                return _json(
+                    {
+                        "ok": False,
+                        "error": "max_unreachable",
+                        "detail": f"Не удалось связаться с MAX API: {exc}",
+                    },
+                    status=502,
+                )
+            raise
         finally:
             await api.close()
         updates["max_bot_token"] = token
@@ -2584,6 +2691,63 @@ async def handle_max_chats_client(request: web.Request) -> web.Response:
     )
 
 
+async def handle_max_chats_client_create(request: web.Request) -> web.Response:
+    """Создать клиента из MAX-чата (Posiflora + локальная база + max_user_id)."""
+    err = await _require_admin(request)
+    if err:
+        return err
+    await _ensure_max_chat_db()
+    peer = str(request.match_info.get("peer_id") or "").strip()
+    if not peer:
+        return _json({"error": "invalid_peer_id"}, status=400)
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    if not isinstance(body, dict):
+        body = {}
+
+    from senders.max_chat import create_client_from_peer
+
+    try:
+        data = await create_client_from_peer(
+            peer,
+            phone=str(body.get("phone") or "").strip() or None,
+            name=str(body.get("name") or "").strip() or None,
+        )
+    except ValueError as exc:
+        return _json({"error": str(exc)}, status=400)
+    except Exception as exc:
+        logger.exception("MAX client create failed")
+        return _json({"error": str(exc)}, status=502)
+
+    if data.get("error"):
+        status = 400 if data["error"] in ("phone_required", "unknown_max_user") else 502
+        return _json(
+            {
+                "error": data["error"],
+                "message": data.get("message"),
+                "need_phone": bool(data.get("need_phone")),
+                "peer": data.get("peer"),
+            },
+            status=status,
+        )
+
+    customer = data.get("customer")
+    return _json(
+        {
+            "ok": True,
+            "created": bool(data.get("created")),
+            "already_exists": bool(data.get("already_exists")),
+            "posiflora_created": bool(data.get("posiflora_created")),
+            "label": data.get("label"),
+            "hint": data.get("hint"),
+            "customer": _customer_public(customer) if customer else None,
+            "peer": data.get("peer"),
+        }
+    )
+
+
 # ── MAX webhook + SSE ─────────────────────────────────────────────────────────
 
 
@@ -2715,6 +2879,7 @@ def setup_admin_routes(app: web.Application) -> None:
         ("/api/admin/campaigns/{id}", handle_campaign_get, "GET"),
         ("/api/admin/campaigns/{id}", handle_campaign_patch, "PATCH"),
         ("/api/admin/campaigns/{id}/recipients", handle_campaign_recipients, "GET"),
+        ("/api/admin/mailing/preview", handle_mailing_preview, "GET"),
         ("/api/admin/personal", handle_personal, "POST"),
         ("/api/admin/accounts", handle_accounts_list, "GET"),
         ("/api/admin/accounts/telegram/settings", handle_telegram_settings_get, "GET"),
@@ -2741,6 +2906,7 @@ def setup_admin_routes(app: web.Application) -> None:
         ("/api/admin/max-chats/dialogs/{peer_id}/messages", handle_max_chats_messages, "GET"),
         ("/api/admin/max-chats/dialogs/{peer_id}/send", handle_max_chats_send, "POST"),
         ("/api/admin/max-chats/dialogs/{peer_id}/client", handle_max_chats_client, "GET"),
+        ("/api/admin/max-chats/dialogs/{peer_id}/client", handle_max_chats_client_create, "POST"),
         ("/api/admin/max-chats/events", handle_max_chats_events, "GET"),
         ("/api/admin/max-chats/webhook", handle_max_webhook_status, "GET"),
         ("/api/max/webhook", handle_max_webhook, "POST"),

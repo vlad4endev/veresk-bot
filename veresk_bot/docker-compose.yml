@@ -15,7 +15,8 @@ services:
       - redis
 
   # MAX-бот (анкета как в Telegram, без Mini App).
-  # Запустится только если в .env задан MAX_BOT_TOKEN.
+  # Токен: Настройки → MAX в админке (runtime_settings) или MAX_BOT_TOKEN в .env.
+  # Без токена процесс ждёт, не падает в crash-loop.
   max_bot:
     build: .
     command: ["python", "-m", "max_bot.main"]

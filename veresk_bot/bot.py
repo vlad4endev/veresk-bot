@@ -40,6 +40,13 @@ from notifications import router as notifications_router
 from order_status import status_meta
 from poller import start_polling
 from order_store import get_active_order_by_tg
+from survey_smart import (
+    budget_hint_for_occasions,
+    match_budget,
+    match_occasion,
+    match_relation,
+    parse_date_input,
+)
 from webapp_buttons import (
     launch_keyboard,
     orders_list_keyboard,
@@ -96,24 +103,8 @@ def _format_date(day) -> str:
 
 def resolve_important_date(text: str) -> str | None:
     """Проверяет ввод и возвращает дату в формате ДД.ММ.ГГГГ."""
-    raw = text.strip()
-    if not raw:
-        return None
-
-    today = datetime.now().date()
-    aliases = {"сегодня": 0, "завтра": 1}
-    alias = aliases.get(raw.lower())
-    if alias is not None:
-        return _format_date(today + timedelta(days=alias))
-
-    if re.match(r"^\d{2}\.\d{2}\.\d{4}$", raw):
-        try:
-            datetime.strptime(raw, "%d.%m.%Y")
-        except ValueError:
-            return None
-        return raw
-
-    return None
+    result = parse_date_input(text)
+    return result["date"] if result.get("ok") else None
 
 
 def kb_phone() -> ReplyKeyboardMarkup:
@@ -787,12 +778,12 @@ async def step_phone_text(message: Message, state: FSMContext) -> None:
 
 
 async def _phone_done(message: Message, state: FSMContext, phone: str) -> None:
-    await state.update_data(phone=phone)
+    await state.update_data(phone=phone, pending_month=None)
     await message.answer(
         f"{progress(2)}\n\n"
         "Укажите *важную дату* 📅\n\n"
-        "Введите дату в формате *ДД.ММ.ГГГГ*\n"
-        "_Например: 15.06.2025_",
+        "Можно так: *15.06.2026*, *завтра*, *через неделю* или *15 июня*.\n"
+        "_Можно сразу: «мамин ДР 15 июня»_",
         parse_mode=PARSE_MODE,
         reply_markup=ReplyKeyboardRemove(),
     )
@@ -800,10 +791,20 @@ async def _phone_done(message: Message, state: FSMContext, phone: str) -> None:
 
 
 async def _ask_occasion(message: Message, state: FSMContext) -> None:
+    data = await state.get_data()
+    hint = (data.get("hint_occasion") or "").strip()
+    if hint:
+        await state.update_data(occasion=hint, hint_occasion=None, awaiting_custom_occasion=False)
+        await message.answer(
+            f"Повод: *{hint}* ✅",
+            parse_mode=PARSE_MODE,
+        )
+        await _ask_relation(message, state)
+        return
     await message.answer(
         f"{progress(3)}\n\n"
         "*Какой повод?*\n\n"
-        "_Выберите вариант или нажмите «Свой вариант»_",
+        "_Выберите вариант, нажмите «Свой вариант» или напишите текстом_",
         parse_mode=PARSE_MODE,
         reply_markup=kb_occasion(),
     )
@@ -811,10 +812,20 @@ async def _ask_occasion(message: Message, state: FSMContext) -> None:
 
 
 async def _ask_relation(message: Message, state: FSMContext) -> None:
+    data = await state.get_data()
+    hint = (data.get("hint_relation") or "").strip()
+    if hint:
+        await state.update_data(relation=hint, hint_relation=None, awaiting_custom_relation=False)
+        await message.answer(
+            f"Получатель: *{hint}* ✅",
+            parse_mode=PARSE_MODE,
+        )
+        await _save_event_and_ask_more(message, state)
+        return
     await message.answer(
         f"{progress(4)}\n\n"
         "*Кем приходится получатель?* 🌺\n\n"
-        "_Выберите вариант или нажмите «Свой вариант»_",
+        "_Выберите вариант, нажмите «Свой вариант» или напишите текстом_",
         parse_mode=PARSE_MODE,
         reply_markup=kb_relation(),
     )
@@ -845,10 +856,14 @@ async def _save_event_and_ask_more(message: Message, state: FSMContext) -> None:
 
 
 async def _ask_budget(message: Message, state: FSMContext) -> None:
+    data = await state.get_data()
+    occasions = [e.get("occasion", "") for e in data.get("events", [])]
+    hint = budget_hint_for_occasions(occasions)
+    extra = f"\n\n💡 {hint}" if hint else ""
     await message.answer(
         f"{progress(5)}\n\n"
-        "*Уровень бюджета букета?*\n\n"
-        "_Выберите вариант из кнопок ниже_",
+        f"*Уровень бюджета букета?*{extra}\n\n"
+        "_Выберите кнопку или напишите сумму, например «8000»_",
         parse_mode=PARSE_MODE,
         reply_markup=kb_budget(),
     )
@@ -1012,8 +1027,26 @@ async def _handle_choice_step(
         await on_done(message, state)
         return
 
+    # Умный разбор свободного текста (др → День рождения и т.п.)
+    smart = None
+    if field == "occasion":
+        smart = match_occasion(text)
+    elif field == "relation":
+        smart = match_relation(text)
+    if smart:
+        await state.update_data(**{field: smart, awaiting_key: False})
+        await message.answer(f"Принято: *{smart}* ✅", parse_mode=PARSE_MODE)
+        await on_done(message, state)
+        return
+
+    # Свободный текст без кнопки «Свой вариант» — принимаем как custom
+    if field in ("occasion", "relation", "source") and len(text) >= 2:
+        await state.update_data(**{field: text, awaiting_key: False})
+        await on_done(message, state)
+        return
+
     await message.answer(
-        "Выберите вариант из кнопок или нажмите «Свой вариант» 👇",
+        "Выберите вариант из кнопок, напишите текстом или нажмите «Свой вариант» 👇",
         reply_markup=keyboard(),
         parse_mode=PARSE_MODE,
     )
@@ -1021,23 +1054,60 @@ async def _handle_choice_step(
 
 async def step_important_date(message: Message, state: FSMContext) -> None:
     text = (message.text or "").strip()
-    resolved = resolve_important_date(text)
-    if resolved:
-        await state.update_data(important_date=resolved)
+    data = await state.get_data()
+    pending = data.get("pending_month")
+    try:
+        pending_month = int(pending) if pending else None
+    except (TypeError, ValueError):
+        pending_month = None
+
+    parsed = parse_date_input(text, pending_month=pending_month)
+    updates: dict[str, Any] = {}
+    if parsed.get("occasion"):
+        updates["hint_occasion"] = parsed["occasion"]
+    if parsed.get("relation"):
+        updates["hint_relation"] = parsed["relation"]
+
+    if parsed.get("ok") and parsed.get("date"):
+        updates["important_date"] = parsed["date"]
+        updates["pending_month"] = None
+        await state.update_data(**updates)
         data = await state.get_data()
         event_num = len(data.get("events", [])) + 1
-        if event_num > 1:
+        note_bits = []
+        if parsed.get("occasion"):
+            note_bits.append(parsed["occasion"])
+        if parsed.get("relation"):
+            note_bits.append(parsed["relation"])
+        note = (" · " + " · ".join(note_bits)) if note_bits else ""
+        if event_num > 1 or note:
             await message.answer(
-                f"Дата *{resolved}* принята ✅\n\n"
-                f"*Событие {event_num}* — какой повод?",
+                f"Дата *{parsed['date']}*{note} принята ✅"
+                + (f"\n\n*Событие {event_num}*" if event_num > 1 else ""),
                 parse_mode=PARSE_MODE,
             )
         await _ask_occasion(message, state)
         return
 
+    if parsed.get("pending_month"):
+        updates["pending_month"] = parsed["pending_month"]
+        await state.update_data(**updates)
+        await message.answer(
+            parsed.get("message")
+            or "Укажите число месяца — например *15*.",
+            parse_mode=PARSE_MODE,
+        )
+        return
+
+    if updates:
+        await state.update_data(**updates)
+
     await message.answer(
-        "⚠️ Введите корректную дату в формате *ДД.ММ.ГГГГ*\n"
-        "_Например: 15.06.2025_",
+        parsed.get("message")
+        or (
+            "⚠️ Не распознал дату. Попробуйте *15.06.2026*, *завтра*, "
+            "*через неделю* или *15 июня*."
+        ),
         parse_mode=PARSE_MODE,
     )
 
@@ -1047,10 +1117,10 @@ async def step_add_more_dates(message: Message, state: FSMContext) -> None:
     if text == ADD_MORE_YES:
         data = await state.get_data()
         next_num = len(data.get("events", [])) + 1
+        await state.update_data(pending_month=None, hint_occasion=None, hint_relation=None)
         await message.answer(
             f"Укажите *важную дату* для события {next_num} 📅\n\n"
-            "Введите дату в формате *ДД.ММ.ГГГГ*\n"
-            "_Например: 15.06.2025_",
+            "Можно: *15.06.2026*, *завтра*, *15 июня* или «мамин ДР 20 июля».",
             parse_mode=PARSE_MODE,
             reply_markup=ReplyKeyboardRemove(),
         )
@@ -1092,14 +1162,17 @@ async def step_relation(message: Message, state: FSMContext) -> None:
 
 async def step_budget(message: Message, state: FSMContext) -> None:
     budget = (message.text or "").strip()
-    if budget not in BUDGET_PRESETS:
+    mapped = match_budget(budget) or (budget if budget in BUDGET_PRESETS else None)
+    if not mapped:
         await message.answer(
-            "Выберите бюджет из кнопок ниже 👇",
+            "Выберите бюджет из кнопок или напишите сумму, например *8000* 👇",
             reply_markup=kb_budget(),
             parse_mode=PARSE_MODE,
         )
         return
-    await state.update_data(budget=budget, awaiting_custom_budget=False)
+    await state.update_data(budget=mapped, awaiting_custom_budget=False)
+    if mapped != budget:
+        await message.answer(f"Бюджет: *{mapped}* ✅", parse_mode=PARSE_MODE)
     await _ask_source(message, state)
 
 

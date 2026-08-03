@@ -105,6 +105,10 @@ const AdminAPI = (() => {
         method: "POST",
         body: JSON.stringify(body),
       }),
+    mailingPreview: (params = {}) => {
+      const q = new URLSearchParams(params).toString();
+      return request("/api/admin/mailing/preview" + (q ? "?" + q : ""));
+    },
     patchCampaign: (id, body) =>
       request("/api/admin/campaigns/" + id, {
         method: "PATCH",
@@ -274,6 +278,14 @@ const AdminAPI = (() => {
     maxChatClientStatus: (peerId) =>
       request(
         "/api/admin/max-chats/dialogs/" + encodeURIComponent(peerId) + "/client"
+      ),
+    maxChatClientCreate: (peerId, body) =>
+      request(
+        "/api/admin/max-chats/dialogs/" + encodeURIComponent(peerId) + "/client",
+        {
+          method: "POST",
+          body: JSON.stringify(body || {}),
+        }
       ),
     maxChatEvents: (onEvent) => {
       const q = new URLSearchParams({ token: getToken() });

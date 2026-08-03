@@ -72,6 +72,27 @@ SYSTEM_PROMPT = """Ты копирайтер цветочного салона V
 - Без ссылок, кроме veresk.flowers если нужна ссылка на заказ.
 - Не выдумывай акции/цены, которых нет в запросе пользователя."""
 
+CHAT_SYSTEM_PROMPT = """Ты помощник флориста и администратора цветочного салона Veresk
+(букеты, доставка, поздравления, CRM и рассылки в Telegram / MAX).
+
+Помогаешь с:
+- идеями и текстами рассылок и личных сообщений;
+- сегментами клиентов (regular / new / inactive / all);
+- разбором ближайших событий (ДР, годовщины);
+- вопросами по клиенту, если он есть в контексте;
+- идеями акций (без выдуманных цен и скидок).
+
+Правила:
+- Язык: русский, деловой и тёплый тон.
+- Опирайся на блок «Данные CRM» — не выдумывай цифры и клиентов.
+- Если данных мало — скажи об этом и предложи, что проверить в панели.
+- Для текстов сообщений можно использовать плейсхолдеры {имя} и {скидка}.
+- Не используй markdown-таблицы; списки — коротко, через «•» или нумерацию.
+- Не раскрывай API-ключи и внутренние настройки сервера."""
+
+MAX_CHAT_HISTORY = 16
+MAX_CHAT_MESSAGE_CHARS = 4000
+
 
 def get_ai_provider() -> str:
     raw = runtime_settings.get("ai_provider")
@@ -192,6 +213,55 @@ def _build_user_content(*, prompt: str, current: str, segment: str, mode: str) -
     return user_content
 
 
+async def _chat_completion(
+    messages: list[dict[str, str]],
+    *,
+    temperature: float = 0.7,
+    max_tokens: int = 500,
+) -> str:
+    if not is_ai_configured():
+        raise AiComposeError(
+            "ai_not_configured",
+            "Подключите ИИ в Настройках → Сервисы",
+        )
+    if not messages:
+        raise AiComposeError("prompt_required", "Пустой запрос")
+
+    provider = get_ai_provider()
+    api_key = get_ai_api_key()
+    url = f"{get_ai_api_base()}/chat/completions"
+    payload: dict[str, Any] = {
+        "model": resolve_model_uri(),
+        "temperature": temperature,
+        "max_tokens": max_tokens,
+        "messages": messages,
+    }
+    headers = _request_headers(provider, api_key)
+
+    timeout = aiohttp.ClientTimeout(total=60)
+    try:
+        async with aiohttp.ClientSession(timeout=timeout) as session:
+            async with session.post(url, json=payload, headers=headers) as resp:
+                body = await resp.json(content_type=None)
+                if resp.status >= 400:
+                    detail = _extract_api_error(body) or f"HTTP {resp.status}"
+                    logger.warning("AI chat failed (%s): %s", provider, detail)
+                    raise AiComposeError("ai_provider_error", detail)
+    except AiComposeError:
+        raise
+    except aiohttp.ClientError as exc:
+        logger.warning("AI chat network error: %s", exc)
+        raise AiComposeError("ai_network_error", "Не удалось связаться с ИИ") from exc
+    except Exception as exc:
+        logger.exception("AI chat unexpected error")
+        raise AiComposeError("ai_error", "Ошибка генерации") from exc
+
+    text = _extract_message(body)
+    if not text:
+        raise AiComposeError("ai_empty", "ИИ вернул пустой ответ")
+    return text
+
+
 async def generate_mailing_text(
     *,
     prompt: str,
@@ -202,12 +272,6 @@ async def generate_mailing_text(
     """
     mode: write — новый текст; improve — улучшить current_text с учётом prompt.
     """
-    if not is_ai_configured():
-        raise AiComposeError(
-            "ai_not_configured",
-            "Подключите ИИ в Настройках → Сервисы",
-        )
-
     user_prompt = (prompt or "").strip()
     current = (current_text or "").strip()
     if mode == "improve" and not current and not user_prompt:
@@ -221,42 +285,59 @@ async def generate_mailing_text(
         segment=segment,
         mode=mode,
     )
-    provider = get_ai_provider()
-    api_key = get_ai_api_key()
-    url = f"{get_ai_api_base()}/chat/completions"
-    payload: dict[str, Any] = {
-        "model": resolve_model_uri(),
-        "temperature": 0.7,
-        "max_tokens": 500,
-        "messages": [
+    return await _chat_completion(
+        [
             {"role": "system", "content": SYSTEM_PROMPT},
             {"role": "user", "content": user_content},
         ],
-    }
-    headers = _request_headers(provider, api_key)
+        temperature=0.7,
+        max_tokens=500,
+    )
 
-    timeout = aiohttp.ClientTimeout(total=45)
-    try:
-        async with aiohttp.ClientSession(timeout=timeout) as session:
-            async with session.post(url, json=payload, headers=headers) as resp:
-                body = await resp.json(content_type=None)
-                if resp.status >= 400:
-                    detail = _extract_api_error(body) or f"HTTP {resp.status}"
-                    logger.warning("AI compose failed (%s): %s", provider, detail)
-                    raise AiComposeError("ai_provider_error", detail)
-    except AiComposeError:
-        raise
-    except aiohttp.ClientError as exc:
-        logger.warning("AI compose network error: %s", exc)
-        raise AiComposeError("ai_network_error", "Не удалось связаться с ИИ") from exc
-    except Exception as exc:
-        logger.exception("AI compose unexpected error")
-        raise AiComposeError("ai_error", "Ошибка генерации") from exc
 
-    text = _extract_message(body)
-    if not text:
-        raise AiComposeError("ai_empty", "ИИ вернул пустой ответ")
-    return text
+def normalize_chat_messages(raw: Any) -> list[dict[str, str]]:
+    """Оставляет последние user/assistant сообщения в разумных пределах."""
+    if not isinstance(raw, list):
+        return []
+    out: list[dict[str, str]] = []
+    for item in raw:
+        if not isinstance(item, dict):
+            continue
+        role = str(item.get("role") or "").strip()
+        content = str(item.get("content") or "").strip()
+        if role not in ("user", "assistant") or not content:
+            continue
+        out.append(
+            {
+                "role": role,
+                "content": content[:MAX_CHAT_MESSAGE_CHARS],
+            }
+        )
+    if len(out) > MAX_CHAT_HISTORY:
+        out = out[-MAX_CHAT_HISTORY:]
+    return out
+
+
+async def admin_assistant_reply(
+    *,
+    messages: list[dict[str, str]],
+    context: str = "",
+) -> str:
+    """Ответ внутреннего ИИ-чата админки с CRM-контекстом."""
+    history = normalize_chat_messages(messages)
+    if not history or history[-1]["role"] != "user":
+        raise AiComposeError("prompt_required", "Напишите сообщение")
+
+    system = CHAT_SYSTEM_PROMPT
+    ctx = (context or "").strip()
+    if ctx:
+        system += "\n\n=== Данные CRM (актуально сейчас) ===\n" + ctx[:8000]
+
+    return await _chat_completion(
+        [{"role": "system", "content": system}, *history],
+        temperature=0.55,
+        max_tokens=1200,
+    )
 
 
 def _request_headers(provider: str, api_key: str) -> dict[str, str]:

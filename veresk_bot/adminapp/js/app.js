@@ -59,7 +59,7 @@
     curClient: null,
     curCampaign: null,
     curPerson: null,
-    wizard: { segment: "regular", message: "", when: "later", date: "", time: "10:00" },
+    wizard: { segment: "regular", message: "", when: "later", date: "", time: "10:00", channels: ["tg"] },
     step: 0,
     tgPhone: "",
   };
@@ -1843,6 +1843,16 @@
     const code = err?.data?.error || err?.message;
     const detail = err?.data?.detail;
     if (detail) return detail;
+    if (
+      code === "Failed to fetch" ||
+      code === "NetworkError when attempting to fetch resource." ||
+      code === "Load failed"
+    ) {
+      return "Нет связи с сервером админки. Запустите: python run_admin_local.py и откройте http://127.0.0.1:3005/admin/";
+    }
+    if (code === "max_unreachable") {
+      return "MAX API недоступен. Проверьте интернет и повторите.";
+    }
     if (code === "token_required") {
       return "Сначала сохраните токен бота (шаг 1). Токен выдаёт @MasterBot в MAX.";
     }
@@ -1868,7 +1878,11 @@
       const who = res.bot_username
         ? "@" + res.bot_username
         : res.bot_name || "бот";
-      alert("MAX подключён: " + who);
+      alert(
+        "MAX подключён: " +
+          who +
+          "\n\nСценарий анкеты активен. Напишите боту /start в MAX — или откройте Чаты → MAX."
+      );
       loadAccounts();
       loadBotsPane();
     } catch (err) {
@@ -2155,6 +2169,79 @@
 
   // ── wizard ──────────────────────────────────────────────────────────────
 
+  function selectedChannels() {
+    const list = [];
+    if ($("#chanTg")?.classList.contains("on")) list.push("tg");
+    if ($("#chanMax")?.classList.contains("on")) list.push("max");
+    return list.length ? list : ["tg"];
+  }
+
+  function channelsLabel(list) {
+    return list
+      .map((c) => (c === "max" ? "MAX" : "Telegram"))
+      .join(" + ");
+  }
+
+  async function refreshMatchPreview() {
+    const segment = $("#s0 .choice.on")?.dataset.seg || state.wizard.segment || "all";
+    const channels = selectedChannels();
+    state.wizard.channels = channels;
+    const sumCh = $("#sumChannels");
+    if (sumCh) sumCh.textContent = channelsLabel(channels);
+    const box = $("#matchPreview");
+    try {
+      const data = await AdminAPI.mailingPreview({
+        segment,
+        channels: channels.join(","),
+      });
+      const will = data.will_send || 0;
+      const tgN = (data.reachable && data.reachable.tg) || 0;
+      const maxN = (data.reachable && data.reachable.max) || 0;
+      if ($("#matchWill")) $("#matchWill").textContent = fmtNum(will) + " доставок";
+      if ($("#matchTg")) $("#matchTg").textContent = fmtNum(tgN);
+      if ($("#matchMax")) $("#matchMax").textContent = fmtNum(maxN);
+      if ($("#matchTgRow")) $("#matchTgRow").hidden = !channels.includes("tg");
+      if ($("#matchMaxRow")) $("#matchMaxRow").hidden = !channels.includes("max");
+      if ($("#sumWho")) $("#sumWho").textContent = fmtNum(will) + " доставок";
+
+      const tgAcc = data.accounts && data.accounts.tg;
+      const maxAcc = data.accounts && data.accounts.max;
+      if ($("#chanTgMeta")) {
+        $("#chanTgMeta").textContent = tgAcc?.ready
+          ? (tgAcc.count > 1 ? tgAcc.count + " акк." : "аккаунт готов")
+          : "нет аккаунта";
+      }
+      if ($("#chanMaxMeta")) {
+        $("#chanMaxMeta").textContent = maxAcc?.ready ? "бот подключён" : "не подключён";
+      }
+      $("#chanTg")?.classList.toggle("is-off", !tgAcc?.ready);
+      $("#chanMax")?.classList.toggle("is-off", !maxAcc?.ready);
+
+      const note = $("#matchNote");
+      if (note) {
+        const skipped = data.skipped || {};
+        const skipTotal = Object.values(skipped).reduce((a, b) => a + b, 0);
+        if (!will) {
+          note.textContent =
+            "Нет доставляемых получателей — подключите аккаунты или выберите другой сегмент/канал.";
+          note.className = "match-preview-note warn";
+        } else if (skipTotal) {
+          note.textContent =
+            "Пропущено " +
+            fmtNum(skipTotal) +
+            " (нет привязки к каналу или аккаунт недоступен).";
+          note.className = "match-preview-note warn";
+        } else {
+          note.textContent = "Все выбранные клиенты сверены с аккаунтами.";
+          note.className = "match-preview-note ok";
+        }
+      }
+      if (box) box.hidden = false;
+    } catch (_) {
+      if (box) box.hidden = true;
+    }
+  }
+
   async function refreshSegmentCounts() {
     try {
       const s = await AdminAPI.segments();
@@ -2165,8 +2252,7 @@
         const cc = c.querySelector(".cc");
         if (cc) cc.textContent = fmtNum(n) + " человек";
       });
-      const on = $("#s0 .choice.on");
-      if (on) $("#sumWho").textContent = fmtNum(on.dataset.count) + " клиентов";
+      await refreshMatchPreview();
     } catch (_) {}
   }
 
@@ -2175,7 +2261,20 @@
       $$("#s0 .choice").forEach((x) => x.classList.remove("on"));
       c.classList.add("on");
       state.wizard.segment = c.dataset.seg;
-      $("#sumWho").textContent = fmtNum(c.dataset.count) + " клиентов";
+      refreshMatchPreview();
+    })
+  );
+
+  $$("#wizChannels .chan-toggle").forEach((btn) =>
+    btn.addEventListener("click", () => {
+      btn.classList.toggle("on");
+      btn.setAttribute("aria-pressed", btn.classList.contains("on") ? "true" : "false");
+      // хотя бы один канал должен остаться включённым
+      if (!selectedChannels().length) {
+        btn.classList.add("on");
+        btn.setAttribute("aria-pressed", "true");
+      }
+      refreshMatchPreview();
     })
   );
 
@@ -2372,6 +2471,7 @@
       else
         sumWhen.textContent =
           ($("#wizDate").value || "") + ", " + ($("#wizTime").value || "10:00");
+      refreshMatchPreview();
     }
   }
 
@@ -2393,21 +2493,33 @@
       "Рассылка";
     try {
       wnext.disabled = true;
-      await AdminAPI.createCampaign({
+      const channels = selectedChannels();
+      const created = await AdminAPI.createCampaign({
         title,
         message: msgTa.value,
         segment,
-        channels: "tg",
+        channels: channels.join(","),
         emoji: "🌷",
         send_now: sendNow,
         scheduled_at,
       });
       setStep(3);
+      const will =
+        (created.match && created.match.will_send) ||
+        created.total_count ||
+        0;
       $("#successText").textContent = sendNow
-        ? "Рассылка запущена. Сообщения уходят порциями."
-        : `Сообщение уйдёт ${fmtNum(segBtn?.dataset.count || 0)} клиентам ${scheduled_at || ""}.`;
+        ? `Рассылка запущена: ${fmtNum(will)} сообщений уходят порциями от имени аккаунтов.`
+        : `Сообщение уйдёт ${fmtNum(will)} получателям ${scheduled_at || ""} через ${channelsLabel(channels)}.`;
     } catch (err) {
-      alert("Ошибка: " + (err.data?.error || err.message));
+      const detail =
+        err.data?.message ||
+        (err.data?.error === "no_reachable_recipients"
+          ? "Нет получателей после сверки с аккаунтами"
+          : null) ||
+        err.data?.error ||
+        err.message;
+      alert("Ошибка: " + detail);
     }
     wnext.disabled = false;
   });
@@ -3196,9 +3308,11 @@
   }
 
   async function createTgClientFromChat({ phone, name } = {}) {
-    const accountId = currentTgAccountId();
     const peerId = tgState.peerId;
-    if (!accountId || peerId == null) return;
+    if (peerId == null) return;
+    const maxChannel = isMaxChannel();
+    const accountId = maxChannel ? null : currentTgAccountId();
+    if (!maxChannel && !accountId) return;
     const createBtn = $("#tgCreateClientBtn");
     const submitBtn = $("#tgCreateClientSubmit");
     if (createBtn) {
@@ -3207,10 +3321,13 @@
     }
     if (submitBtn) submitBtn.disabled = true;
     try {
-      const body = { account_id: accountId };
+      const body = {};
+      if (!maxChannel) body.account_id = accountId;
       if (phone) body.phone = phone;
       if (name) body.name = name;
-      const data = await AdminAPI.chatClientCreate(peerId, body);
+      const data = maxChannel
+        ? await AdminAPI.maxChatClientCreate(peerId, body)
+        : await AdminAPI.chatClientCreate(peerId, body);
       openTgCreateClientModal(false);
       if (data.peer) setTgPeerHeader({ ...(tgState.peer || {}), ...data.peer });
       renderTgClientStatus({

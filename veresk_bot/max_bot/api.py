@@ -38,9 +38,14 @@ class MaxBotAPI:
 
     async def _get_session(self) -> aiohttp.ClientSession:
         if self._session is None or self._session.closed:
+            from max_bot.ssl_ctx import build_max_ssl_context
+
+            ssl_ctx = build_max_ssl_context()
+            connector = aiohttp.TCPConnector(ssl=ssl_ctx)
             self._session = aiohttp.ClientSession(
                 headers={"Authorization": self.token},
                 timeout=aiohttp.ClientTimeout(total=120),
+                connector=connector,
             )
         return self._session
 

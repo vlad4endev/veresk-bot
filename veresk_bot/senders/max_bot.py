@@ -1,20 +1,24 @@
 """Отправка сообщений через MAX Bot API (рассылки).
 
 MAX Bot API не умеет отправлять по номеру телефона — только по user_id,
-и только тем, кто уже открыл диалог с ботом. Поэтому получатель ищется
-по телефону в таблице max_profiles (заполняется анкетой MAX-бота).
+и только тем, кто уже открыл диалог с ботом.
+
+Поиск получателя (по приоритету):
+1. явный max_user_id (из карточки клиента / сверки);
+2. customers.max_user_id по телефону;
+3. max_profiles по телефону (анкета MAX-бота).
 """
 
 from __future__ import annotations
 
 import asyncio
 import logging
-import re
 import sqlite3
 
 import runtime_settings
 from config import DATABASE_PATH, MAX_BOT_TOKEN
 from senders.base import SendResult
+from senders.matching import phone_digits, resolve_max_user_id_sync
 
 logger = logging.getLogger(__name__)
 
@@ -33,13 +37,10 @@ def is_max_configured() -> bool:
 
 def _normalize_phone(phone: str) -> str:
     """Любой формат (+7(999)999-99-99, 8999…, 999…) → 10 цифр для сравнения."""
-    digits = re.sub(r"\D", "", phone)
-    if len(digits) == 11 and digits[0] in ("7", "8"):
-        digits = digits[1:]
-    return digits
+    return phone_digits(phone)
 
 
-def _find_max_user_id(phone: str) -> int | None:
+def _find_max_user_id_in_customers(phone: str) -> int | None:
     target = _normalize_phone(phone)
     if not target:
         return None
@@ -47,17 +48,27 @@ def _find_max_user_id(phone: str) -> int | None:
         conn = sqlite3.connect(DATABASE_PATH, check_same_thread=False)
         try:
             rows = conn.execute(
-                "SELECT max_user_id, phone FROM max_profiles"
+                "SELECT max_user_id, phone FROM customers WHERE max_user_id IS NOT NULL"
             ).fetchall()
         finally:
             conn.close()
     except sqlite3.Error:
-        logger.debug("Таблица max_profiles недоступна", exc_info=True)
+        logger.debug("customers.max_user_id lookup failed", exc_info=True)
         return None
     for user_id, stored_phone in rows:
         if _normalize_phone(stored_phone or "") == target:
-            return int(user_id)
+            try:
+                return int(user_id)
+            except (TypeError, ValueError):
+                continue
     return None
+
+
+def _find_max_user_id(phone: str, *, max_user_id: int | None = None) -> int | None:
+    found = resolve_max_user_id_sync(max_user_id=max_user_id, phone=phone)
+    if found is not None:
+        return found
+    return _find_max_user_id_in_customers(phone)
 
 
 class MaxBotSender:
@@ -72,7 +83,14 @@ class MaxBotSender:
     def available(self) -> bool:
         return bool(self.token)
 
-    async def send(self, *, phone: str, name: str, text: str) -> SendResult:
+    async def send(
+        self,
+        *,
+        phone: str,
+        name: str,
+        text: str,
+        max_user_id: int | None = None,
+    ) -> SendResult:
         if not self.available:
             return SendResult(
                 ok=False,
@@ -80,16 +98,27 @@ class MaxBotSender:
                 error="Токен MAX-бота не задан — укажите его в настройках",
             )
 
-        user_id = await asyncio.to_thread(_find_max_user_id, phone)
+        user_id = await asyncio.to_thread(
+            _find_max_user_id, phone, max_user_id=max_user_id
+        )
         if user_id is None:
             return SendResult(
                 ok=False,
                 status="failed",
                 error=(
-                    "Клиент не найден среди пользователей MAX-бота "
-                    "(отправка возможна только тем, кто прошёл анкету в MAX)"
+                    "Клиент не найден в MAX "
+                    "(нужен max_user_id в базе или анкета в MAX-боте)"
                 ),
             )
+
+        # Если нашли по профилю/телефону — допривяжем к карточке
+        if phone and max_user_id is None:
+            try:
+                from mailing_db import set_customer_max_by_phone
+
+                await set_customer_max_by_phone(phone, int(user_id))
+            except Exception:
+                logger.debug("auto-bind max_user_id after send resolve failed", exc_info=True)
 
         from max_bot.api import MaxAPIError, MaxBotAPI
 

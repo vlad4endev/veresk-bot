@@ -567,6 +567,31 @@
   .choice .ct{font-weight:650;font-size:15px;} .choice .cc{font-size:13px;color:var(--ink-3);margin-top:1px;}
   .choice .rc{margin-left:auto;width:22px;height:22px;border-radius:50%;border:2px solid var(--line);flex:none;display:grid;place-items:center;color:#fff;}
   .choice.on .rc{background:var(--accent);border-color:var(--accent);} .choice .rc svg{width:13px;height:13px;opacity:0;} .choice.on .rc svg{opacity:1;}
+  .wiz-channels{margin-top:22px;padding-top:18px;border-top:1px solid var(--line);}
+  .wiz-channels-title{font-weight:650;font-size:15px;margin-bottom:4px;}
+  .wiz-channels-hint{margin:0 0 12px;}
+  .chan-toggles{display:flex;flex-wrap:wrap;gap:10px;}
+  .chan-toggle{
+    display:flex;flex-direction:column;align-items:flex-start;gap:2px;
+    min-width:140px;padding:12px 14px;border:2px solid var(--line);border-radius:14px;
+    background:var(--surface);text-align:left;cursor:pointer;
+    transition:border-color .15s ease,background .15s ease;
+  }
+  .chan-toggle:hover{border-color:var(--accent-soft);}
+  .chan-toggle.on{border-color:var(--accent);background:var(--accent-soft);}
+  .chan-toggle-name{font-weight:650;font-size:14px;}
+  .chan-toggle-meta{font-size:12px;color:var(--ink-3);}
+  .chan-toggle.on .chan-toggle-meta{color:var(--ink-2);}
+  .chan-toggle.is-off{opacity:.55;}
+  .match-preview{
+    margin-top:14px;padding:12px 14px;border-radius:12px;background:var(--surface-2);
+    display:flex;flex-direction:column;gap:6px;
+  }
+  .match-preview-row{display:flex;justify-content:space-between;gap:12px;font-size:13.5px;}
+  .match-preview-row b{font-weight:650;}
+  .match-preview-note{font-size:12.5px;color:var(--ink-3);margin-top:2px;}
+  .match-preview-note.warn{color:#9a3412;}
+  .match-preview-note.ok{color:var(--ink-2);}
 
   .send-layout{display:flex;flex-direction:column;gap:12px;width:100%;}
   .when-choices{max-width:none;}
@@ -923,8 +948,7 @@
   #chats[data-channel="max"] #tgNewChatBtn,
   #chats[data-channel="max"] #tgOnlyUsersWrap,
   #chats[data-channel="max"] #tgAttachBtn,
-  #chats[data-channel="max"] #tgAttachBar,
-  #chats[data-channel="max"] #tgCreateClientBtn{display:none!important;}
+  #chats[data-channel="max"] #tgAttachBar{display:none!important;}
   #chats[data-channel="tg"] #maxAccountLabel{display:none!important;}
   .tg-head-actions{display:flex;flex-wrap:wrap;gap:8px;align-items:center;}
   .tg-account-pick select{

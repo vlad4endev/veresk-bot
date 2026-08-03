@@ -74,6 +74,11 @@ async def main() -> None:
     else:
         start_telegram_session_keepalive()
 
+    from senders.dispatcher import start_mailing_dispatcher
+
+    start_mailing_dispatcher()
+    logger.info("Диспетчер рассылок (Telegram userbot / MAX) запущен")
+
     app = web.Application()
     app["redis"] = None
     app["bot"] = None

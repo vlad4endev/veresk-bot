@@ -23,15 +23,16 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 import aiohttp
 
-from config import MAX_FLORIST_CHAT_ID  # noqa: E402
 from max_bot.api import DEFAULT_API_BASE, MaxAPIError, MaxBotAPI, poll_updates_forever  # noqa: E402
 from max_bot.storage import init_max_db  # noqa: E402
 from max_bot.survey import SurveyBot  # noqa: E402
+from max_bot.webhook_runtime import florist_chat_id, webhook_url  # noqa: E402
 from senders.max_bot import get_max_bot_token  # noqa: E402
 
 logger = logging.getLogger(__name__)
 
 UPDATE_TYPES = ["message_created", "message_callback", "bot_started"]
+_TOKEN_WAIT_SEC = 10
 
 
 def _setup_logging() -> None:
@@ -97,24 +98,36 @@ async def _webhook_idle_loop() -> None:
 
     logger.info(
         "MAX webhook mode: обновления → %s (long polling отключён)",
-        os.getenv("MAX_WEBHOOK_URL", "").strip(),
+        webhook_url(),
     )
     while True:
         await touch_bot_heartbeat(PLATFORM_MAX)
         await asyncio.sleep(30)
 
 
+async def _wait_for_token() -> str:
+    """Ждём токен из панели (Настройки → MAX) или .env — без crash-loop."""
+    warned = False
+    while True:
+        token = get_max_bot_token()
+        if token:
+            if warned:
+                logger.info("Токен MAX получен — запускаю бота")
+            return token
+        if not warned:
+            logger.warning(
+                "Токен MAX-бота не задан. Создайте бота у @MasterBot, "
+                "затем укажите токен в админке: Настройки → MAX "
+                "(или MAX_BOT_TOKEN в .env). Жду…"
+            )
+            warned = True
+        await asyncio.sleep(_TOKEN_WAIT_SEC)
+
+
 async def main() -> None:
     _setup_logging()
 
-    token = get_max_bot_token()
-    if not token:
-        logger.error(
-            "Токен MAX-бота не задан. Создайте бота у @MasterBot в MAX, "
-            "затем укажите токен в админ-панели (Аккаунты → MAX) "
-            "или в .env (MAX_BOT_TOKEN=...)."
-        )
-        raise SystemExit(1)
+    token = await _wait_for_token()
 
     api_base = os.getenv("MAX_API_BASE", DEFAULT_API_BASE)
     api = MaxBotAPI(token, base_url=api_base)
@@ -143,14 +156,8 @@ async def main() -> None:
 
     await init_bot_metrics()
 
-    webhook_url = ""
-    try:
-        from max_bot.webhook_runtime import webhook_url as _wh_url
-
-        webhook_url = _wh_url()
-    except Exception:
-        webhook_url = os.getenv("MAX_WEBHOOK_URL", "").strip()
-    if webhook_url:
+    wh = webhook_url()
+    if wh:
         # Подписка регистрируется в bot.on_startup; здесь не поллим.
         try:
             await _webhook_idle_loop()
@@ -167,7 +174,8 @@ async def main() -> None:
     except Exception:
         logger.exception("Posiflora недоступна — анкеты будут сохраняться только локально")
 
-    bot = SurveyBot(api, florist_chat_id=MAX_FLORIST_CHAT_ID)
+    # florist_chat_id читается из панели/env при каждой анкете (см. SurveyBot)
+    bot = SurveyBot(api, florist_chat_id=florist_chat_id())
 
     async def _max_heartbeat_loop() -> None:
         while True:
@@ -181,7 +189,11 @@ async def main() -> None:
 
     asyncio.create_task(_max_heartbeat_loop())
 
-    logger.info("🔄 MAX long polling запущен (%s)", api_base)
+    logger.info(
+        "🔄 MAX long polling запущен (%s), florist_chat_id=%s",
+        api_base,
+        florist_chat_id() or "выкл",
+    )
     try:
         await poll_updates_forever(api, _on_update, types=UPDATE_TYPES)
     finally:
