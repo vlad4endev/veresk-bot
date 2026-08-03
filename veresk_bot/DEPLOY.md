@@ -28,9 +28,20 @@ admin.veresk-flowers.ru  →  IP вашего сервера
 Если бот уже крутится в Docker — обновите код и пересоберите:
 
 ```bash
-cd /path/to/veresk_bot   # каталог с docker-compose.yml
-git pull                 # или загрузите архив
+cd /path/to/veresk_bot   # каталог с docker-compose.yml и adminapp/
+chmod +x deploy.sh && ./deploy.sh
+# или вручную:
+# git pull && docker compose up -d --build
 ```
+
+**Проверка, что выкатилось (иначе UI останется на старом `api.js?v=26`):**
+
+```bash
+curl -s https://admin.veresk-flowers.ru/ | grep -oE 'api.js\?v=[0-9]+|max-login-v31'
+# ожидается: api.js?v=31  и  max-login-v31
+```
+
+Если видите `v=26` — `git pull` сделан не в той папке, откуда nginx монтирует `./adminapp`.
 
 Сохраните `./data/` (SQLite, сессии Telethon) и текущий `.env`.
 

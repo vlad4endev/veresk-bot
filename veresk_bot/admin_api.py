@@ -1093,6 +1093,8 @@ async def handle_accounts_list(request: web.Request) -> web.Response:
             "max_configured": max_ok,
             "max_userbot_ready": has_max_userbot,
             "pymax_installed": is_pymax_installed(),
+            # Маркер деплоя: в UI/curl должно быть max-login-v31 (не старый образ)
+            "server_build": "max-login-v31",
             "checked": check_live,
         }
     )

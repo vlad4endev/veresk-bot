@@ -157,14 +157,19 @@ async def _run_client_once(
     on_ready: Any | None = None,
     timeout: float = 120.0,
 ) -> dict[str, Any]:
-    """Поднять Client до on_start, выполнить on_ready(client), остановить."""
+    """Одноразовый запуск PyMax Client: auth → on_start → сохранить сессию → stop.
+
+    Важно: не вызывать ``stop()`` внутри ``on_start``.
+    ``Client.start()`` после emit_start блокируется на ``wait_closed()``;
+    stop из on_start даёт CancelledError («cancelled») даже после успешного 2FA.
+    """
     try:
         from pymax import Client, ExtraConfig
     except ImportError:
         return {"ok": False, "error": "pymax_missing", "detail": PYMAX_MISSING_DETAIL}
 
-    result_box: dict[str, Any] = {}
-    error_box: list[BaseException] = []
+    result_box: dict[str, Any] = {"ok": False}
+    ready = asyncio.Event()
 
     client = Client(
         phone=phone,
@@ -188,61 +193,91 @@ async def _run_client_once(
                 }
             result_box["ok"] = True
         except Exception as exc:
-            error_box.append(exc)
+            logger.exception("PyMax on_start failed")
             result_box["ok"] = False
             result_box["error"] = str(exc)
         finally:
+            # Только сигнал — stop снаружи, иначе CancelledError
+            ready.set()
+
+    start_task = asyncio.create_task(client.start(), name=f"pymax_start_{phone}")
+
+    async def _shutdown() -> None:
+        try:
+            await client.stop()
+        except Exception:
+            logger.debug("PyMax stop failed", exc_info=True)
+        if not start_task.done():
             try:
-                await c.stop()
-            except Exception:
-                pass
+                await asyncio.wait_for(asyncio.shield(start_task), timeout=8.0)
+            except (asyncio.TimeoutError, asyncio.CancelledError, Exception):
+                if not start_task.done():
+                    start_task.cancel()
+                    try:
+                        await start_task
+                    except (asyncio.CancelledError, Exception):
+                        pass
 
     try:
-        await asyncio.wait_for(client.start(), timeout=timeout)
-    except asyncio.TimeoutError:
-        try:
-            await client.stop()
-        except Exception:
-            pass
-        return {"ok": False, "error": "Таймаут подключения к MAX", "need_new_code": True}
-    except asyncio.CancelledError:
-        # PyMax часто кидает CancelledError при c.stop() после успешного on_start —
-        # это не «отмена пользователем».
-        if result_box.get("ok"):
+        deadline = asyncio.get_running_loop().time() + max(timeout, 5.0)
+        while not ready.is_set():
+            if start_task.done():
+                break
+            remaining = deadline - asyncio.get_running_loop().time()
+            if remaining <= 0:
+                await _shutdown()
+                return {
+                    "ok": False,
+                    "error": "timeout",
+                    "detail": "Таймаут подключения к MAX",
+                    "need_new_code": True,
+                }
+            try:
+                await asyncio.wait_for(ready.wait(), timeout=min(0.5, remaining))
+            except asyncio.TimeoutError:
+                continue
+
+        if ready.is_set() and result_box.get("ok"):
+            await _shutdown()
             return {"ok": True, **(result_box.get("payload") or {})}
-        if error_box:
-            return {"ok": False, "error": str(error_box[0])}
-        try:
-            await client.stop()
-        except Exception:
-            pass
+
+        # start() упал до on_start (неверный код / сеть / сессия)
+        if start_task.done():
+            err: str | None = None
+            try:
+                exc = start_task.exception()
+                if exc is not None:
+                    err = str(exc)
+            except asyncio.CancelledError:
+                err = "connection_closed"
+            except Exception as exc:
+                err = str(exc)
+            await _shutdown()
+            return {
+                "ok": False,
+                "error": err or result_box.get("error") or "max_login_failed",
+                "detail": err
+                or result_box.get("error")
+                or "Не удалось авторизоваться в MAX",
+                "need_new_code": True,
+            }
+
+        await _shutdown()
         return {
             "ok": False,
-            "error": "connection_closed",
-            "detail": (
-                "Соединение с MAX закрылось во время входа. "
-                "Нажмите «Получить код» и повторите (SMS → пароль 2FA)."
-            ),
+            "error": result_box.get("error") or "max_login_failed",
+            "detail": result_box.get("error") or "Не удалось авторизоваться в MAX",
             "need_new_code": True,
         }
     except Exception as exc:
-        logger.exception("PyMax client.start failed")
-        try:
-            await client.stop()
-        except Exception:
-            pass
-        return {"ok": False, "error": str(exc), "need_new_code": True}
-
-    if error_box:
-        return {"ok": False, "error": str(error_box[0])}
-    if result_box.get("ok"):
-        out = {"ok": True, **(result_box.get("payload") or {})}
-        return out
-    return {
-        "ok": False,
-        "error": result_box.get("error") or "Не удалось авторизоваться в MAX",
-        "need_new_code": True,
-    }
+        logger.exception("PyMax _run_client_once failed")
+        await _shutdown()
+        return {
+            "ok": False,
+            "error": str(exc),
+            "detail": str(exc),
+            "need_new_code": True,
+        }
 
 
 async def start_max_login(phone: str, *, reset_session: bool = True) -> dict[str, Any]:
