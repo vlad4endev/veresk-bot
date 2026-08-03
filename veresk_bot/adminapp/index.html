@@ -9,7 +9,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,500;9..144,600;9..144,700&family=Manrope:wght@400;500;600;700&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="css/admin.css?v=47">
+<link rel="stylesheet" href="css/admin.css?v=48">
 <!-- Критичный CSS до paint: иначе логин мелькнёт, пока качается admin.css -->
 <style>
   #authBoot{display:none;position:fixed;inset:0;z-index:50;flex-direction:column;align-items:center;justify-content:center;gap:18px}
@@ -732,9 +732,9 @@
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>
               <input type="search" id="tgDialogSearch" placeholder="Поиск…" autocomplete="off">
             </div>
-            <label class="tg-filter" id="tgOnlyUsersWrap" title="Только личные переписки">
+            <label class="tg-filter" id="tgOnlyUsersWrap" title="Показать только чаты клиентов из CRM (по телефону или id мессенджера)">
               <input type="checkbox" id="tgOnlyUsers" checked>
-              <span>Личные</span>
+              <span>Клиенты</span>
             </label>
           </div>
           <div class="tg-dialog-list" id="tgDialogList">
@@ -1156,6 +1156,6 @@
 
 <script>window.__VERESK_BUILD__="auth-boot-v39";</script>
 <script src="js/api.js?v=35"></script>
-<script src="js/app.js?v=46"></script>
+<script src="js/app.js?v=47"></script>
 </body>
 </html>

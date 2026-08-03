@@ -399,15 +399,16 @@ async def get_customer_by_max_user_id(max_user_id: int) -> dict[str, Any] | None
     return await _run_db(_get)
 
 
-async def customer_contact_sets() -> tuple[set[int], set[str]]:
-    """Наборы tg_user_id и телефонов (последние 10 цифр) для быстрой фильтрации чатов."""
+async def customer_contact_sets() -> tuple[set[int], set[str], set[int]]:
+    """Наборы tg_user_id, телефонов (10 цифр) и max_user_id для фильтрации чатов."""
 
-    def _sets() -> tuple[set[int], set[str]]:
+    def _sets() -> tuple[set[int], set[str], set[int]]:
         with _connect() as db:
             rows = db.execute(
-                "SELECT tg_user_id, phone FROM customers"
+                "SELECT tg_user_id, max_user_id, phone FROM customers"
             ).fetchall()
         tg_ids: set[int] = set()
+        max_ids: set[int] = set()
         phones: set[str] = set()
         for row in rows:
             tid = row["tg_user_id"]
@@ -416,10 +417,16 @@ async def customer_contact_sets() -> tuple[set[int], set[str]]:
                     tg_ids.add(int(tid))
                 except (TypeError, ValueError):
                     pass
+            mid = row["max_user_id"]
+            if mid is not None and mid != "":
+                try:
+                    max_ids.add(int(mid))
+                except (TypeError, ValueError):
+                    pass
             digits = _phone_digits(row["phone"] or "")
             if digits:
                 phones.add(digits)
-        return tg_ids, phones
+        return tg_ids, phones, max_ids
 
     return await _run_db(_sets)
 

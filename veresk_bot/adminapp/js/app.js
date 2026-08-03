@@ -4994,7 +4994,13 @@
         return;
       }
       if (!items.length) {
-        box.innerHTML = `<div class="tg-empty"><div class="t">Диалогов пока нет</div>Они появятся, когда клиент напишет боту или заполнит анкету в MAX.</div>`;
+        box.innerHTML = `<div class="tg-empty"><div class="t">${
+          tgState.onlyUsers ? "Нет чатов клиентов" : "Диалогов пока нет"
+        }</div>${
+          tgState.onlyUsers
+            ? "Снимите фильтр «Клиенты», чтобы увидеть все диалоги."
+            : "Они появятся, когда клиент напишет боту или заполнит анкету в MAX."
+        }</div>`;
         return;
       }
     } else if (maxMode && maxUserbot) {
@@ -5008,10 +5014,10 @@
       }
       if (!items.length) {
         box.innerHTML = `<div class="tg-empty"><div class="t">${
-          tgState.onlyUsers ? "Нет личных чатов" : "Чатов пока нет"
+          tgState.onlyUsers ? "Нет чатов клиентов" : "Чатов пока нет"
         }</div>${
           tgState.onlyUsers
-            ? "Снимите фильтр «Только личные», чтобы увидеть группы и каналы."
+            ? "Снимите фильтр «Клиенты», чтобы увидеть все диалоги аккаунта."
             : "Нажмите «Новый чат», чтобы написать клиенту."
         }</div>`;
         return;
@@ -5027,10 +5033,10 @@
       }
       if (!items.length) {
         box.innerHTML = `<div class="tg-empty"><div class="t">${
-          tgState.onlyUsers ? "Нет личных чатов" : "Чатов пока нет"
+          tgState.onlyUsers ? "Нет чатов клиентов" : "Чатов пока нет"
         }</div>${
           tgState.onlyUsers
-            ? "Снимите фильтр «Только личные», чтобы увидеть группы и каналы."
+            ? "Снимите фильтр «Клиенты», чтобы увидеть все диалоги аккаунта."
             : "Нажмите «Новый чат», чтобы написать клиенту."
         }</div>`;
         return;
@@ -5462,7 +5468,7 @@
         try {
           const params = { account_id: accountId, limit: 100 };
           if (tgState.lastQuery) params.q = tgState.lastQuery;
-          if (tgState.onlyUsers) params.only_users = "1";
+          if (tgState.onlyUsers) params.clients_only = "1";
           const data = await AdminAPI.maxChatDialogs(params);
           tgState.maxMode = data.mode || "userbot";
           tgState.dialogs = data.items || [];
@@ -5494,6 +5500,7 @@
       try {
         const params = { limit: 100 };
         if (tgState.lastQuery) params.q = tgState.lastQuery;
+        if (tgState.onlyUsers) params.clients_only = "1";
         const data = await AdminAPI.maxChatDialogs(params);
         tgState.maxConfigured = data.configured !== false;
         tgState.maxMode = data.mode || "bot";
@@ -5530,7 +5537,7 @@
     try {
       const params = { account_id: accountId, limit: 100 };
       if (tgState.lastQuery) params.q = tgState.lastQuery;
-      if (tgState.onlyUsers) params.only_users = "1";
+      if (tgState.onlyUsers) params.clients_only = "1";
       const data = await AdminAPI.chatDialogs(params);
       tgState.dialogs = data.items || [];
       tgState.accountId = data.account_id || accountId;

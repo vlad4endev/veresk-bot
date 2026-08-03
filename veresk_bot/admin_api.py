@@ -151,10 +151,19 @@ def _mask_phone(phone: str) -> str:
 
 
 def _channel_for_customer(c: dict) -> str:
+    """Каналы доставки: TG по id/телефону; MAX по id или max_profiles по телефону."""
+    from senders.matching import resolve_max_user_id_sync
+
     parts = []
     if c.get("tg_user_id") or c.get("phone"):
         parts.append("Telegram")
-    if c.get("max_user_id"):
+    if (
+        resolve_max_user_id_sync(
+            max_user_id=c.get("max_user_id"),
+            phone=c.get("phone"),
+        )
+        is not None
+    ):
         parts.append("MAX")
     return ",".join(parts) or "—"
 
@@ -284,14 +293,20 @@ def _next_occurrence(date_from: str | None) -> tuple[str | None, int | None]:
 
 
 def _primary_channel_for_event(e: dict) -> tuple[str, str]:
-    """Канал доставки для события: по реальным идентификаторам, не «любой телефон = TG»."""
-    has_tg = bool(e.get("tg_user_id"))
-    has_max = bool(e.get("max_user_id"))
-    has_phone = bool(e.get("customer_phone") or e.get("phone"))
-    # Userbot может писать по номеру в Telegram, даже без tg_user_id
-    if has_tg or has_phone:
-        if has_max:
-            return "TG · MAX", "tg"
+    """Канал доставки для события: TG по id/телефону; MAX по id или max_profiles."""
+    from senders.matching import resolve_max_user_id_sync
+
+    has_tg = bool(e.get("tg_user_id") or e.get("customer_phone") or e.get("phone"))
+    has_max = (
+        resolve_max_user_id_sync(
+            max_user_id=e.get("max_user_id"),
+            phone=e.get("customer_phone") or e.get("phone"),
+        )
+        is not None
+    )
+    if has_tg and has_max:
+        return "TG · MAX", "tg"
+    if has_tg:
         return "Telegram", "tg"
     if has_max:
         return "MAX", "max"
@@ -2770,12 +2785,19 @@ async def handle_chats_dialogs(request: web.Request) -> web.Response:
     if clients_only:
         from mailing_db import customer_contact_sets
 
-        tg_ids, phones = await customer_contact_sets()
+        tg_ids, phones, _max_ids = await customer_contact_sets()
 
         def _is_known_client(row: dict[str, Any]) -> bool:
             peer_id = row.get("peer_id")
             try:
                 if peer_id is not None and int(peer_id) in tg_ids:
+                    return True
+            except (TypeError, ValueError):
+                pass
+            # Также tg_user_id из сериализации диалога, если есть
+            try:
+                tid = row.get("tg_user_id")
+                if tid is not None and int(tid) in tg_ids:
                     return True
             except (TypeError, ValueError):
                 pass
@@ -3543,7 +3565,38 @@ async def handle_max_chats_dialogs(request: web.Request) -> web.Response:
     except (TypeError, ValueError):
         limit = 80
     query = str(request.query.get("q") or "").strip()
-    only_users = _truthy_query(request.query.get("only_users"))
+    clients_only = _truthy_query(request.query.get("clients_only"))
+    only_users = clients_only or _truthy_query(request.query.get("only_users"))
+    fetch_limit = min(limit * 4, 200) if clients_only else limit
+
+    async def _filter_crm_clients(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        if not clients_only:
+            return items[:limit]
+        from mailing_db import customer_contact_sets
+
+        _tg_ids, phones, max_ids = await customer_contact_sets()
+
+        def _is_known(row: dict[str, Any]) -> bool:
+            for key in ("max_user_id", "peer_id"):
+                raw = row.get(key)
+                if raw is None or raw == "":
+                    continue
+                try:
+                    # peer_id у бота может быть "user:123" / "chat:456"
+                    if isinstance(raw, str) and ":" in raw:
+                        kind, _, rest = raw.partition(":")
+                        if kind == "user" and rest.isdigit() and int(rest) in max_ids:
+                            return True
+                    elif int(raw) in max_ids:
+                        return True
+                except (TypeError, ValueError):
+                    pass
+            phone = re.sub(r"\D", "", str(row.get("phone") or ""))
+            if len(phone) >= 10 and phone[-10:] in phones:
+                return True
+            return False
+
+        return [row for row in items if _is_known(row)][:limit]
 
     # Личный номер — как Telegram
     if acc is not None:
@@ -3554,7 +3607,7 @@ async def handle_max_chats_dialogs(request: web.Request) -> web.Response:
                 str(acc["session_file"]),
                 phone=str(acc.get("phone") or ""),
                 account_id=int(acc["id"]),
-                limit=limit,
+                limit=fetch_limit,
                 query=query,
                 only_users=only_users,
             )
@@ -3569,6 +3622,7 @@ async def handle_max_chats_dialogs(request: web.Request) -> web.Response:
                 },
                 status=502,
             )
+        items = await _filter_crm_clients(items)
         return _json(
             {
                 "configured": True,
@@ -3576,6 +3630,7 @@ async def handle_max_chats_dialogs(request: web.Request) -> web.Response:
                 "account_id": int(acc["id"]),
                 "account_label": acc.get("label") or acc.get("phone"),
                 "only_users": only_users,
+                "clients_only": clients_only,
                 "items": items,
             }
         )
@@ -3594,16 +3649,19 @@ async def handle_max_chats_dialogs(request: web.Request) -> web.Response:
     from senders.max_chat import list_dialogs
 
     try:
-        items = await list_dialogs(query=query, limit=limit)
+        items = await list_dialogs(query=query, limit=fetch_limit)
     except Exception as exc:
         logger.exception("MAX list dialogs failed")
         return _json({"error": str(exc), "configured": True, "mode": "bot", "items": []}, status=502)
+    items = await _filter_crm_clients(items)
     return _json(
         {
             "configured": True,
             "mode": "bot",
             "items": items,
             "account_label": "MAX-бот",
+            "only_users": only_users,
+            "clients_only": clients_only,
         }
     )
 

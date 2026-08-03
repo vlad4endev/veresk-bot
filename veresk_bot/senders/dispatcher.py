@@ -310,6 +310,39 @@ async def process_personal_batch() -> int:
     return processed
 
 
+def prefer_auto_channel_when_both() -> str:
+    """Канал автопоздравления, когда у клиента доступны и Telegram, и MAX.
+
+    Верните \"tg\" или \"max\".
+    Сейчас по умолчанию Telegram — надёжнее при наличии телефона.
+    """
+    # TODO(you): выберите стратегию магазина — см. learning note ниже
+    return "tg"
+
+
+async def _auto_greeting_channel(ev: dict[str, Any]) -> str | None:
+    """Выбрать канал для автопоздравления по реальным идентификаторам клиента."""
+    has_tg = bool(ev.get("tg_user_id") or ev.get("customer_phone"))
+    resolved_max = await asyncio.to_thread(
+        resolve_max_user_id_sync,
+        max_user_id=ev.get("max_user_id"),
+        phone=ev.get("customer_phone"),
+    )
+    has_max = resolved_max is not None
+    if not has_max and ev.get("customer_phone"):
+        # MAX userbot может найти по телефону без заранее известного max_user_id
+        if await pick_ready_account("max_userbot"):
+            has_max = True
+    if has_tg and has_max:
+        ch = prefer_auto_channel_when_both()
+        return "max" if ch == "max" else "tg"
+    if has_tg:
+        return "tg"
+    if has_max:
+        return "max"
+    return None
+
+
 async def process_auto_greetings() -> int:
     """Раз в день создаёт personal_messages для событий с auto_send.
 
@@ -337,12 +370,14 @@ async def process_auto_greetings() -> int:
             )
         else:
             text = f"Здравствуйте, {first}! 🌷\n\nВаш Veresk напоминает о важной дате."
-        channel = "tg"
-        if ev.get("max_user_id") and not ev.get("tg_user_id") and not ev.get("customer_phone"):
-            channel = "max"
-        elif ev.get("max_user_id") and not ev.get("tg_user_id"):
-            if not ev.get("customer_phone"):
-                channel = "max"
+        channel = await _auto_greeting_channel(ev)
+        if not channel:
+            logger.info(
+                "Авто-поздравление пропущено (нет канала): cust=%s event=%s",
+                ev.get("cust_id"),
+                ev.get("id"),
+            )
+            continue
         await create_personal_message(int(ev["cust_id"]), text, channel=channel)
         event_id = _parse_int(ev.get("id"))
         if event_id is not None:
