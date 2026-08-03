@@ -1,0 +1,31 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" role="img" aria-label="Veresk">
+  <!-- #?@>IQ==K9 <0@:: @>7>2K5 25B>G:8-V 2 :@C35 =0 D8@<5==>< D8>;5B>2>< -->
+  <rect width="32" height="32" rx="6" fill="#402C60"/>
+  <g transform="translate(16 17.2) scale(0.105)" fill="none">
+    <circle cx="0" cy="0" r="50" stroke="#F47DB9" stroke-width="7.5"/>
+    <!-- ;520O 25B2L -->
+    <path d="M0 52 C -8 24 -18 -6 -24 -40" stroke="#F47DB9" stroke-width="4" stroke-linecap="round"/>
+    <g fill="#F47DB9">
+      <path d="M0 -9 C 6 -4.5 6 4.5 0 9 C -6 4.5 -6 -4.5 0 -9 Z" transform="translate(-24,-36) rotate(-32) scale(1.05)"/>
+      <path d="M0 -9 C 6 -4.5 6 4.5 0 9 C -6 4.5 -6 -4.5 0 -9 Z" transform="translate(-21,-20) rotate(-38) scale(1.05)"/>
+      <path d="M0 -9 C 6 -4.5 6 4.5 0 9 C -6 4.5 -6 -4.5 0 -9 Z" transform="translate(-18,-4) rotate(-44) scale(1.05)"/>
+      <path d="M0 -9 C 6 -4.5 6 4.5 0 9 C -6 4.5 -6 -4.5 0 -9 Z" transform="translate(-14,12) rotate(-52) scale(1.05)"/>
+      <path d="M0 -9 C 6 -4.5 6 4.5 0 9 C -6 4.5 -6 -4.5 0 -9 Z" transform="translate(-9,27) rotate(-60) scale(1.05)"/>
+      <path d="M0 -9 C 6 -4.5 6 4.5 0 9 C -6 4.5 -6 -4.5 0 -9 Z" transform="translate(-10,-14) rotate(20) scale(1.05)"/>
+      <path d="M0 -9 C 6 -4.5 6 4.5 0 9 C -6 4.5 -6 -4.5 0 -9 Z" transform="translate(-8,2) rotate(14) scale(1.05)"/>
+      <path d="M0 -9 C 6 -4.5 6 4.5 0 9 C -6 4.5 -6 -4.5 0 -9 Z" transform="translate(-6,18) rotate(8) scale(1.05)"/>
+    </g>
+    <!-- ?@020O 25B2L -->
+    <path d="M0 52 C 8 24 18 -6 24 -40" stroke="#F47DB9" stroke-width="4" stroke-linecap="round"/>
+    <g fill="#F47DB9">
+      <path d="M0 -9 C 6 -4.5 6 4.5 0 9 C -6 4.5 -6 -4.5 0 -9 Z" transform="translate(24,-36) rotate(32) scale(1.05)"/>
+      <path d="M0 -9 C 6 -4.5 6 4.5 0 9 C -6 4.5 -6 -4.5 0 -9 Z" transform="translate(21,-20) rotate(38) scale(1.05)"/>
+      <path d="M0 -9 C 6 -4.5 6 4.5 0 9 C -6 4.5 -6 -4.5 0 -9 Z" transform="translate(18,-4) rotate(44) scale(1.05)"/>
+      <path d="M0 -9 C 6 -4.5 6 4.5 0 9 C -6 4.5 -6 -4.5 0 -9 Z" transform="translate(14,12) rotate(52) scale(1.05)"/>
+      <path d="M0 -9 C 6 -4.5 6 4.5 0 9 C -6 4.5 -6 -4.5 0 -9 Z" transform="translate(9,27) rotate(60) scale(1.05)"/>
+      <path d="M0 -9 C 6 -4.5 6 4.5 0 9 C -6 4.5 -6 -4.5 0 -9 Z" transform="translate(10,-14) rotate(-20) scale(1.05)"/>
+      <path d="M0 -9 C 6 -4.5 6 4.5 0 9 C -6 4.5 -6 -4.5 0 -9 Z" transform="translate(8,2) rotate(-14) scale(1.05)"/>
+      <path d="M0 -9 C 6 -4.5 6 4.5 0 9 C -6 4.5 -6 -4.5 0 -9 Z" transform="translate(6,18) rotate(-8) scale(1.05)"/>
+    </g>
+  </g>
+</svg>
