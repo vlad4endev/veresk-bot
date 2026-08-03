@@ -2428,7 +2428,7 @@
       code === "NetworkError when attempting to fetch resource." ||
       code === "Load failed"
     ) {
-      return "Нет связи с сервером админки. Запустите: python run_admin_local.py и откройте http://127.0.0.1:3005/admin/";
+      return "Нет связи с API (часто контейнер bot упал). На сервере: docker compose ps && docker compose logs --tail=80 bot";
     }
     if (code === "max_unreachable") {
       return "MAX API недоступен. Проверьте интернет и повторите.";

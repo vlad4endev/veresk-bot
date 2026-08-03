@@ -38,18 +38,25 @@ else
   git pull --ff-only
 fi
 
-echo "==> очистка битых MAX-сессий (незавершённый логин)"
-mkdir -p data/sessions
-rm -f data/sessions/max_acc_*.db data/sessions/max_acc_*.db-* || true
+# Не удаляем живые max_acc_*.db — иначе после деплоя пропадает личный номер MAX.
+# Битые незавершённые логины чистите вручную при необходимости.
 
 echo "==> docker compose up -d --build (cwd=$(pwd))"
 docker compose up -d --build
 
-echo "==> проверка UI (ожидается api.js?v=31 и max-login-v31)"
-sleep 2
+echo "==> статус контейнеров"
+docker compose ps
+
+echo "==> проверка UI/API"
+sleep 3
 curl -fsS http://127.0.0.1:3005/ | grep -oE 'api\.js\?v=[0-9]+' | head -1 || true
-curl -fsS http://127.0.0.1:3005/ | grep -o 'max-login-v31' | head -1 || true
+curl -sS -o /dev/null -w "login_http=%{http_code}\n" \
+  -X POST http://127.0.0.1:3005/api/admin/login \
+  -H "Content-Type: application/json" \
+  -d '{"username":"x","password":"y"}' || true
+docker compose logs --tail=40 bot || true
 
 echo "Готово. Снаружи:"
-echo "  curl -s https://admin.veresk-flowers.ru/ | grep -oE 'api.js\\?v=[0-9]+|max-login-v31'"
-echo "В браузере: Ctrl+Shift+R, затем снова подключите номер MAX."
+echo "  curl -s https://admin.veresk-flowers.ru/ | grep -oE 'api.js\\?v=[0-9]+'"
+echo "  curl -s -o /dev/null -w '%{http_code}\\n' -X POST https://admin.veresk-flowers.ru/api/admin/login -H 'Content-Type: application/json' -d '{\"username\":\"x\",\"password\":\"y\"}'"
+echo "В браузере: Ctrl+Shift+R"
