@@ -309,6 +309,12 @@ async def start_max_login(phone: str, *, reset_session: bool = True) -> dict[str
 
     if reset_session and Path(session_file).exists():
         logger.info("Force-reset MAX session for %s", phone_norm)
+        try:
+            from senders.max_userbot_chat import release_session as release_max_chat
+
+            await release_max_chat(session_file=session_file)
+        except Exception:
+            logger.debug("release before MAX reset failed", exc_info=True)
         remove_max_session_file(session_file)
 
     # Уже есть сессия — проверим без SMS (быстрый fail, без консоли)
@@ -543,13 +549,27 @@ async def check_max_session(
             "error": "Файл сессии не найден — переподключите аккаунт",
         }
 
-    # session_file = .../max_acc_7999....db
     work_dir = path.parent
     session_name = path.name
     digits = re.sub(r"\D", "", path.stem.replace("max_acc_", ""))
     phone_norm = phone or (f"+{digits}" if digits else "")
     if not phone_norm:
         return {"ok": False, "authorized": False, "error": "Неизвестный телефон сессии"}
+
+    # Если чаты уже держат живой клиент — не открываем второй SQLite-коннект
+    try:
+        from senders.max_userbot_chat import max_session
+
+        async with max_session(session_file, phone=phone_norm) as client:
+            return {
+                "ok": True,
+                "authorized": True,
+                "max_user_id": _user_id(client.me),
+                "label": _user_label(client.me),
+                "phone": phone_norm,
+            }
+    except Exception as pool_exc:
+        logger.debug("MAX pool check failed, one-shot: %s", pool_exc)
 
     result = await _run_client_once(
         phone=phone_norm,
@@ -675,8 +695,6 @@ class MaxUserbotSender:
             )
 
         path = Path(self.session_file)
-        work_dir = path.parent
-        session_name = path.name
         digits = re.sub(r"\D", "", path.stem.replace("max_acc_", ""))
         account_phone = self.phone or (f"+{digits}" if digits else "")
         if not account_phone:
@@ -684,39 +702,27 @@ class MaxUserbotSender:
 
         resolved_uid: list[int] = []
 
-        async def _send(c: Any) -> dict[str, Any]:
-            chat_id, uid, err = await _resolve_chat_id(
-                c, phone=phone, name=name, max_user_id=max_user_id
-            )
-            if err or chat_id is None:
-                raise RuntimeError(err or "chat_not_found")
-            if uid is not None:
-                resolved_uid.append(uid)
-            await c.send_message(chat_id=int(chat_id), text=text)
-            return {
-                "max_user_id": _user_id(c.me),
-                "label": _user_label(c.me),
-                "target_uid": uid,
-            }
-
         try:
-            result = await _run_client_once(
+            from senders.max_userbot_chat import max_session
+
+            async with max_session(
+                self.session_file,
                 phone=account_phone,
-                session_name=session_name,
-                work_dir=work_dir,
-                on_ready=_send,
-                timeout=90.0,
-            )
+                account_id=self.account_id,
+            ) as client:
+                chat_id, uid, err = await _resolve_chat_id(
+                    client, phone=phone, name=name, max_user_id=max_user_id
+                )
+                if err or chat_id is None:
+                    return SendResult(ok=False, status="failed", error=err or "chat_not_found")
+                if uid is not None:
+                    resolved_uid.append(uid)
+                await client.send_message(chat_id=int(chat_id), text=text)
         except Exception as exc:
             logger.exception("MAX userbot send failed to %s", phone)
             return SendResult(ok=False, status="failed", error=str(exc))
 
-        if not result.get("ok"):
-            return SendResult(
-                ok=False,
-                status="failed",
-                error=result.get("error") or "Ошибка отправки MAX",
-            )
+        result = {"ok": True}
 
         # Допривязка max_user_id к карточке клиента
         target = resolved_uid[0] if resolved_uid else None

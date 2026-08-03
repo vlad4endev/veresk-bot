@@ -1331,6 +1331,12 @@ async def handle_telegram_account_delete(request: web.Request) -> web.Response:
             logger.exception("release chat session failed for account %s", account_id)
         remove_session_file(session_file)
     else:
+        try:
+            from senders.max_userbot_chat import release_session as release_max_chat
+
+            await release_max_chat(session_file=session_file, account_id=account_id)
+        except Exception:
+            logger.exception("release MAX chat session failed for account %s", account_id)
         remove_max_session_file(session_file)
     return _json({"ok": True, "id": account_id, "kind": kind})
 
@@ -3032,7 +3038,7 @@ async def handle_chats_message_media(request: web.Request) -> web.Response:
     return _media_response(data, mime, filename=filename)
 
 
-# ── MAX chats inbox ───────────────────────────────────────────────────────────
+# ── MAX chats inbox (личный номер + fallback бот) ─────────────────────────────
 
 
 async def _ensure_max_chat_db() -> None:
@@ -3041,14 +3047,91 @@ async def _ensure_max_chat_db() -> None:
     await init_max_db()
 
 
+async def _list_max_userbot_accounts() -> list[dict[str, Any]]:
+    rows = await list_send_accounts()
+    items: list[dict[str, Any]] = []
+    for a in rows:
+        if a.get("kind") != "max_userbot" or not a.get("session_file"):
+            continue
+        items.append(
+            {
+                "id": a["id"],
+                "label": a.get("label") or a.get("phone") or f"MAX {a['id']}",
+                "phone": a.get("phone"),
+                "status": a.get("status"),
+                "phone_masked": _mask_phone(a["phone"]) if a.get("phone") else None,
+                "session_file": a.get("session_file"),
+            }
+        )
+    return items
+
+
+async def _resolve_max_chat_account(
+    request: web.Request,
+) -> tuple[dict[str, Any] | None, web.Response | None]:
+    """account_id для личного MAX; если один аккаунт — берём его."""
+    raw = request.query.get("account_id")
+    if raw in (None, ""):
+        try:
+            body = getattr(request, "_chat_body", None)
+            if isinstance(body, dict):
+                raw = body.get("account_id")
+        except Exception:
+            raw = None
+
+    rows = await _list_max_userbot_accounts()
+    if not rows:
+        return None, None  # нет userbot — можно fallback на бота
+
+    if raw in (None, ""):
+        if len(rows) == 1:
+            return rows[0], None
+        return None, _json(
+            {
+                "error": "account_id_required",
+                "message": "Выберите MAX-аккаунт",
+                "accounts": [
+                    {
+                        "id": a["id"],
+                        "label": a.get("label"),
+                        "phone": a.get("phone"),
+                        "status": a.get("status"),
+                    }
+                    for a in rows
+                ],
+            },
+            status=400,
+        )
+
+    try:
+        account_id = int(raw)
+    except (TypeError, ValueError):
+        return None, _json({"error": "invalid_account_id"}, status=400)
+
+    acc = await get_send_account(account_id)
+    if not acc or acc.get("kind") != "max_userbot" or not acc.get("session_file"):
+        return None, _json({"error": "account_not_found"}, status=404)
+    return {
+        "id": acc["id"],
+        "label": acc.get("label") or acc.get("phone"),
+        "phone": acc.get("phone"),
+        "status": acc.get("status"),
+        "session_file": acc.get("session_file"),
+        "phone_masked": _mask_phone(acc["phone"]) if acc.get("phone") else None,
+    }, None
+
+
 async def handle_max_chats_status(request: web.Request) -> web.Response:
     err = await _require_admin(request)
     if err:
         return err
     await _ensure_max_chat_db()
+    accounts = await _list_max_userbot_accounts()
     token = get_max_bot_token()
     bot_name = None
     bot_username = None
+    bot_ok = False
+    bot_error = None
     if token:
         try:
             from max_bot.api import MaxBotAPI
@@ -3058,31 +3141,48 @@ async def handle_max_chats_status(request: web.Request) -> web.Response:
                 me = await api.get_me()
                 bot_name = me.get("name") or me.get("first_name")
                 bot_username = me.get("username")
+                bot_ok = True
             finally:
                 await api.close()
         except Exception as exc:
-            return _json(
-                {
-                    "configured": True,
-                    "ok": False,
-                    "error": str(exc),
-                    "bot_name": None,
-                    "bot_username": None,
-                }
-            )
+            bot_ok = False
+            bot_error = str(exc)
+
     from max_bot.webhook_runtime import webhook_enabled, webhook_url
+
+    mode = "userbot" if accounts else ("bot" if token else "none")
+    label = None
+    if mode == "userbot":
+        label = accounts[0].get("label") if len(accounts) == 1 else f"{len(accounts)} номера MAX"
+    elif mode == "bot":
+        label = (
+            f"@{bot_username}"
+            if bot_username
+            else bot_name or "MAX-бот"
+        )
 
     return _json(
         {
-            "configured": bool(token),
-            "ok": bool(token),
+            "configured": bool(accounts) or bool(token),
+            "ok": bool(accounts) or bot_ok,
+            "mode": mode,
+            "pymax_installed": is_pymax_installed(),
+            "accounts": [
+                {
+                    "id": a["id"],
+                    "label": a.get("label"),
+                    "phone": a.get("phone"),
+                    "phone_masked": a.get("phone_masked"),
+                    "status": a.get("status"),
+                }
+                for a in accounts
+            ],
+            "bot_configured": bool(token),
+            "bot_ok": bot_ok,
+            "bot_error": bot_error,
             "bot_name": bot_name,
             "bot_username": bot_username,
-            "label": (
-                f"@{bot_username}"
-                if bot_username
-                else bot_name or ("MAX-бот" if token else None)
-            ),
+            "label": label,
             "webhook_enabled": webhook_enabled(),
             "webhook_url": webhook_url() or None,
         }
@@ -3094,31 +3194,76 @@ async def handle_max_chats_dialogs(request: web.Request) -> web.Response:
     if err:
         return err
     await _ensure_max_chat_db()
-    if not is_max_configured():
-        return _json(
-            {
-                "configured": False,
-                "items": [],
-                "error": "max_not_configured",
-            }
-        )
+    acc, acc_err = await _resolve_max_chat_account(request)
+    if acc_err:
+        return acc_err
+
     try:
         limit = int(request.query.get("limit") or 80)
     except (TypeError, ValueError):
         limit = 80
     query = str(request.query.get("q") or "").strip()
+    only_users = _truthy_query(request.query.get("only_users"))
+
+    # Личный номер — как Telegram
+    if acc is not None:
+        from senders.max_userbot_chat import list_dialogs
+
+        try:
+            items = await list_dialogs(
+                str(acc["session_file"]),
+                phone=str(acc.get("phone") or ""),
+                account_id=int(acc["id"]),
+                limit=limit,
+                query=query,
+                only_users=only_users,
+            )
+        except Exception as exc:
+            logger.exception("MAX userbot list dialogs failed")
+            return _json(
+                {
+                    "error": str(exc),
+                    "configured": True,
+                    "mode": "userbot",
+                    "items": [],
+                },
+                status=502,
+            )
+        return _json(
+            {
+                "configured": True,
+                "mode": "userbot",
+                "account_id": int(acc["id"]),
+                "account_label": acc.get("label") or acc.get("phone"),
+                "only_users": only_users,
+                "items": items,
+            }
+        )
+
+    # Fallback: бот-инбокс
+    if not is_max_configured():
+        return _json(
+            {
+                "configured": False,
+                "mode": "none",
+                "items": [],
+                "error": "max_not_configured",
+                "message": "Подключите личный номер MAX или токен бота в Настройках",
+            }
+        )
     from senders.max_chat import list_dialogs
 
     try:
         items = await list_dialogs(query=query, limit=limit)
     except Exception as exc:
         logger.exception("MAX list dialogs failed")
-        return _json({"error": str(exc), "configured": True, "items": []}, status=502)
+        return _json({"error": str(exc), "configured": True, "mode": "bot", "items": []}, status=502)
     return _json(
         {
             "configured": True,
+            "mode": "bot",
             "items": items,
-            "account_label": "MAX",
+            "account_label": "MAX-бот",
         }
     )
 
@@ -3128,8 +3273,10 @@ async def handle_max_chats_messages(request: web.Request) -> web.Response:
     if err:
         return err
     await _ensure_max_chat_db()
-    if not is_max_configured():
-        return _json({"error": "max_not_configured"}, status=400)
+    acc, acc_err = await _resolve_max_chat_account(request)
+    if acc_err:
+        return acc_err
+
     peer = str(request.match_info.get("peer_id") or "").strip()
     if not peer:
         return _json({"error": "invalid_peer_id"}, status=400)
@@ -3145,6 +3292,32 @@ async def handle_max_chats_messages(request: web.Request) -> web.Response:
         except (TypeError, ValueError):
             before_ts = None
 
+    if acc is not None:
+        try:
+            peer_id = int(peer)
+        except (TypeError, ValueError):
+            return _json({"error": "invalid_peer_id"}, status=400)
+        from senders.max_userbot_chat import get_dialog_messages
+
+        try:
+            data = await get_dialog_messages(
+                str(acc["session_file"]),
+                peer_id,
+                phone=str(acc.get("phone") or ""),
+                account_id=int(acc["id"]),
+                limit=limit,
+                before_ts=before_ts,
+                mark_read=request.query.get("mark_read", "1") != "0",
+            )
+        except Exception as exc:
+            logger.exception("MAX userbot get messages failed")
+            return _json({"error": str(exc)}, status=502)
+        data["account_id"] = int(acc["id"])
+        data["mode"] = "userbot"
+        return _json(data)
+
+    if not is_max_configured():
+        return _json({"error": "max_not_configured"}, status=400)
     from senders.max_chat import get_dialog_messages
 
     try:
@@ -3154,6 +3327,7 @@ async def handle_max_chats_messages(request: web.Request) -> web.Response:
     except Exception as exc:
         logger.exception("MAX get messages failed")
         return _json({"error": str(exc)}, status=502)
+    data["mode"] = "bot"
     return _json(data)
 
 
@@ -3162,16 +3336,56 @@ async def handle_max_chats_send(request: web.Request) -> web.Response:
     if err:
         return err
     await _ensure_max_chat_db()
-    if not is_max_configured():
-        return _json({"error": "max_not_configured"}, status=400)
-    peer = str(request.match_info.get("peer_id") or "").strip()
-    if not peer:
-        return _json({"error": "invalid_peer_id"}, status=400)
     try:
         body = await request.json()
     except Exception:
         body = {}
-    text = str((body or {}).get("text") or "").strip()
+    if not isinstance(body, dict):
+        body = {}
+    request._chat_body = body  # type: ignore[attr-defined]
+
+    acc, acc_err = await _resolve_max_chat_account(request)
+    if acc_err:
+        return acc_err
+
+    peer = str(request.match_info.get("peer_id") or "").strip()
+    if not peer:
+        return _json({"error": "invalid_peer_id"}, status=400)
+    text = str(body.get("text") or "").strip()
+
+    if acc is not None:
+        try:
+            peer_id = int(peer)
+        except (TypeError, ValueError):
+            return _json({"error": "invalid_peer_id"}, status=400)
+        from senders.max_userbot_chat import send_dialog_message
+
+        try:
+            message = await send_dialog_message(
+                str(acc["session_file"]),
+                peer_id,
+                text,
+                phone=str(acc.get("phone") or ""),
+                account_id=int(acc["id"]),
+            )
+        except ValueError as exc:
+            return _json({"error": str(exc)}, status=400)
+        except Exception as exc:
+            logger.exception("MAX userbot send failed")
+            return _json({"error": str(exc)}, status=502)
+        return _json(
+            {
+                "ok": True,
+                "mode": "userbot",
+                "message": message,
+                "messages": [message],
+                "peer_id": peer_id,
+                "account_id": int(acc["id"]),
+            }
+        )
+
+    if not is_max_configured():
+        return _json({"error": "max_not_configured"}, status=400)
     from senders.max_chat import send_dialog_message
 
     try:
@@ -3200,6 +3414,7 @@ async def handle_max_chats_send(request: web.Request) -> web.Response:
     return _json(
         {
             "ok": True,
+            "mode": "bot",
             "message": message,
             "messages": [message],
             "peer_id": peer,
@@ -3207,14 +3422,129 @@ async def handle_max_chats_send(request: web.Request) -> web.Response:
     )
 
 
+async def handle_max_chats_create(request: web.Request) -> web.Response:
+    """Новый чат с личного MAX-номера по телефону."""
+    err = await _require_admin(request)
+    if err:
+        return err
+    try:
+        body = await request.json()
+    except Exception:
+        return _json({"error": "invalid_json"}, status=400)
+    if not isinstance(body, dict):
+        return _json({"error": "invalid_json"}, status=400)
+    request._chat_body = body  # type: ignore[attr-defined]
+    acc, acc_err = await _resolve_max_chat_account(request)
+    if acc_err:
+        return acc_err
+    if acc is None:
+        return _json(
+            {
+                "error": "userbot_required",
+                "message": "Новый чат доступен с личного номера MAX",
+            },
+            status=400,
+        )
+
+    phone = str(body.get("phone") or "").strip()
+    name = str(body.get("name") or "").strip()
+    first_message = str(body.get("message") or body.get("text") or "").strip()
+    if not phone:
+        return _json({"error": "phone_required"}, status=400)
+
+    from senders.max_userbot_chat import create_or_open_dialog
+
+    try:
+        data = await create_or_open_dialog(
+            str(acc["session_file"]),
+            phone=phone,
+            account_phone=str(acc.get("phone") or ""),
+            account_id=int(acc["id"]),
+            name=name,
+            first_message=first_message,
+        )
+    except ValueError as exc:
+        return _json({"error": str(exc)}, status=400)
+    except Exception as exc:
+        logger.exception("MAX create dialog failed")
+        return _json({"error": str(exc)}, status=502)
+    data["account_id"] = int(acc["id"])
+    data["mode"] = "userbot"
+    return _json(data)
+
+
 async def handle_max_chats_client(request: web.Request) -> web.Response:
     err = await _require_admin(request)
     if err:
         return err
     await _ensure_max_chat_db()
+    acc, acc_err = await _resolve_max_chat_account(request)
+    if acc_err:
+        return acc_err
+
     peer = str(request.match_info.get("peer_id") or "").strip()
     if not peer:
         return _json({"error": "invalid_peer_id"}, status=400)
+
+    if acc is not None:
+        try:
+            peer_id = int(peer)
+        except (TypeError, ValueError):
+            return _json({"error": "invalid_peer_id"}, status=400)
+        from senders.max_userbot_chat import resolve_peer_profile
+
+        try:
+            peer_info = await resolve_peer_profile(
+                str(acc["session_file"]),
+                peer_id,
+                phone=str(acc.get("phone") or ""),
+                account_id=int(acc["id"]),
+            )
+        except Exception as exc:
+            logger.exception("MAX userbot peer profile failed")
+            return _json({"error": str(exc)}, status=502)
+
+        # Совместимость с bot client_lookup: peer_key user:/chat:
+        max_uid = peer_info.get("max_user_id")
+        synthetic = f"user:{max_uid}" if max_uid is not None else f"chat:{peer_id}"
+        from senders.max_chat import client_lookup_for_peer
+
+        # Подставим телефон/имя из userbot-профиля в индекс, если есть
+        try:
+            from max_bot.storage import upsert_dialog
+
+            await upsert_dialog(
+                chat_id=peer_id,
+                max_user_id=int(max_uid) if max_uid is not None else None,
+                name=peer_info.get("title"),
+                phone=peer_info.get("phone"),
+            )
+        except Exception:
+            logger.debug("upsert dialog for client status failed", exc_info=True)
+
+        try:
+            data = await client_lookup_for_peer(synthetic)
+        except Exception as exc:
+            logger.exception("MAX client status failed")
+            return _json({"error": str(exc)}, status=502)
+
+        customer = data.get("customer")
+        return _json(
+            {
+                "status": data.get("status"),
+                "label": data.get("label"),
+                "hint": data.get("hint"),
+                "can_create": bool(data.get("can_create")),
+                "need_phone": bool(data.get("need_phone")),
+                "in_base": bool(data.get("in_base")),
+                "peer": {**(data.get("peer") or {}), **peer_info, "peer_id": peer_id},
+                "customer": _customer_public(customer) if customer else None,
+                "configured": True,
+                "mode": "userbot",
+                "account_id": int(acc["id"]),
+            }
+        )
+
     from senders.max_chat import client_lookup_for_peer
 
     try:
@@ -3237,6 +3567,7 @@ async def handle_max_chats_client(request: web.Request) -> web.Response:
             "peer": data.get("peer"),
             "customer": _customer_public(customer) if customer else None,
             "configured": bool(data.get("configured")),
+            "mode": "bot",
         }
     )
 
@@ -3256,6 +3587,51 @@ async def handle_max_chats_client_create(request: web.Request) -> web.Response:
         body = {}
     if not isinstance(body, dict):
         body = {}
+    request._chat_body = body  # type: ignore[attr-defined]
+
+    acc, acc_err = await _resolve_max_chat_account(request)
+    if acc_err:
+        return acc_err
+
+    # Для userbot сначала обогатим peer, потом создадим через общий хелпер
+    if acc is not None:
+        try:
+            peer_id = int(peer)
+        except (TypeError, ValueError):
+            return _json({"error": "invalid_peer_id"}, status=400)
+        from senders.max_userbot_chat import resolve_peer_profile
+
+        try:
+            peer_info = await resolve_peer_profile(
+                str(acc["session_file"]),
+                peer_id,
+                phone=str(acc.get("phone") or ""),
+                account_id=int(acc["id"]),
+            )
+        except Exception as exc:
+            logger.exception("MAX userbot peer for create failed")
+            return _json({"error": str(exc)}, status=502)
+        max_uid = peer_info.get("max_user_id")
+        if max_uid is None:
+            return _json(
+                {
+                    "error": "not_a_user",
+                    "message": "Клиента можно создать только из личного чата",
+                },
+                status=400,
+            )
+        try:
+            from max_bot.storage import upsert_dialog
+
+            await upsert_dialog(
+                chat_id=peer_id,
+                max_user_id=int(max_uid),
+                name=peer_info.get("title"),
+                phone=body.get("phone") or peer_info.get("phone"),
+            )
+        except Exception:
+            pass
+        peer = f"user:{int(max_uid)}"
 
     from senders.max_chat import create_client_from_peer
 
@@ -3268,32 +3644,17 @@ async def handle_max_chats_client_create(request: web.Request) -> web.Response:
     except ValueError as exc:
         return _json({"error": str(exc)}, status=400)
     except Exception as exc:
-        logger.exception("MAX client create failed")
+        logger.exception("MAX create client failed")
         return _json({"error": str(exc)}, status=502)
 
     if data.get("error"):
-        status = 400 if data["error"] in ("phone_required", "unknown_max_user") else 502
-        return _json(
-            {
-                "error": data["error"],
-                "message": data.get("message"),
-                "need_phone": bool(data.get("need_phone")),
-                "peer": data.get("peer"),
-            },
-            status=status,
-        )
-
+        return _json(data, status=400)
     customer = data.get("customer")
     return _json(
         {
-            "ok": True,
-            "created": bool(data.get("created")),
-            "already_exists": bool(data.get("already_exists")),
-            "posiflora_created": bool(data.get("posiflora_created")),
-            "label": data.get("label"),
-            "hint": data.get("hint"),
+            **data,
             "customer": _customer_public(customer) if customer else None,
-            "peer": data.get("peer"),
+            "mode": "userbot" if acc is not None else "bot",
         }
     )
 
@@ -3462,6 +3823,7 @@ def setup_admin_routes(app: web.Application) -> None:
         ("/api/admin/chats/dialogs/{peer_id}/client", handle_chats_client_create, "POST"),
         ("/api/admin/max-chats/status", handle_max_chats_status, "GET"),
         ("/api/admin/max-chats/dialogs", handle_max_chats_dialogs, "GET"),
+        ("/api/admin/max-chats/dialogs", handle_max_chats_create, "POST"),
         ("/api/admin/max-chats/dialogs/{peer_id}/messages", handle_max_chats_messages, "GET"),
         ("/api/admin/max-chats/dialogs/{peer_id}/send", handle_max_chats_send, "POST"),
         ("/api/admin/max-chats/dialogs/{peer_id}/client", handle_max_chats_client, "GET"),

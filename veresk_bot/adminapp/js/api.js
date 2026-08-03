@@ -321,10 +321,22 @@ const AdminAPI = (() => {
         method: "POST",
         body: JSON.stringify(body),
       }),
-    maxChatClientStatus: (peerId) =>
-      request(
-        "/api/admin/max-chats/dialogs/" + encodeURIComponent(peerId) + "/client"
-      ),
+    maxChatCreate: (body) =>
+      request("/api/admin/max-chats/dialogs", {
+        method: "POST",
+        body: JSON.stringify(body || {}),
+      }),
+    maxChatClientStatus: (peerId, accountId) => {
+      const q = new URLSearchParams();
+      if (accountId) q.set("account_id", String(accountId));
+      const qs = q.toString();
+      return request(
+        "/api/admin/max-chats/dialogs/" +
+          encodeURIComponent(peerId) +
+          "/client" +
+          (qs ? "?" + qs : "")
+      );
+    },
     maxChatClientCreate: (peerId, body) =>
       request(
         "/api/admin/max-chats/dialogs/" + encodeURIComponent(peerId) + "/client",

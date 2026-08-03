@@ -3622,6 +3622,7 @@
   // ── Chats (Telegram + MAX) ────────────────────────────────────────────────
 
   const TG_ACCOUNT_KEY = "veresk_tg_chat_account";
+  const MAX_ACCOUNT_KEY = "veresk_max_chat_account";
   const TG_ONLY_USERS_KEY = "veresk_tg_only_users";
   const CHATS_CHANNEL_KEY = "veresk_chats_channel";
   const TG_MAX_ATTACH = 10;
@@ -3630,7 +3631,8 @@
     ready: false,
     channel: localStorage.getItem(CHATS_CHANNEL_KEY) === "max" ? "max" : "tg",
     maxConfigured: false,
-    maxLabel: "MAX-бот",
+    maxMode: "none", // userbot | bot | none
+    maxLabel: "MAX",
     accounts: [],
     accountId: null,
     dialogs: [],
@@ -3654,9 +3656,23 @@
     return tgState.channel === "max";
   }
 
+  function isMaxUserbot() {
+    return isMaxChannel() && tgState.maxMode === "userbot";
+  }
+
+  function currentMaxAccountId() {
+    const sel = $("#tgAccountSelect");
+    if (isMaxUserbot() && sel?.value) return Number(sel.value);
+    const v = tgState.accountId || localStorage.getItem(MAX_ACCOUNT_KEY) || "";
+    return v ? Number(v) : null;
+  }
+
   function applyChatsChannelUi() {
     const root = $("#chats");
-    if (root) root.dataset.channel = tgState.channel;
+    if (root) {
+      root.dataset.channel = tgState.channel;
+      root.dataset.maxMode = isMaxChannel() ? tgState.maxMode || "none" : "";
+    }
     $$(".ch-chan-btn").forEach((btn) => {
       const on = btn.getAttribute("data-ch-channel") === tgState.channel;
       btn.classList.toggle("on", on);
@@ -3666,14 +3682,27 @@
     const emptyHint = $("#tgThreadEmptyHint");
     const maxLabel = $("#maxAccountLabel");
     const input = $("#tgInput");
+    const onlyWrap = $("#tgOnlyUsersWrap");
     if (isMaxChannel()) {
-      if (desc) desc.textContent = "Переписка клиентов с MAX-ботом. Отвечайте прямо отсюда.";
-      if (emptyHint)
-        emptyHint.textContent =
-          "Слева — кто писал боту или заполнил анкету. Ответ уйдёт в личный чат MAX.";
-      if (maxLabel) {
-        maxLabel.hidden = false;
-        maxLabel.textContent = tgState.maxLabel || "MAX-бот";
+      if (isMaxUserbot()) {
+        if (desc)
+          desc.textContent =
+            "Переписка с личного номера MAX. Группы и каналы можно скрыть фильтром.";
+        if (emptyHint)
+          emptyHint.textContent =
+            "Слева — диалоги аккаунта MAX. Можно писать клиентам так же, как в мессенджере.";
+        if (maxLabel) maxLabel.hidden = true;
+        if (onlyWrap) onlyWrap.hidden = false;
+      } else {
+        if (desc) desc.textContent = "Переписка клиентов с MAX-ботом. Отвечайте прямо отсюда.";
+        if (emptyHint)
+          emptyHint.textContent =
+            "Слева — кто писал боту или заполнил анкету. Ответ уйдёт в личный чат MAX.";
+        if (maxLabel) {
+          maxLabel.hidden = false;
+          maxLabel.textContent = tgState.maxLabel || "MAX-бот";
+        }
+        if (onlyWrap) onlyWrap.hidden = true;
       }
       if (input) {
         input.placeholder = "Сообщение…";
@@ -3687,6 +3716,7 @@
         emptyHint.textContent =
           "Слева — все диалоги аккаунта. Можно писать клиентам так же, как в Telegram.";
       if (maxLabel) maxLabel.hidden = true;
+      if (onlyWrap) onlyWrap.hidden = false;
       if (input) {
         input.placeholder = "Сообщение или подпись…";
         input.maxLength = 4096;
@@ -3767,7 +3797,9 @@
 
   function startMaxSSE() {
     stopMaxSSE();
-    if (!isMaxChannel() || !tgState.maxConfigured || !AdminAPI.getToken()) return;
+    // Realtime SSE только для бот-инбокса; личный номер — через poll
+    if (!isMaxChannel() || isMaxUserbot() || !tgState.maxConfigured || !AdminAPI.getToken())
+      return;
     try {
       tgState.maxEs = AdminAPI.maxChatEvents(applyMaxSseEvent);
     } catch (err) {
@@ -3777,18 +3809,20 @@
 
   function startTgPoll() {
     stopTgPoll();
-    // MAX: realtime через SSE; лёгкий poll только как запасной refresh списка
     tgState.pollTimer = setInterval(() => {
       if (!$("#chats")?.classList.contains("active")) return;
       if (isMaxChannel()) {
         if (!tgState.maxConfigured) return;
         refreshTgDialogs({ silent: true });
+        if (isMaxUserbot() && tgState.peerId) {
+          openTgPeer(tgState.peerId, { silent: true, keepScroll: true });
+        }
         return;
       }
       if (!tgState.accountId) return;
       refreshTgDialogs({ silent: true });
       if (tgState.peerId) openTgPeer(tgState.peerId, { silent: true, keepScroll: true });
-    }, isMaxChannel() ? 20000 : 8000);
+    }, isMaxChannel() && !isMaxUserbot() ? 20000 : 8000);
   }
 
   function tgInitials(title) {
@@ -3839,6 +3873,7 @@
     const sel = $("#tgAccountSelect");
     if (!sel) return;
     const items = tgState.accounts || [];
+    const storageKey = isMaxUserbot() ? MAX_ACCOUNT_KEY : TG_ACCOUNT_KEY;
     if (!items.length) {
       sel.innerHTML = `<option value="">Нет аккаунтов</option>`;
       sel.disabled = true;
@@ -3846,7 +3881,7 @@
     }
     sel.disabled = false;
     const preferred = String(
-      tgState.accountId || localStorage.getItem(TG_ACCOUNT_KEY) || items[0].id
+      tgState.accountId || localStorage.getItem(storageKey) || items[0].id
     );
     sel.innerHTML = items
       .map((a) => {
@@ -3857,13 +3892,15 @@
       .join("");
     if ([...sel.options].some((o) => o.value === preferred)) sel.value = preferred;
     tgState.accountId = Number(sel.value);
-    localStorage.setItem(TG_ACCOUNT_KEY, String(tgState.accountId));
+    localStorage.setItem(storageKey, String(tgState.accountId));
   }
 
   function filteredTgDialogs() {
     const items = tgState.dialogs || [];
-    if (isMaxChannel() || !tgState.onlyUsers) return items;
-    return items.filter((d) => (d.kind || "user") === "user");
+    if ((!isMaxChannel() || isMaxUserbot()) && tgState.onlyUsers) {
+      return items.filter((d) => (d.kind || "user") === "user");
+    }
+    return items;
   }
 
   function renderTgDialogs() {
@@ -3871,10 +3908,11 @@
     if (!box) return;
     const items = filteredTgDialogs();
     const maxMode = isMaxChannel();
+    const maxUserbot = isMaxUserbot();
 
-    if (maxMode) {
+    if (maxMode && !maxUserbot) {
       if (!tgState.maxConfigured) {
-        box.innerHTML = `<div class="tg-empty"><div class="t">MAX не подключён</div>Укажите токен бота в Настройках → MAX.<div style="margin-top:12px"><button class="btn primary" type="button" onclick="go('settings')">Настройки</button></div></div>`;
+        box.innerHTML = `<div class="tg-empty"><div class="t">MAX не подключён</div>Подключите личный номер или токен бота в Настройках → MAX.<div style="margin-top:12px"><button class="btn primary" type="button" onclick="go('settings')">Настройки</button></div></div>`;
         return;
       }
       if (tgState.loadingDialogs && !items.length) {
@@ -3883,6 +3921,25 @@
       }
       if (!items.length) {
         box.innerHTML = `<div class="tg-empty"><div class="t">Диалогов пока нет</div>Они появятся, когда клиент напишет боту или заполнит анкету в MAX.</div>`;
+        return;
+      }
+    } else if (maxMode && maxUserbot) {
+      if (!tgState.accountId) {
+        box.innerHTML = `<div class="tg-empty"><div class="t">Нет аккаунта</div>Подключите номер MAX в Настройках.</div>`;
+        return;
+      }
+      if (tgState.loadingDialogs && !items.length) {
+        box.innerHTML = `<div class="tg-empty">Загружаем чаты…</div>`;
+        return;
+      }
+      if (!items.length) {
+        box.innerHTML = `<div class="tg-empty"><div class="t">${
+          tgState.onlyUsers ? "Нет личных чатов" : "Чатов пока нет"
+        }</div>${
+          tgState.onlyUsers
+            ? "Снимите фильтр «Только личные», чтобы увидеть группы и каналы."
+            : "Нажмите «Новый чат», чтобы написать клиенту."
+        }</div>`;
         return;
       }
     } else {
@@ -3926,7 +3983,7 @@
         }
         return `
           <button type="button" class="tg-dialog${active}" data-peer="${esc(peerKey)}">
-            <span class="tg-dialog-av ${esc(maxMode ? "user" : kind)}">
+            <span class="tg-dialog-av ${esc(maxMode && !maxUserbot ? "user" : kind)}">
               ${avInner}
             </span>
             <span class="tg-dialog-main">
@@ -4119,7 +4176,8 @@
     }
     if (isMaxChannel()) {
       try {
-        const data = await AdminAPI.maxChatClientStatus(peerId);
+        const accountId = isMaxUserbot() ? currentMaxAccountId() : null;
+        const data = await AdminAPI.maxChatClientStatus(peerId, accountId);
         if (String(tgState.peerId) !== String(peerId)) return;
         if (data.peer) {
           const cur = tgState.peer || {};
@@ -4193,7 +4251,11 @@
     const peerId = tgState.peerId;
     if (peerId == null) return;
     const maxChannel = isMaxChannel();
-    const accountId = maxChannel ? null : currentTgAccountId();
+    const accountId = maxChannel
+      ? isMaxUserbot()
+        ? currentMaxAccountId()
+        : null
+      : currentTgAccountId();
     if (!maxChannel && !accountId) return;
     const createBtn = $("#tgCreateClientBtn");
     const submitBtn = $("#tgCreateClientSubmit");
@@ -4204,7 +4266,7 @@
     if (submitBtn) submitBtn.disabled = true;
     try {
       const body = {};
-      if (!maxChannel) body.account_id = accountId;
+      if (accountId) body.account_id = accountId;
       if (phone) body.phone = phone;
       if (name) body.name = name;
       const data = maxChannel
@@ -4277,6 +4339,45 @@
         renderTgDialogs();
         return;
       }
+      if (isMaxUserbot()) {
+        const accountId = currentMaxAccountId();
+        if (!accountId) {
+          tgState.dialogs = [];
+          renderTgDialogs();
+          return;
+        }
+        if (!silent) tgState.loadingDialogs = true;
+        if (!silent) renderTgDialogs();
+        try {
+          const params = { account_id: accountId, limit: 100 };
+          if (tgState.lastQuery) params.q = tgState.lastQuery;
+          if (tgState.onlyUsers) params.only_users = "1";
+          const data = await AdminAPI.maxChatDialogs(params);
+          tgState.maxMode = data.mode || "userbot";
+          tgState.dialogs = data.items || [];
+          tgState.accountId = data.account_id || accountId;
+          localStorage.setItem(MAX_ACCOUNT_KEY, String(tgState.accountId));
+          applyChatsChannelUi();
+        } catch (err) {
+          if (!silent) {
+            const msg =
+              err.data?.message || err.data?.error || err.message || "Не удалось загрузить чаты";
+            $("#tgDialogList").innerHTML = `<div class="tg-empty"><div class="t">Ошибка</div>${esc(
+              msg
+            )}${
+              err.data?.error === "max_not_configured" || err.data?.error === "no_telegram_accounts"
+                ? `<div style="margin-top:12px"><button class="btn primary" type="button" onclick="go('settings')">Открыть настройки</button></div>`
+                : ""
+            }</div>`;
+            return;
+          }
+        } finally {
+          tgState.loadingDialogs = false;
+        }
+        renderTgDialogs();
+        return;
+      }
+
       if (!silent) tgState.loadingDialogs = true;
       if (!silent) renderTgDialogs();
       try {
@@ -4284,7 +4385,9 @@
         if (tgState.lastQuery) params.q = tgState.lastQuery;
         const data = await AdminAPI.maxChatDialogs(params);
         tgState.maxConfigured = data.configured !== false;
+        tgState.maxMode = data.mode || "bot";
         tgState.dialogs = data.items || [];
+        applyChatsChannelUi();
       } catch (err) {
         if (!silent) {
           const msg =
@@ -4355,7 +4458,12 @@
         renderTgDialogs();
       }
       try {
-        const data = await AdminAPI.maxChatMessages(peerId, { limit: 50 });
+        const params = { limit: 50 };
+        if (isMaxUserbot()) {
+          const accountId = currentMaxAccountId();
+          if (accountId) params.account_id = accountId;
+        }
+        const data = await AdminAPI.maxChatMessages(peerId, params);
         if (data.peer?.peer_id && String(data.peer.peer_id) !== String(peerId)) {
           tgState.peerId = data.peer.peer_id;
         }
@@ -4365,6 +4473,11 @@
           ? data.hint || "История появится после следующего сообщения клиента"
           : "";
         renderTgMessages({ stickBottom: !keepScroll, keepScroll });
+        if (isMaxUserbot()) {
+          tgState.dialogs = (tgState.dialogs || []).map((d) =>
+            String(d.peer_id) === String(tgState.peerId) ? { ...d, unread: 0 } : d
+          );
+        }
         renderTgDialogs();
         showTgThread(true);
         if (!silent) $("#tgInput")?.focus();
@@ -4557,9 +4670,15 @@
       const btn = $("#tgSendBtn");
       if (btn) btn.disabled = true;
       try {
-        const data = await AdminAPI.maxChatSend(tgState.peerId, { text });
+        const data = await AdminAPI.maxChatSend(tgState.peerId, {
+          text,
+          account_id: isMaxUserbot() ? currentMaxAccountId() : undefined,
+        });
         if (data.message?.peer_id && String(data.message.peer_id) !== String(tgState.peerId)) {
           tgState.peerId = data.message.peer_id;
+        }
+        if (data.peer_id != null && String(data.peer_id) !== String(tgState.peerId)) {
+          tgState.peerId = data.peer_id;
         }
         const idx = tgState.messages.findIndex((m) => m.id === tmpId);
         if (data.message) {
@@ -4655,29 +4774,42 @@
 
   async function submitTgNewChat(e) {
     e.preventDefault();
-    const accountId = currentTgAccountId();
+    const maxUserbot = isMaxUserbot();
+    const accountId = maxUserbot ? currentMaxAccountId() : currentTgAccountId();
     if (!accountId) {
-      alert("Сначала подключите Telegram-аккаунт");
+      alert(maxUserbot ? "Сначала подключите номер MAX" : "Сначала подключите Telegram-аккаунт");
       return;
     }
     const phone = ($("#tgNewPhone")?.value || "").trim();
     const username = ($("#tgNewUsername")?.value || "").trim();
     const name = ($("#tgNewName")?.value || "").trim();
     const message = ($("#tgNewMessage")?.value || "").trim();
-    if (!phone && !username) {
+    if (maxUserbot) {
+      if (!phone) {
+        alert("Укажите телефон клиента");
+        return;
+      }
+    } else if (!phone && !username) {
       alert("Укажите телефон или @username");
       return;
     }
     const btn = $("#tgNewChatSubmit");
     if (btn) btn.disabled = true;
     try {
-      const data = await AdminAPI.chatCreate({
-        account_id: accountId,
-        phone,
-        username,
-        name,
-        message,
-      });
+      const data = maxUserbot
+        ? await AdminAPI.maxChatCreate({
+            account_id: accountId,
+            phone,
+            name,
+            message,
+          })
+        : await AdminAPI.chatCreate({
+            account_id: accountId,
+            phone,
+            username,
+            name,
+            message,
+          });
       openTgNewChatModal(false);
       await refreshTgDialogs({ silent: true });
       const peerId = data.peer?.peer_id;
@@ -4698,12 +4830,17 @@
     if (isMaxChannel()) {
       try {
         const status = await AdminAPI.maxChatStatus();
-        tgState.maxConfigured = !!status.configured && status.ok !== false;
+        tgState.maxMode = status.mode || (status.accounts?.length ? "userbot" : status.bot_configured ? "bot" : "none");
+        tgState.maxConfigured = !!status.configured && (status.ok !== false || !!status.accounts?.length);
         tgState.maxLabel =
           status.label ||
           (status.bot_username ? "@" + status.bot_username : "") ||
           status.bot_name ||
-          "MAX-бот";
+          "MAX";
+        tgState.accounts = status.accounts || [];
+        if (tgState.maxMode === "userbot") {
+          renderTgAccounts();
+        }
         applyChatsChannelUi();
         if (!tgState.maxConfigured) {
           tgState.dialogs = [];
@@ -4717,6 +4854,7 @@
         startTgPoll();
       } catch (err) {
         tgState.maxConfigured = false;
+        tgState.maxMode = "none";
         stopMaxSSE();
         $("#tgDialogList").innerHTML = `<div class="tg-empty"><div class="t">Ошибка</div>${esc(
           err.data?.error || err.message
@@ -4756,8 +4894,13 @@
     });
 
     $("#tgAccountSelect")?.addEventListener("change", async () => {
-      tgState.accountId = currentTgAccountId();
-      if (tgState.accountId) localStorage.setItem(TG_ACCOUNT_KEY, String(tgState.accountId));
+      tgState.accountId = isMaxChannel() ? currentMaxAccountId() : currentTgAccountId();
+      if (tgState.accountId) {
+        localStorage.setItem(
+          isMaxChannel() ? MAX_ACCOUNT_KEY : TG_ACCOUNT_KEY,
+          String(tgState.accountId)
+        );
+      }
       tgState.peerId = null;
       tgState.messages = [];
       showTgThread(false);
@@ -4766,7 +4909,20 @@
 
     $("#tgRefreshDialogs")?.addEventListener("click", () => refreshTgDialogs());
     $("#tgNewChatBtn")?.addEventListener("click", () => {
-      if (isMaxChannel()) return;
+      if (isMaxChannel() && !isMaxUserbot()) return;
+      const title = $("#tgNewChatTitle");
+      const desc = $("#tgNewChatModal .page-desc");
+      const userField = $("#tgNewUsername")?.closest("label");
+      if (isMaxUserbot()) {
+        if (title) title.textContent = "Новый чат MAX";
+        if (desc) desc.textContent = "Откройте диалог по номеру телефона — как в MAX.";
+        if (userField) userField.hidden = true;
+      } else {
+        if (title) title.textContent = "Новый чат";
+        if (desc)
+          desc.textContent = "Откройте диалог по номеру телефона или @username — как в Telegram.";
+        if (userField) userField.hidden = false;
+      }
       openTgNewChatModal(true);
     });
     $("#tgNewChatForm")?.addEventListener("submit", submitTgNewChat);
