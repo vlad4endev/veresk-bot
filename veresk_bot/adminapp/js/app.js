@@ -273,6 +273,20 @@
     setTimeout(focusLogin, 50);
   }
 
+  async function doLogout() {
+    try {
+      await AdminAPI.logout();
+    } catch (_) {
+      /* сессия могла уже истечь — всё равно чистим локально */
+    }
+    AdminAPI.setToken("");
+    showLogin();
+  }
+
+  $("#btnLogout")?.addEventListener("click", () => {
+    void doLogout();
+  });
+
   async function tryAuth() {
     if (!AdminAPI.getToken()) {
       showLogin();
