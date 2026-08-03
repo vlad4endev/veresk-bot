@@ -1853,6 +1853,12 @@
     if (code === "max_unreachable") {
       return "MAX API недоступен. Проверьте интернет и повторите.";
     }
+    if (code === "max_ssl_error") {
+      return (
+        detail ||
+        "Ошибка SSL к MAX. Перезапустите админку (python run_admin_local.py) — нужен Russian Trusted CA."
+      );
+    }
     if (code === "token_required") {
       return "Сначала сохраните токен бота (шаг 1). Токен выдаёт @MasterBot в MAX.";
     }

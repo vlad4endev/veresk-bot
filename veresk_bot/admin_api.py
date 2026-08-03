@@ -1168,9 +1168,25 @@ async def handle_max_settings_save(request: web.Request) -> web.Response:
             )
         except Exception as exc:
             # aiohttp.ClientError и сетевые сбои
+            msg = str(exc)
+            if "CERTIFICATE_VERIFY_FAILED" in msg or "SSLCertVerificationError" in msg:
+                return _json(
+                    {
+                        "ok": False,
+                        "error": "max_ssl_error",
+                        "detail": (
+                            "Ошибка SSL к MAX API (Russian Trusted CA). "
+                            "Перезапустите админку после обновления — нужен файл "
+                            "certs/russian_trusted_ca_bundle.pem."
+                        ),
+                    },
+                    status=502,
+                )
             if exc.__class__.__name__ in (
                 "ClientError",
                 "ClientConnectorError",
+                "ClientConnectorCertificateError",
+                "ClientConnectorSSLError",
                 "ServerTimeoutError",
                 "ClientOSError",
             ) or "aiohttp" in type(exc).__module__:
