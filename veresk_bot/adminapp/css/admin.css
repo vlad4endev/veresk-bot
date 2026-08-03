@@ -1225,11 +1225,6 @@
   .tg-client-chip.warn{background:#fff4e5;color:#9a5b00;}
   .tg-client-chip.muted{background:var(--surface-2,#f0eef4);color:var(--ink-3);}
   .tg-client-btn{flex:none;white-space:nowrap;padding:5px 10px;font-size:12.5px;border-radius:9px;}
-  @media (max-width:720px){
-    .tg-peer-client{max-width:none;width:100%;margin-left:0;order:5;padding-left:40px;}
-    .tg-thread-bar{flex-wrap:wrap;}
-    .tg-client-btn{flex:1;}
-  }
   .tg-messages{
     flex:1;min-height:0;overflow-y:auto;padding:10px 12px 8px;
     display:block;overscroll-behavior:contain;
@@ -1360,20 +1355,147 @@
   .staff-modal-card .staff-pass-row{align-items:stretch;}
   .tg-modal-actions{display:flex;justify-content:flex-end;gap:8px;margin-top:4px;}
   @media (max-width:899px){
+    /* —— Chats: mobile messenger layout —— */
     body:has(#chats.active) .mtop{display:none !important;}
-    body:has(#chats.active) .main{padding-top:10px;padding-left:10px;padding-right:10px;}
-    body.tg-thread-open .bnav{display:none;}
-    body.tg-thread-open #chats .tg-toolbar{display:none;}
-    body.tg-thread-open .main{padding-bottom:12px;}
-    .tg-shell{grid-template-columns:1fr;height:calc(100dvh - 150px);min-height:380px;}
-    .tg-sidebar{border-right:0;}
+    body:has(#chats.active) .main{
+      padding:0 0 calc(64px + env(safe-area-inset-bottom,0px));
+      overflow:hidden;
+    }
+    body:has(#chats.active) .main-inner{
+      max-width:none;margin:0;height:calc(100dvh - 64px - env(safe-area-inset-bottom,0px));
+      display:flex;flex-direction:column;
+    }
+    #chats.active{
+      display:flex;flex-direction:column;gap:0;
+      width:100%;height:100%;min-height:0;
+    }
+
+    .tg-toolbar{
+      flex-direction:column;align-items:stretch;gap:8px;
+      padding:10px 12px 8px;flex:none;
+      background:var(--surface);border-bottom:1px solid var(--line);
+    }
+    .ch-channel-switch{width:100%;display:flex;}
+    .ch-chan-btn{flex:1;text-align:center;padding:9px 10px;font-size:13px;min-height:40px;}
+    .tg-toolbar-actions{
+      margin-left:0;width:100%;display:flex;gap:6px;align-items:center;flex-wrap:nowrap;
+    }
+    .tg-account-pick{flex:1;min-width:0;}
+    .tg-account-pick select{
+      width:100%;min-width:0;max-width:none;min-height:40px;font-size:13px;
+    }
+    .ch-max-account{
+      flex:1;min-width:0;justify-content:center;min-height:40px;
+      overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
+    }
+    .tg-toolbar .tg-icon-btn{width:40px;height:40px;flex:none;}
+    .tg-new-btn{flex:none;min-height:40px;padding:8px 12px;}
+
+    .tg-shell{
+      grid-template-columns:1fr;
+      flex:1;min-height:0;height:auto;
+      border:none;border-radius:0;box-shadow:none;
+    }
+    .tg-sidebar{border-right:0;min-height:0;}
+    .tg-sidebar-top{
+      gap:8px;padding:8px 12px;background:var(--surface);
+      position:sticky;top:0;z-index:2;
+    }
+    .tg-search input{min-height:40px;font-size:16px;padding:8px 12px;} /* 16px: no iOS zoom */
+    .tg-filter{min-height:40px;padding:0 10px;font-size:12.5px;}
+    .tg-dialog{
+      grid-template-columns:48px minmax(0,1fr) auto;gap:10px;
+      padding:12px;min-height:64px;touch-action:manipulation;
+      -webkit-tap-highlight-color:transparent;
+    }
+    .tg-dialog:active{background:var(--surface-2);}
+    .tg-dialog-av{width:48px;height:48px;font-size:15px;}
+    .tg-dialog-title{font-size:15px;}
+    .tg-dialog-preview{font-size:13px;}
+    .tg-dialog-list{-webkit-overflow-scrolling:touch;}
+
     .tg-thread{display:none;}
     #tgShell.thread-open .tg-sidebar{display:none;}
-    #tgShell.thread-open .tg-thread{display:flex;height:calc(100dvh - 100px);}
-    .tg-bubble{max-width:100%;}
-    .tg-sidebar-top{flex-wrap:nowrap;}
-    .tg-filter{flex:none;}
-    #chats.active{display:flex;flex-direction:column;gap:6px;}
+    #tgShell.thread-open{
+      position:fixed;inset:0;z-index:55;
+      height:100dvh;max-height:100dvh;
+      display:flex;flex-direction:column;
+      background:var(--surface);
+    }
+    #tgShell.thread-open .tg-thread{
+      display:flex;flex:1;min-height:0;height:100%;
+    }
+    body.tg-thread-open{
+      overflow:hidden;
+      overscroll-behavior:none;
+    }
+    body.tg-thread-open .bnav{display:none !important;}
+    body.tg-thread-open #chats .tg-toolbar{display:none;}
+    body.tg-thread-open .main{
+      padding:0 !important;
+    }
+
+    .tg-thread-bar{
+      flex-wrap:nowrap;gap:6px;
+      padding:8px 8px calc(8px + env(safe-area-inset-top,0px));
+      padding-top:max(8px, env(safe-area-inset-top,0px));
+      min-height:56px;
+      position:sticky;top:0;z-index:3;
+    }
+    .tg-back{
+      display:grid;place-items:center;
+      width:40px;height:40px;padding:0;flex:none;
+      touch-action:manipulation;
+    }
+    .tg-back svg{width:22px;height:22px;}
+    .tg-peer-av{width:36px;height:36px;}
+    .tg-peer-meta{min-width:0;flex:1;}
+    .tg-peer-name{font-size:15px;}
+    .tg-peer-sub{font-size:11.5px;}
+    .tg-peer-client{
+      max-width:none;width:auto;margin-left:0;order:unset;padding-left:0;
+      flex:none;gap:4px;align-items:center;
+    }
+    .tg-client-chip{
+      max-width:72px;padding:4px 7px;font-size:11px;
+    }
+    .tg-client-btn{
+      flex:none;padding:7px 9px;font-size:12px;min-height:36px;
+    }
+    @media (max-width:380px){
+      .tg-client-chip{display:none;}
+    }
+
+    .tg-messages{
+      padding:10px 10px 12px;
+      -webkit-overflow-scrolling:touch;
+      overscroll-behavior:contain;
+    }
+    .tg-msg{max-width:min(92%,420px);}
+    .tg-bubble{font-size:15px;padding:7px 10px 4px;border-radius:14px;}
+    .tg-media,.tg-media-video{max-width:min(260px,78vw);}
+
+    .tg-composer-wrap{
+      padding-bottom:env(safe-area-inset-bottom,0px);
+      box-shadow:0 -4px 16px rgba(42,33,64,.06);
+    }
+    .tg-composer{padding:8px 8px 10px;gap:4px;}
+    .tg-composer textarea{
+      min-height:42px;font-size:16px; /* no iOS zoom */
+      border-radius:20px;padding:10px 14px;
+    }
+    .tg-composer .btn,.tg-composer .tg-icon-btn{
+      width:42px;height:42px;min-width:42px;min-height:42px;border-radius:50%;
+    }
+    .tg-attach-bar{padding:8px 10px 0;}
+    .tg-attach-item{max-width:min(220px,70vw);}
+
+    .tg-modal{padding:0;align-items:end;}
+    .tg-modal-card{
+      width:100%;max-width:none;border-radius:18px 18px 0 0;
+      padding:16px 16px calc(16px + env(safe-area-inset-bottom,0px));
+      max-height:min(92dvh,720px);overflow:auto;
+    }
   }
   @media (min-width:900px){
     .main:has(#chats.active){padding:10px 10px 12px;overflow:hidden;}

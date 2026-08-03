@@ -3684,11 +3684,11 @@
     const onlyWrap = $("#tgOnlyUsersWrap");
     if (isMaxChannel()) {
       if (isMaxUserbot()) {
-        if (emptyHint) emptyHint.textContent = "Диалоги аккаунта MAX слева";
+        if (emptyHint) emptyHint.textContent = "Выберите чат из списка";
         if (maxLabel) maxLabel.hidden = true;
         if (onlyWrap) onlyWrap.hidden = false;
       } else {
-        if (emptyHint) emptyHint.textContent = "Кто писал боту — слева";
+        if (emptyHint) emptyHint.textContent = "Кто писал боту — в списке";
         if (maxLabel) {
           maxLabel.hidden = false;
           maxLabel.textContent = tgState.maxLabel || "MAX-бот";
@@ -3700,7 +3700,7 @@
         input.maxLength = 4000;
       }
     } else {
-      if (emptyHint) emptyHint.textContent = "Список диалогов слева";
+      if (emptyHint) emptyHint.textContent = "Выберите чат из списка";
       if (maxLabel) maxLabel.hidden = true;
       if (onlyWrap) onlyWrap.hidden = false;
       if (input) {
@@ -4092,6 +4092,12 @@
     if (show) {
       shell?.classList.add("thread-open");
       document.body.classList.add("tg-thread-open");
+      if (
+        window.matchMedia("(max-width: 899px)").matches &&
+        !history.state?.tgThread
+      ) {
+        history.pushState({ tgThread: true }, "");
+      }
     } else {
       shell?.classList.remove("thread-open");
       document.body.classList.remove("tg-thread-open");
@@ -4154,7 +4160,7 @@
     if (createBtn) {
       createBtn.hidden = true;
       createBtn.disabled = false;
-      createBtn.textContent = "Создать клиента";
+      createBtn.textContent = "Создать";
     }
     if (openBtn) {
       openBtn.hidden = true;
@@ -4187,11 +4193,12 @@
 
     createBtn.hidden = !info.can_create;
     createBtn.disabled = false;
-    createBtn.textContent = "Создать клиента";
+    createBtn.textContent = "Создать";
 
-    // Не показываем «Открыть карточку», если клиента нет в базе
+    // Не показываем «Карточка», если клиента нет в базе
     openBtn.hidden = !customerId;
     openBtn.dataset.clientId = customerId ? String(customerId) : "";
+    openBtn.textContent = "Карточка";
   }
 
   async function refreshTgClientStatus({ silent = false } = {}) {
@@ -4330,7 +4337,7 @@
       }
       if (createBtn) {
         createBtn.disabled = false;
-        createBtn.textContent = "Создать клиента";
+        createBtn.textContent = "Создать";
       }
     } finally {
       if (submitBtn) submitBtn.disabled = false;
@@ -5002,6 +5009,18 @@
     });
 
     $("#tgBackToList")?.addEventListener("click", () => {
+      if (history.state?.tgThread) {
+        history.back();
+        return;
+      }
+      tgState.peerId = null;
+      showTgThread(false);
+      renderTgDialogs();
+    });
+
+    window.addEventListener("popstate", () => {
+      if (!document.body.classList.contains("tg-thread-open")) return;
+      if (!window.matchMedia("(max-width: 899px)").matches) return;
       tgState.peerId = null;
       showTgThread(false);
       renderTgDialogs();
