@@ -323,6 +323,31 @@
     inp.focus();
   });
 
+  // Login screen: reveal + soft parallax
+  (function initLoginAtmosphere() {
+    const screen = $("#loginScreen");
+    if (!screen) return;
+    requestAnimationFrame(() => screen.classList.add("is-ready"));
+    const reduce = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    if (reduce) return;
+    const orbs = screen.querySelectorAll("[data-parallax]");
+    if (!orbs.length) return;
+    let raf = 0;
+    const onMove = (e) => {
+      cancelAnimationFrame(raf);
+      raf = requestAnimationFrame(() => {
+        const x = (e.clientX / window.innerWidth - 0.5) * 2;
+        const y = (e.clientY / window.innerHeight - 0.5) * 2;
+        orbs.forEach((el) => {
+          const f = parseFloat(el.getAttribute("data-parallax") || "0.04");
+          el.style.setProperty("--px", `${(x * f * 100).toFixed(1)}px`);
+          el.style.setProperty("--py", `${(y * f * 100).toFixed(1)}px`);
+        });
+      });
+    };
+    window.addEventListener("pointermove", onMove, { passive: true });
+  })();
+
   // Подсказка про Caps Lock
   $("#loginPassword")?.addEventListener("keyup", (e) => {
     if (typeof e.getModifierState === "function") {
