@@ -651,22 +651,27 @@
       <button class="back mob" onclick="go('home')"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M15 18l-6-6 6-6"/></svg>Главная</button>
       <div class="ai-head">
         <div>
-          <div class="page-title">ИИ чат</div>
-          <p class="page-desc">Помощник по сегментам, текстам рассылок, клиентам и событиям.</p>
+          <div class="page-title">ИИ помощник</div>
+          <p class="page-desc">Тексты, клиенты, события и чек-листы — с опорой на CRM Veresk.</p>
         </div>
-        <button type="button" class="btn" id="aiClearChat">Очистить</button>
+        <div class="ai-head-actions">
+          <button type="button" class="btn" id="aiRegenBtn" hidden title="Перегенерировать последний ответ">Ещё раз</button>
+          <button type="button" class="btn" id="aiClearChat">Очистить</button>
+        </div>
       </div>
       <div class="ai-shell">
         <div class="ai-messages" id="aiMessages"></div>
-        <div class="ai-chips" id="aiQuickChips" hidden>
-          <button type="button" class="ai-chip" data-prompt="Кого поздравить в ближайшие 2 недели и какой текст написать?">Ближайшие события</button>
-          <button type="button" class="ai-chip" data-prompt="Идея рассылки для сегмента inactive: вернуть клиентов тёплым предложением без выдуманных скидок.">Сегмент inactive</button>
-          <button type="button" class="ai-chip" data-prompt="Напиши короткий текст рассылки к 8 Марта для постоянных клиентов, плейсхолдер {имя}.">Текст к 8 Марта</button>
-          <button type="button" class="ai-chip" data-prompt="Кратко: сколько клиентов по сегментам и что проверить перед новой рассылкой?">Сводка CRM</button>
+        <div class="ai-followups" id="aiFollowups" hidden></div>
+        <div class="ai-chip-cats" id="aiChipCats" hidden>
+          <button type="button" class="ai-cat on" data-cat="day">Смена</button>
+          <button type="button" class="ai-cat" data-cat="copy">Тексты</button>
+          <button type="button" class="ai-cat" data-cat="crm">CRM</button>
         </div>
+        <div class="ai-chips" id="aiQuickChips" hidden></div>
         <form class="ai-composer" id="aiChatForm">
           <label class="sr-only" for="aiInput">Сообщение</label>
-          <textarea id="aiInput" rows="1" placeholder="Спросите про клиента, сегмент или текст рассылки…" disabled></textarea>
+          <textarea id="aiInput" rows="1" placeholder="Имя клиента, телефон, «кого поздравить», текст рассылки…" disabled></textarea>
+          <button type="button" class="btn" id="aiStopBtn" hidden aria-label="Остановить">Стоп</button>
           <button type="submit" class="btn primary" id="aiSend" disabled aria-label="Отправить">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m3 11 18-8-8 18-2-8z"/></svg>
           </button>

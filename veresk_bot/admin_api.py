@@ -20,9 +20,12 @@ from ai_compose import (
     AiComposeError,
     admin_assistant_reply,
     ai_settings_public,
+    detect_chat_intent,
+    extract_customer_search_queries,
     generate_mailing_text,
     is_ai_configured,
     normalize_chat_messages,
+    suggest_chat_followups,
 )
 from config import ADMIN_PASSWORD, ADMIN_USERNAME, BOT_TOKEN
 from mailing_db import (
@@ -2132,9 +2135,16 @@ async def handle_ai_compose(request: web.Request) -> web.Response:
     return _json({"ok": True, "text": text})
 
 
-async def _build_ai_chat_context(user_message: str) -> str:
-    """Краткий снимок CRM для system prompt ИИ-чата."""
+async def _build_ai_chat_context(
+    user_message: str,
+    *,
+    history_text: str = "",
+    intent: str = "general",
+) -> tuple[str, bool]:
+    """Снимок CRM под запрос сотрудника. Возвращает (текст, нашлись ли клиенты)."""
     lines: list[str] = []
+    found_customers = False
+
     try:
         stats = await get_stats()
         lines.append(
@@ -2164,94 +2174,151 @@ async def _build_ai_chat_context(user_message: str) -> str:
     except Exception:
         logger.debug("AI chat: segments failed", exc_info=True)
 
+    event_days = 21
+    event_limit = 12
+    if intent == "events":
+        event_days = 30
+        event_limit = 20
+    elif intent == "stats":
+        event_days = 14
+        event_limit = 8
+
     try:
-        events = await list_upcoming_events(days=21, limit=12)
+        events = await list_upcoming_events(days=event_days, limit=event_limit)
         if events:
-            lines.append("Ближайшие события (21 день):")
-            for ev in events[:12]:
+            today = [ev for ev in events if int(ev.get("days_until") or 0) == 0]
+            week = [ev for ev in events if int(ev.get("days_until") or 0) <= 7]
+            lines.append(
+                f"Ближайшие события ({event_days} дн.): всего={len(events)}, "
+                f"сегодня={len(today)}, в 7 дней={len(week)}"
+            )
+            for ev in events[:event_limit]:
                 name = (ev.get("customer_name") or ev.get("name") or "—").strip()
                 title = (ev.get("title") or ev.get("kind") or "событие").strip()
                 when = (ev.get("next_date") or ev.get("event_date") or "").strip()
-                lines.append(f"• {when}: {name} — {title}")
+                days_until = ev.get("days_until")
+                phone = (ev.get("customer_phone") or "").strip()
+                cust_id = ev.get("cust_id") or ev.get("customer_id") or ""
+                lines.append(
+                    f"• через {days_until}д ({when}): {name} — {title} "
+                    f"id={cust_id} тел={phone or '—'}"
+                )
         else:
-            lines.append("Ближайшие события (21 день): нет")
+            lines.append(f"Ближайшие события ({event_days} дн.): нет")
     except Exception:
         logger.debug("AI chat: events failed", exc_info=True)
 
     try:
-        campaigns = await list_campaigns(limit=5)
+        campaigns = await list_campaigns(limit=8 if intent in ("copy", "stats") else 5)
         if campaigns:
             lines.append("Последние рассылки:")
-            for c in campaigns[:5]:
-                msg_preview = (c.get("message") or "")[:80]
+            for c in campaigns[:8]:
+                msg_preview = (c.get("message") or "")[:100]
                 lines.append(
                     f"• #{c.get('id')} [{c.get('status')}] "
-                    f"сегмент={c.get('segment')} «{msg_preview}»"
+                    f"сегмент={c.get('segment')} каналы={c.get('channels') or '—'} "
+                    f"«{msg_preview}»"
                 )
     except Exception:
         logger.debug("AI chat: campaigns failed", exc_info=True)
 
-    # Поиск клиента по словам из сообщения (имя / телефон)
-    search_q = ""
-    msg = (user_message or "").strip()
-    phone_digits = re.sub(r"\D", "", msg)
-    if len(phone_digits) >= 10:
-        search_q = phone_digits[-10:]
-    else:
-        # Берём самое длинное «словo» кириллицей/латиницей ≥ 3 символов
-        tokens = re.findall(r"[A-Za-zА-Яа-яЁё]{3,}", msg)
-        tokens = [t for t in tokens if t.lower() not in {
-            "клиент", "клиенту", "клиента", "рассылка", "сегмент", "бюджет",
-            "букет", "текст", "напиши", "сделай", "привет", "здравствуйте",
-            "пожалуйста", "сколько", "какой", "какая", "какие", "нужен",
-        }]
-        if tokens:
-            search_q = max(tokens, key=len)
-
-    if search_q:
+    if intent == "inactive":
         try:
-            rows, total = await list_customers(search=search_q, page=1, page_size=5)
+            rows, total = await list_customers(
+                search="", segment="inactive", page=1, page_size=8
+            )
             if rows:
-                lines.append(f"Поиск клиентов по «{search_q}» (найдено {total}):")
-                for c in rows[:5]:
+                lines.append(f"Примеры inactive (всего {total}), до 8 шт.:")
+                for c in rows[:8]:
                     lines.append(
                         f"• id={c.get('id')} {c.get('name') or '—'} "
-                        f"тел={c.get('phone') or '—'} сегмент={c.get('segment') or '—'} "
-                        f"tg={c.get('tg_user_id') or '—'}"
+                        f"тел={c.get('phone') or '—'} "
+                        f"last_order={c.get('last_order_at') or '—'}"
                     )
-                    try:
-                        ost = await get_order_stats_for_customer(int(c["id"]))
-                        if ost:
-                            lines.append(
-                                f"  заказы: count={ost.get('orders_count', 0)}, "
-                                f"sum={ost.get('total_spent', 0)}, "
-                                f"last={ost.get('last_order_at') or '—'}"
-                            )
-                    except Exception:
-                        pass
-                    try:
-                        cev = await list_events_for_customer(int(c["id"]))
-                        for ev in (cev or [])[:3]:
-                            lines.append(
-                                f"  событие: {ev.get('date_from') or '—'} "
-                                f"{ev.get('title') or ev.get('kind') or ''}"
-                            )
-                    except Exception:
-                        pass
+        except Exception:
+            logger.debug("AI chat: inactive sample failed", exc_info=True)
+
+    # Поиск клиента: текущее сообщение + недавняя история диалога
+    search_blob = f"{user_message}\n{history_text}".strip()
+    queries = extract_customer_search_queries(user_message)
+    if not queries and history_text:
+        queries = extract_customer_search_queries(history_text)
+
+    seen_ids: set[int] = set()
+    for search_q in queries[:4]:
+        try:
+            rows, total = await list_customers(search=search_q, page=1, page_size=5)
+            if not rows:
+                continue
+            found_customers = True
+            lines.append(f"Поиск клиентов по «{search_q}» (найдено {total}):")
+            for c in rows[:5]:
+                cid = int(c.get("id") or 0)
+                if not cid or cid in seen_ids:
+                    continue
+                seen_ids.add(cid)
+                lines.append(
+                    f"• id={cid} {c.get('name') or '—'} "
+                    f"тел={c.get('phone') or '—'} сегмент={c.get('segment') or '—'} "
+                    f"tg={c.get('tg_user_id') or '—'} max={c.get('max_user_id') or '—'}"
+                )
+                try:
+                    ost = await get_order_stats_for_customer(cid)
+                    if ost:
+                        lines.append(
+                            f"  заказы: count={ost.get('orders_count', 0)}, "
+                            f"sum={ost.get('total_spent', 0)}, "
+                            f"avg={ost.get('avg_order', 0)}, "
+                            f"last={ost.get('last_order_at') or '—'}"
+                        )
+                except Exception:
+                    pass
+                try:
+                    orders = await list_orders_for_customer(cid, limit=3)
+                    for o in orders or []:
+                        lines.append(
+                            f"  заказ: {o.get('ordered_at') or '—'} "
+                            f"сумма={o.get('amount') or 0} "
+                            f"№{o.get('number') or '—'} "
+                            f"{(o.get('comment') or o.get('status') or '')[:60]}"
+                        )
+                except Exception:
+                    pass
+                try:
+                    cev = await list_events_for_customer(cid)
+                    for ev in (cev or [])[:4]:
+                        lines.append(
+                            f"  событие: {ev.get('date_from') or '—'} "
+                            f"{ev.get('title') or ev.get('kind') or ''}"
+                        )
+                except Exception:
+                    pass
+            if len(seen_ids) >= 8:
+                break
         except Exception:
             logger.debug("AI chat: customer search failed", exc_info=True)
 
+    if not found_customers and intent == "customer" and search_blob:
+        lines.append(
+            "По запросу клиент в CRM не найден. Попросите уточнить имя или телефон."
+        )
+
     lines.append(
-        "Каналы: Telegram (бот + userbot-рассылки/чаты), MAX (бот + рассылки). "
-        "Сайт заказа: veresk.flowers"
+        "Панель: Клиенты (карточка), События (ДР/годовщины), Рассылки (кампании), "
+        "Чаты (Telegram/MAX). Сайт заказа: veresk.flowers. "
+        "Каналы: Telegram (бот + userbot), MAX (бот + рассылки)."
     )
-    return "\n".join(lines)
+    return "\n".join(lines), found_customers
 
 
 async def handle_ai_chat(request: web.Request) -> web.Response:
     """POST /api/admin/ai/chat — внутренний ИИ-помощник админки."""
-    err = await _require_admin(request)
+    err = await _require_perm(request, "aichat")
     if err:
+        # Админы env-login и сотрудники с полными правами ок;
+        # если права нет — 403. Compose остаётся на _require_admin.
+        # Для совместимости: если у сессии нет ключа aichat в старых данных,
+        # _has_perm вернёт False — это ожидаемо.
         return err
     if not is_ai_configured():
         return _json(
@@ -2277,16 +2344,38 @@ async def handle_ai_chat(request: web.Request) -> web.Response:
                 status=400,
             )
 
-    context = await _build_ai_chat_context(messages[-1]["content"])
+    last_user = messages[-1]["content"]
+    intent = detect_chat_intent(last_user)
+    history_text = "\n".join(
+        m["content"] for m in messages[:-1] if m.get("role") == "user"
+    )[-1500:]
+    context, found_customers = await _build_ai_chat_context(
+        last_user,
+        history_text=history_text,
+        intent=intent,
+    )
     try:
-        reply = await admin_assistant_reply(messages=messages, context=context)
+        reply = await admin_assistant_reply(
+            messages=messages,
+            context=context,
+            intent=intent,
+        )
     except AiComposeError as exc:
         status = 400 if exc.code in ("prompt_required",) else 502
         if exc.code == "ai_not_configured":
             status = 503
         return _json({"error": exc.code, "detail": exc.message}, status=status)
 
-    return _json({"ok": True, "reply": reply, "message": reply})
+    suggestions = suggest_chat_followups(intent, found_customers=found_customers)
+    return _json(
+        {
+            "ok": True,
+            "reply": reply,
+            "message": reply,
+            "intent": intent,
+            "suggestions": suggestions,
+        }
+    )
 
 
 async def handle_ai_settings_get(request: web.Request) -> web.Response:

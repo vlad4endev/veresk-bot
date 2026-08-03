@@ -4057,85 +4057,267 @@
 
   // ── AI chat ──────────────────────────────────────────────────────────────
 
-  const AI_CHAT_KEY = "veresk_ai_chat_v1";
+  const AI_CHAT_KEY_BASE = "veresk_ai_chat_v2";
   const AI_WELCOME =
-    "Здравствуйте! Я помогу с текстами рассылок, сегментами, ближайшими событиями и вопросами по клиентам из CRM. Спросите, например: «кого поздравить на этой неделе?»";
+    "Я помогу с текстами, поздравлениями, сегментами и карточками клиентов из CRM. Спросите имя или телефон — или выберите сценарий ниже.";
+
+  const AI_CHIP_SETS = {
+    day: [
+      {
+        label: "Кого поздравить",
+        prompt:
+          "Кого поздравить в ближайшие 14 дней? Дай список с датами и короткий приоритет, кому писать первым.",
+      },
+      {
+        label: "План на смену",
+        prompt:
+          "Краткий план на смену: события на 7 дней, идея одной рассылки и чек-лист перед отправкой. Без выдуманных скидок.",
+      },
+      {
+        label: "Сводка CRM",
+        prompt:
+          "Кратко: сколько клиентов по сегментам, доставляемость и что проверить перед новой рассылкой?",
+      },
+    ],
+    copy: [
+      {
+        label: "Вернуть inactive",
+        prompt:
+          "Идея и готовый текст рассылки для сегмента inactive: вернуть клиентов тёплым предложением без выдуманных скидок. Плейсхолдер {имя}.",
+      },
+      {
+        label: "Текст к 8 Марта",
+        prompt:
+          "Напиши короткий текст рассылки к 8 Марта для постоянных клиентов, плейсхолдер {имя}. Без выдуманных скидок.",
+      },
+      {
+        label: "Личное ДР",
+        prompt:
+          "Черновик личного поздравления с днём рождения: тёплый, короткий, на «вы», плейсхолдер {имя}. В блоке ```текст.",
+      },
+    ],
+    crm: [
+      {
+        label: "Как искать клиента",
+        prompt:
+          "Объясни коротко: как лучше спрашивать тебя про клиента (имя, фамилия, телефон) и что ты можешь рассказать из CRM.",
+      },
+      {
+        label: "Перед рассылкой",
+        prompt:
+          "Чек-лист перед рассылкой: сегмент, текст, каналы TG/MAX, аккаунты ready, что не обещать клиенту.",
+      },
+      {
+        label: "Regular идея",
+        prompt:
+          "Идея короткой рассылки для сегмента regular на эту неделю + готовый текст с {имя}, без выдуманных акций.",
+      },
+    ],
+  };
 
   let aiChatReady = false;
+  let aiAbort = null;
   const aiChat = {
     configured: false,
     busy: false,
-    messages: [], // {role: 'user'|'assistant', content}
+    messages: [], // {role, content}
+    suggestions: [],
+    chipCat: "day",
   };
 
+  function aiStorageKey() {
+    const uid =
+      (authMe && (authMe.user_id || authMe.id || authMe.username)) ||
+      localStorage.getItem(LOGIN_KEY) ||
+      "anon";
+    return AI_CHAT_KEY_BASE + ":" + String(uid);
+  }
+
   function aiWelcomeHtml() {
+    const cards = [
+      ...AI_CHIP_SETS.day.slice(0, 2),
+      AI_CHIP_SETS.copy[0],
+      AI_CHIP_SETS.crm[1],
+    ];
     return `
       <div class="ai-msg ai-msg-bot">
         <div class="ai-bubble">
           <div class="ai-bubble-label">Veresk ИИ</div>
           <p>${esc(AI_WELCOME)}</p>
+          <div class="ai-welcome-cards">
+            ${cards
+              .map(
+                (c) =>
+                  `<button type="button" class="ai-welcome-card" data-prompt="${esc(
+                    c.prompt
+                  )}"><span>${esc(c.label)}</span></button>`
+              )
+              .join("")}
+          </div>
         </div>
       </div>`;
   }
 
+  function aiFormatInline(text) {
+    let s = esc(text);
+    s = s.replace(/\*\*(.+?)\*\*/g, "<strong>$1</strong>");
+    s = s.replace(/(^|[^*])\*([^*]+?)\*(?!\*)/g, "$1<em>$2</em>");
+    s = s.replace(/`([^`]+?)`/g, "<code class=\"ai-inline-code\">$1</code>");
+    return s;
+  }
+
   function aiFormatBubble(text) {
-    return esc(text)
-      .replace(/\n\n/g, "</p><p>")
-      .replace(/\n/g, "<br>");
+    const raw = String(text || "");
+    const parts = [];
+    const re = /```(?:текст|text|msg)?\s*\n?([\s\S]*?)```/gi;
+    let last = 0;
+    let m;
+    while ((m = re.exec(raw))) {
+      if (m.index > last) {
+        parts.push({ type: "text", value: raw.slice(last, m.index) });
+      }
+      parts.push({ type: "draft", value: m[1].trim() });
+      last = m.index + m[0].length;
+    }
+    if (last < raw.length) parts.push({ type: "text", value: raw.slice(last) });
+    if (!parts.length) parts.push({ type: "text", value: raw });
+
+    return parts
+      .map((p) => {
+        if (p.type === "draft") {
+          return (
+            `<div class="ai-draft">` +
+            `<div class="ai-draft-top"><span>Готовый текст</span>` +
+            `<button type="button" class="ai-draft-copy" data-copy="${esc(
+              p.value
+            )}">Копировать</button></div>` +
+            `<pre class="ai-draft-body">${esc(p.value)}</pre></div>`
+          );
+        }
+        const html = aiFormatInline(p.value)
+          .replace(/\n\n+/g, "</p><p>")
+          .replace(/\n/g, "<br>");
+        return `<p>${html}</p>`;
+      })
+      .join("");
+  }
+
+  function renderAiFollowups() {
+    const box = $("#aiFollowups");
+    if (!box) return;
+    const tips = aiChat.suggestions || [];
+    if (!tips.length || !aiChat.configured || aiChat.busy) {
+      box.hidden = true;
+      box.innerHTML = "";
+      return;
+    }
+    box.hidden = false;
+    box.innerHTML = tips
+      .map(
+        (t) =>
+          `<button type="button" class="ai-chip ai-follow-chip" data-prompt="${esc(
+            t
+          )}">${esc(t)}</button>`
+      )
+      .join("");
+  }
+
+  function renderAiChips() {
+    const box = $("#aiQuickChips");
+    if (!box) return;
+    const set = AI_CHIP_SETS[aiChat.chipCat] || AI_CHIP_SETS.day;
+    box.innerHTML = set
+      .map(
+        (c) =>
+          `<button type="button" class="ai-chip" data-prompt="${esc(
+            c.prompt
+          )}">${esc(c.label)}</button>`
+      )
+      .join("");
   }
 
   function renderAiMessages() {
     const box = $("#aiMessages");
     if (!box) return;
+    const regen = $("#aiRegenBtn");
     if (!aiChat.messages.length) {
       box.innerHTML = aiWelcomeHtml();
+      if (regen) regen.hidden = true;
+      renderAiFollowups();
       return;
     }
     box.innerHTML = aiChat.messages
-      .map((m) => {
+      .map((m, idx) => {
         if (m.role === "user") {
-          return `<div class="ai-msg ai-msg-user"><div class="ai-bubble"><p>${aiFormatBubble(
-            m.content
-          )}</p></div></div>`;
+          const body = esc(m.content).replace(/\n/g, "<br>");
+          return `<div class="ai-msg ai-msg-user"><div class="ai-bubble"><p>${body}</p></div></div>`;
         }
-        return `<div class="ai-msg ai-msg-bot"><div class="ai-bubble"><div class="ai-bubble-label">Veresk ИИ</div><p>${aiFormatBubble(
-          m.content
-        )}</p></div></div>`;
+        const isLast = idx === aiChat.messages.length - 1;
+        return (
+          `<div class="ai-msg ai-msg-bot" data-idx="${idx}">` +
+          `<div class="ai-bubble"><div class="ai-bubble-label">Veresk ИИ</div>${aiFormatBubble(
+            m.content
+          )}` +
+          `<div class="ai-msg-actions">` +
+          `<button type="button" class="ai-act" data-ai-act="copy" data-idx="${idx}">Копировать</button>` +
+          (isLast
+            ? `<button type="button" class="ai-act" data-ai-act="regen">Ещё раз</button>`
+            : "") +
+          `</div></div></div>`
+        );
       })
       .join("");
     if (aiChat.busy) {
       box.insertAdjacentHTML(
         "beforeend",
-        `<div class="ai-msg ai-msg-bot" id="aiTyping"><div class="ai-bubble"><div class="ai-bubble-label">Veresk ИИ</div><p class="ai-typing">Печатает…</p></div></div>`
+        `<div class="ai-msg ai-msg-bot" id="aiTyping"><div class="ai-bubble"><div class="ai-bubble-label">Veresk ИИ</div><p class="ai-typing"><span></span><span></span><span></span></p></div></div>`
       );
     }
+    if (regen) {
+      regen.hidden = !(
+        aiChat.configured &&
+        !aiChat.busy &&
+        aiChat.messages.some((m) => m.role === "user")
+      );
+    }
+    renderAiFollowups();
     box.scrollTop = box.scrollHeight;
   }
 
   function persistAiChat() {
     try {
       localStorage.setItem(
-        AI_CHAT_KEY,
-        JSON.stringify(aiChat.messages.slice(-24))
+        aiStorageKey(),
+        JSON.stringify({
+          messages: aiChat.messages.slice(-30),
+          suggestions: (aiChat.suggestions || []).slice(0, 6),
+        })
       );
     } catch (_) {}
   }
 
   function loadAiChat() {
     try {
-      const raw = localStorage.getItem(AI_CHAT_KEY);
+      let raw = localStorage.getItem(aiStorageKey());
+      if (!raw) raw = localStorage.getItem("veresk_ai_chat_v1");
       if (!raw) return;
       const parsed = JSON.parse(raw);
-      if (Array.isArray(parsed)) {
-        aiChat.messages = parsed
-          .filter(
-            (m) =>
-              m &&
-              (m.role === "user" || m.role === "assistant") &&
-              typeof m.content === "string" &&
-              m.content.trim()
-          )
-          .slice(-24);
+      const list = Array.isArray(parsed)
+        ? parsed
+        : Array.isArray(parsed?.messages)
+          ? parsed.messages
+          : [];
+      aiChat.messages = list
+        .filter(
+          (m) =>
+            m &&
+            (m.role === "user" || m.role === "assistant") &&
+            typeof m.content === "string" &&
+            m.content.trim()
+        )
+        .slice(-30);
+      if (Array.isArray(parsed?.suggestions)) {
+        aiChat.suggestions = parsed.suggestions.slice(0, 6);
       }
     } catch (_) {
       aiChat.messages = [];
@@ -4147,18 +4329,22 @@
     const input = $("#aiInput");
     const send = $("#aiSend");
     const chips = $("#aiQuickChips");
+    const cats = $("#aiChipCats");
     const hint = $("#aiChatHint");
+    const stop = $("#aiStopBtn");
     if (input) {
       input.disabled = !on || aiChat.busy;
       input.placeholder = on
-        ? "Спросите про клиента, сегмент или текст рассылки…"
+        ? "Имя клиента, телефон, «кого поздравить», текст рассылки…"
         : "Сначала подключите ИИ в Настройках…";
     }
     if (send) send.disabled = !on || aiChat.busy;
     if (chips) chips.hidden = !on;
+    if (cats) cats.hidden = !on;
+    if (stop) stop.hidden = !aiChat.busy;
     if (hint) {
       hint.innerHTML = on
-        ? "Ответы опираются на клиентов, сегменты и события из CRM. Не выдумывает цены — проверяйте тексты перед отправкой."
+        ? "Ответы опираются на CRM. Готовые тексты — в блоке «Копировать». Проверяйте перед отправкой."
         : 'Подключите ИИ в <button type="button" class="linkish" onclick="go(\'settings\')">Настройки → Сервисы</button>.';
     }
   }
@@ -4172,10 +4358,63 @@
     }
   }
 
+  function aiCopyText(text, btn) {
+    const t = String(text || "");
+    if (!t) return;
+    const markDone = () => {
+      if (!btn) return;
+      const prev = btn.textContent;
+      btn.textContent = "Скопировано";
+      btn.classList.add("on");
+      setTimeout(() => {
+        btn.textContent = prev || "Копировать";
+        btn.classList.remove("on");
+      }, 1400);
+    };
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(t).then(markDone).catch(() => {
+        fallbackCopy(t);
+        markDone();
+      });
+    } else {
+      fallbackCopy(t);
+      markDone();
+    }
+  }
+
+  function fallbackCopy(t) {
+    const ta = document.createElement("textarea");
+    ta.value = t;
+    ta.style.position = "fixed";
+    ta.style.left = "-9999px";
+    document.body.appendChild(ta);
+    ta.select();
+    try {
+      document.execCommand("copy");
+    } catch (_) {}
+    ta.remove();
+  }
+
+  async function regenerateAiChat() {
+    if (aiChat.busy || !aiChat.configured) return;
+    // Удаляем последний ответ ассистента и повторяем последний user
+    while (
+      aiChat.messages.length &&
+      aiChat.messages[aiChat.messages.length - 1].role === "assistant"
+    ) {
+      aiChat.messages.pop();
+    }
+    const lastUser = [...aiChat.messages].reverse().find((m) => m.role === "user");
+    if (!lastUser) return;
+    aiChat.messages.pop();
+    await sendAiChat(lastUser.content);
+  }
+
   async function sendAiChat(text) {
     const content = String(text || "").trim();
     if (!content || aiChat.busy || !aiChat.configured) return;
     aiChat.messages.push({ role: "user", content });
+    aiChat.suggestions = [];
     aiChat.busy = true;
     setAiChatEnabled(true);
     renderAiMessages();
@@ -4185,28 +4424,51 @@
       input.value = "";
       input.style.height = "auto";
     }
+    const controller = typeof AbortController !== "undefined" ? new AbortController() : null;
+    aiAbort = controller;
     try {
       const history = aiChat.messages.map((m) => ({
         role: m.role,
         content: m.content,
       }));
-      const res = await AdminAPI.aiChat({ messages: history });
+      const res = await AdminAPI.aiChat(
+        { messages: history },
+        controller ? { signal: controller.signal } : undefined
+      );
       const reply = String(res.reply || res.message || "").trim();
       if (!reply) throw new Error("empty");
       aiChat.messages.push({ role: "assistant", content: reply });
+      if (Array.isArray(res.suggestions) && res.suggestions.length) {
+        aiChat.suggestions = res.suggestions.map(String).slice(0, 6);
+      }
     } catch (err) {
-      const detail =
-        err?.data?.detail ||
-        err?.message ||
-        "Не удалось получить ответ. Проверьте настройки ИИ.";
-      aiChat.messages.push({
-        role: "assistant",
-        content: "⚠️ " + detail,
-      });
-      if (err?.data?.error === "ai_not_configured" || err?.status === 503) {
-        setAiChatEnabled(false);
+      if (err?.name === "AbortError" || err?.message === "aborted") {
+        aiChat.messages.push({
+          role: "assistant",
+          content: "⏹️ Генерацию остановили. Можете задать вопрос заново.",
+        });
+      } else {
+        const detail =
+          err?.data?.detail ||
+          err?.message ||
+          "Не удалось получить ответ. Проверьте настройки ИИ.";
+        aiChat.messages.push({
+          role: "assistant",
+          content: "⚠️ " + detail,
+        });
+        if (err?.data?.error === "ai_not_configured" || err?.status === 503) {
+          setAiChatEnabled(false);
+        }
+        if (err?.status === 403) {
+          setAiChatEnabled(false);
+          if ($("#aiChatHint")) {
+            $("#aiChatHint").textContent =
+              "Нет права «ИИ чат». Попросите администратора открыть доступ.";
+          }
+        }
       }
     } finally {
+      aiAbort = null;
       aiChat.busy = false;
       if (aiChat.configured) setAiChatEnabled(true);
       renderAiMessages();
@@ -4217,11 +4479,13 @@
   function initAiChat() {
     refreshAiChatConfig();
     if (aiChatReady) {
+      renderAiChips();
       renderAiMessages();
       return;
     }
     aiChatReady = true;
     loadAiChat();
+    renderAiChips();
     renderAiMessages();
 
     const form = $("#aiChatForm");
@@ -4238,17 +4502,60 @@
     });
     input?.addEventListener("input", () => {
       input.style.height = "auto";
-      input.style.height = Math.min(input.scrollHeight, 120) + "px";
+      input.style.height = Math.min(input.scrollHeight, 140) + "px";
     });
     $("#aiClearChat")?.addEventListener("click", () => {
       aiChat.messages = [];
+      aiChat.suggestions = [];
       persistAiChat();
       renderAiMessages();
+    });
+    $("#aiRegenBtn")?.addEventListener("click", () => regenerateAiChat());
+    $("#aiStopBtn")?.addEventListener("click", () => {
+      if (aiAbort) aiAbort.abort();
     });
     $("#aiQuickChips")?.addEventListener("click", (e) => {
       const btn = e.target.closest("[data-prompt]");
       if (!btn) return;
       sendAiChat(btn.getAttribute("data-prompt") || "");
+    });
+    $("#aiFollowups")?.addEventListener("click", (e) => {
+      const btn = e.target.closest("[data-prompt]");
+      if (!btn) return;
+      sendAiChat(btn.getAttribute("data-prompt") || "");
+    });
+    $("#aiChipCats")?.addEventListener("click", (e) => {
+      const btn = e.target.closest("[data-cat]");
+      if (!btn) return;
+      aiChat.chipCat = btn.getAttribute("data-cat") || "day";
+      $$("#aiChipCats .ai-cat").forEach((b) =>
+        b.classList.toggle("on", b === btn)
+      );
+      renderAiChips();
+    });
+    $("#aiMessages")?.addEventListener("click", (e) => {
+      const card = e.target.closest(".ai-welcome-card[data-prompt]");
+      if (card) {
+        sendAiChat(card.getAttribute("data-prompt") || "");
+        return;
+      }
+      const draftBtn = e.target.closest(".ai-draft-copy[data-copy]");
+      if (draftBtn) {
+        aiCopyText(draftBtn.getAttribute("data-copy") || "", draftBtn);
+        return;
+      }
+      const act = e.target.closest("[data-ai-act]");
+      if (!act) return;
+      const kind = act.getAttribute("data-ai-act");
+      if (kind === "regen") {
+        regenerateAiChat();
+        return;
+      }
+      if (kind === "copy") {
+        const idx = Number(act.getAttribute("data-idx"));
+        const msg = aiChat.messages[idx];
+        if (msg) aiCopyText(msg.content, act);
+      }
     });
   }
 

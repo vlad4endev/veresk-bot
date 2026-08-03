@@ -236,10 +236,11 @@ const AdminAPI = (() => {
         method: "POST",
         body: JSON.stringify(body),
       }),
-    aiChat: (body) =>
+    aiChat: (body, opts = {}) =>
       request("/api/admin/ai/chat", {
         method: "POST",
         body: JSON.stringify(body),
+        signal: opts.signal,
       }),
     aiSettings: () => request("/api/admin/ai/settings"),
     aiSaveSettings: (body) =>

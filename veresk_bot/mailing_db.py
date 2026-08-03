@@ -1540,7 +1540,7 @@ ADMIN_PERMISSION_DEFS: tuple[tuple[str, str], ...] = (
 )
 ADMIN_PERMISSION_KEYS: tuple[str, ...] = tuple(k for k, _ in ADMIN_PERMISSION_DEFS)
 # Базовый набор для нового сотрудника
-ADMIN_PERMISSIONS_DEFAULT: tuple[str, ...] = ("home", "clients", "chats")
+ADMIN_PERMISSIONS_DEFAULT: tuple[str, ...] = ("home", "clients", "chats", "aichat")
 
 
 def permissions_catalog() -> list[dict[str, str]]:
