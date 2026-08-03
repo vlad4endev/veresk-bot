@@ -117,7 +117,10 @@ CREATE TABLE IF NOT EXISTS send_accounts (
     sent_day TEXT,
     status TEXT NOT NULL DEFAULT 'ready',
     warmup_until TEXT,
-    created_at TEXT NOT NULL
+    created_at TEXT NOT NULL,
+    last_checked_at TEXT,
+    last_ok_at TEXT,
+    last_error TEXT
 );
 
 CREATE TABLE IF NOT EXISTS admin_sessions (
@@ -179,11 +182,23 @@ async def _run_db(fn: Callable[[], T]) -> T:
     return await asyncio.to_thread(fn)
 
 
+def _ensure_column(db: sqlite3.Connection, table: str, column: str, typedef: str) -> None:
+    cols = {str(r[1]) for r in db.execute(f"PRAGMA table_info({table})")}
+    if column not in cols:
+        db.execute(f"ALTER TABLE {table} ADD COLUMN {column} {typedef}")
+
+
 async def init_mailing_db() -> None:
     def _init() -> None:
         Path(DATABASE_PATH).parent.mkdir(parents=True, exist_ok=True)
         with _connect() as db:
             db.executescript(_SCHEMA)
+            for col, typedef in (
+                ("last_checked_at", "TEXT"),
+                ("last_ok_at", "TEXT"),
+                ("last_error", "TEXT"),
+            ):
+                _ensure_column(db, "send_accounts", col, typedef)
             # Миграция: приводим ранее сохранённые телефоны к +7(999)999-99-99
             rows = db.execute("SELECT id, phone FROM customers").fetchall()
             for row in rows:
@@ -469,6 +484,57 @@ async def list_events_for_customer(customer_id: int) -> list[dict[str, Any]]:
                 (customer_id,),
             ).fetchall()
         return [dict(r) for r in rows]
+
+    return await _run_db(_list)
+
+
+async def next_events_for_customers(
+    customer_ids: list[int],
+) -> dict[int, dict[str, Any]]:
+    """Ближайшее (по MM-DD, год игнорируем) событие для каждого клиента."""
+    if not customer_ids:
+        return {}
+
+    def _list() -> dict[int, dict[str, Any]]:
+        today = datetime.now().date()
+        placeholders = ",".join("?" * len(customer_ids))
+        with _connect() as db:
+            rows = db.execute(
+                f"""
+                SELECT customer_id, title, kind, date_from
+                FROM customer_events
+                WHERE customer_id IN ({placeholders})
+                """,
+                customer_ids,
+            ).fetchall()
+        best: dict[int, dict[str, Any]] = {}
+        for row in rows:
+            raw = str(row["date_from"])[:10]
+            try:
+                event_date = datetime.strptime(raw, "%Y-%m-%d").date()
+            except ValueError:
+                continue
+            try:
+                this_year = event_date.replace(year=today.year)
+            except ValueError:
+                # 29 февраля
+                this_year = event_date.replace(year=today.year, day=28)
+            if this_year < today:
+                try:
+                    this_year = event_date.replace(year=today.year + 1)
+                except ValueError:
+                    this_year = event_date.replace(year=today.year + 1, day=28)
+            delta = (this_year - today).days
+            cid = int(row["customer_id"])
+            cur = best.get(cid)
+            if cur is None or delta < cur["days_until"]:
+                best[cid] = {
+                    "title": row["title"],
+                    "kind": row["kind"],
+                    "days_until": delta,
+                    "next_date": this_year.isoformat(),
+                }
+        return best
 
     return await _run_db(_list)
 
@@ -1216,6 +1282,9 @@ async def update_send_account(account_id: int, **fields: Any) -> bool:
         "warmup_until",
         "sent_today",
         "sent_day",
+        "last_checked_at",
+        "last_ok_at",
+        "last_error",
     }
     updates = {k: v for k, v in fields.items() if k in allowed}
     if not updates:
@@ -1234,10 +1303,33 @@ async def update_send_account(account_id: int, **fields: Any) -> bool:
     return await _run_db(_update)
 
 
+async def delete_send_account(account_id: int) -> dict[str, Any] | None:
+    """Удалить аккаунт отправки. Возвращает удалённую строку или None."""
+
+    def _delete() -> dict[str, Any] | None:
+        with _connect() as db:
+            row = db.execute(
+                "SELECT * FROM send_accounts WHERE id = ?", (account_id,)
+            ).fetchone()
+            if not row:
+                return None
+            data = dict(row)
+            db.execute("DELETE FROM send_accounts WHERE id = ?", (account_id,))
+            db.commit()
+            return data
+
+    return await _run_db(_delete)
+
+
 # ── admin sessions ─────────────────────────────────────────────────────────
 
 
-async def create_admin_session(token: str, hours: int = 72) -> None:
+ADMIN_SESSION_HOURS = 72
+# Продлеваем вход не чаще раза в час, чтобы не писать в БД на каждый запрос
+ADMIN_SESSION_TOUCH_MIN_SECONDS = 3600
+
+
+async def create_admin_session(token: str, hours: int = ADMIN_SESSION_HOURS) -> None:
     now = datetime.now()
     expires = (now + timedelta(hours=hours)).isoformat(timespec="seconds")
 
@@ -1255,7 +1347,50 @@ async def create_admin_session(token: str, hours: int = 72) -> None:
     await _run_db(_create)
 
 
-async def validate_admin_session(token: str) -> bool:
+async def touch_admin_session(
+    token: str,
+    *,
+    hours: int = ADMIN_SESSION_HOURS,
+    min_interval_sec: int = ADMIN_SESSION_TOUCH_MIN_SECONDS,
+) -> str | None:
+    """Скользящее продление сессии админки. Возвращает новый expires_at или None."""
+    now = datetime.now()
+    now_s = now.isoformat(timespec="seconds")
+    new_expires = (now + timedelta(hours=hours)).isoformat(timespec="seconds")
+
+    def _touch() -> str | None:
+        with _connect() as db:
+            row = db.execute(
+                "SELECT expires_at FROM admin_sessions WHERE token = ?",
+                (token,),
+            ).fetchone()
+            if not row:
+                return None
+            if row["expires_at"] < now_s:
+                db.execute("DELETE FROM admin_sessions WHERE token = ?", (token,))
+                db.commit()
+                return None
+            # Не трогаем, если до конца ещё далеко и недавно уже продлевали
+            try:
+                exp_dt = datetime.fromisoformat(str(row["expires_at"]))
+                remaining = (exp_dt - now).total_seconds()
+            except ValueError:
+                remaining = 0
+            # Продлеваем, если осталось меньше половины срока или пора обновить
+            half = hours * 3600 / 2
+            if remaining > half and remaining > min_interval_sec:
+                return str(row["expires_at"])
+            db.execute(
+                "UPDATE admin_sessions SET expires_at = ? WHERE token = ?",
+                (new_expires, token),
+            )
+            db.commit()
+            return new_expires
+
+    return await _run_db(_touch)
+
+
+async def validate_admin_session(token: str, *, touch: bool = True) -> bool:
     now = _now()
 
     def _val() -> bool:
@@ -1272,7 +1407,10 @@ async def validate_admin_session(token: str) -> bool:
                 return False
             return True
 
-    return await _run_db(_val)
+    ok = await _run_db(_val)
+    if ok and touch:
+        await touch_admin_session(token)
+    return ok
 
 
 async def delete_admin_session(token: str) -> None:

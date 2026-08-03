@@ -660,6 +660,14 @@ async def _send_tracker_invite(
 
 
 async def cmd_start(message: Message, state: FSMContext) -> None:
+    try:
+        from bot_metrics import PLATFORM_TELEGRAM, record_bot_start
+
+        if message.from_user:
+            await record_bot_start(PLATFORM_TELEGRAM, message.from_user.id)
+    except Exception:
+        logger.debug("Не удалось записать запуск Telegram-бота", exc_info=True)
+
     await state.clear()
     await state.update_data(events=[])
     await message.answer(
@@ -1228,11 +1236,20 @@ async def main() -> None:
     )
     await validate_bot_token()
 
+    from bot_metrics import PLATFORM_TELEGRAM, init_bot_metrics, touch_bot_heartbeat
     from client_db import init_db
     from mailing_db import init_mailing_db
 
     await init_db()
     await init_mailing_db()
+    await init_bot_metrics()
+
+    async def _tg_heartbeat_loop() -> None:
+        while True:
+            await touch_bot_heartbeat(PLATFORM_TELEGRAM)
+            await asyncio.sleep(30)
+
+    asyncio.create_task(_tg_heartbeat_loop())
 
     from posiflora import start_token_refresher, warmup_token
 
@@ -1246,6 +1263,10 @@ async def main() -> None:
     from senders.dispatcher import start_mailing_dispatcher
 
     start_mailing_dispatcher()
+
+    from senders.session_keepalive import start_telegram_session_keepalive
+
+    start_telegram_session_keepalive()
 
     redis = getattr(dp.storage, "redis", None)
     if redis:

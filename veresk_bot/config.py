@@ -71,5 +71,18 @@ TELEGRAM_API_HASH = os.getenv("TELEGRAM_API_HASH", "").strip()
 _default_sessions = Path(__file__).resolve().parent / "data" / "sessions"
 SESSIONS_DIR = os.getenv("SESSIONS_DIR", str(_default_sessions))
 
-# MAX-бот (заглушка — заполните, когда API будет готов)
+# MAX-бот (токен выдаёт @MasterBot в MAX)
 MAX_BOT_TOKEN = os.getenv("MAX_BOT_TOKEN", "").strip()
+# Чат флориста в MAX для уведомлений об анкетах (0 — выключено)
+MAX_FLORIST_CHAT_ID = int(os.getenv("MAX_FLORIST_CHAT_ID", "0") or "0")
+
+# ИИ для текстов рассылок (OpenAI / OpenRouter / YandexGPT / свой API)
+# Удобнее задать в админке: Настройки → Сервисы → ИИ-редактор
+AI_PROVIDER = os.getenv("AI_PROVIDER", "openai").strip().lower() or "openai"
+AI_API_KEY = os.getenv("AI_API_KEY", os.getenv("OPENAI_API_KEY", "")).strip()
+AI_API_BASE = os.getenv(
+    "AI_API_BASE",
+    os.getenv("OPENAI_BASE_URL", "https://api.openai.com/v1"),
+).strip() or "https://api.openai.com/v1"
+AI_MODEL = os.getenv("AI_MODEL", os.getenv("OPENAI_MODEL", "")).strip()
+AI_FOLDER_ID = os.getenv("AI_FOLDER_ID", os.getenv("YANDEX_FOLDER_ID", "")).strip()

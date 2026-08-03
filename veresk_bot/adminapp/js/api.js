@@ -52,6 +52,7 @@ const AdminAPI = (() => {
     logout: () => request("/api/admin/logout", { method: "POST" }),
     me: () => request("/api/admin/me"),
     stats: () => request("/api/admin/stats"),
+    botsStatus: () => request("/api/admin/bots/status"),
     sync: () => request("/api/admin/sync", { method: "POST" }),
     clients: (params = {}) => {
       const q = new URLSearchParams(params).toString();
@@ -87,7 +88,10 @@ const AdminAPI = (() => {
         method: "POST",
         body: JSON.stringify(body),
       }),
-    accounts: () => request("/api/admin/accounts"),
+    accounts: (params = {}) => {
+      const q = new URLSearchParams(params).toString();
+      return request("/api/admin/accounts" + (q ? "?" + q : ""));
+    },
     tgSettings: () => request("/api/admin/accounts/telegram/settings"),
     tgSaveSettings: (api_id, api_hash) =>
       request("/api/admin/accounts/telegram/settings", {
@@ -115,6 +119,12 @@ const AdminAPI = (() => {
         method: "POST",
         body: JSON.stringify({ phone, code, password }),
       }),
+    tgKeepalive: () =>
+      request("/api/admin/accounts/telegram/keepalive", { method: "POST" }),
+    tgCheckAccount: (id) =>
+      request("/api/admin/accounts/" + id + "/check", { method: "POST" }),
+    tgDeleteAccount: (id) =>
+      request("/api/admin/accounts/" + id, { method: "DELETE" }),
     segments: () => request("/api/admin/segments"),
     aiCompose: (body) =>
       request("/api/admin/ai/compose", {

@@ -5,6 +5,7 @@ HTTP API админ-панели рассылок: /api/admin/*
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import secrets
 from datetime import datetime, timedelta
@@ -12,7 +13,15 @@ from typing import Any
 
 from aiohttp import web
 
-from config import ADMIN_PASSWORD, ADMIN_USERNAME
+from ai_compose import (
+    PROVIDER_PRESETS,
+    PROVIDERS,
+    AiComposeError,
+    ai_settings_public,
+    generate_mailing_text,
+    is_ai_configured,
+)
+from config import ADMIN_PASSWORD, ADMIN_USERNAME, BOT_TOKEN
 from mailing_db import (
     add_campaign_recipients,
     count_customers,
@@ -21,9 +30,11 @@ from mailing_db import (
     create_personal_message,
     create_send_account,
     delete_admin_session,
+    delete_send_account,
     get_campaign,
     get_customer,
     get_event,
+    get_send_account,
     get_stats,
     list_campaign_recipients,
     list_campaigns,
@@ -34,18 +45,25 @@ from mailing_db import (
     list_orders_for_customer,
     list_send_accounts,
     list_upcoming_events,
+    next_events_for_customers,
     set_event_auto_send,
+    touch_admin_session,
     update_campaign,
+    update_send_account,
     validate_admin_session,
     customers_for_segment,
+    ADMIN_SESSION_HOURS,
 )
 import runtime_settings
+from bot_metrics import get_bot_metrics, init_bot_metrics
 from posiflora_sync import last_sync_info, sync_from_posiflora
 from senders.max_bot import get_max_bot_token, is_max_configured
 from senders.telegram_userbot import (
+    check_telegram_session,
     confirm_telegram_login,
     get_api_credentials,
     is_telethon_configured,
+    remove_session_file,
     start_telegram_login,
 )
 
@@ -58,7 +76,7 @@ def _cors() -> dict[str, str]:
     return {
         "Access-Control-Allow-Origin": "*",
         "Access-Control-Allow-Headers": "Content-Type, Authorization",
-        "Access-Control-Allow-Methods": "GET, POST, PATCH, OPTIONS",
+        "Access-Control-Allow-Methods": "GET, POST, PATCH, DELETE, OPTIONS",
     }
 
 
@@ -175,7 +193,19 @@ async def handle_me(request: web.Request) -> web.Response:
     err = await _require_admin(request)
     if err:
         return err
-    return _json({"ok": True, "role": "admin"})
+    token = _extract_token(request)
+    expires_at = await touch_admin_session(token) if token else None
+    return _json(
+        {
+            "ok": True,
+            "role": "admin",
+            "username": ADMIN_USERNAME,
+            "source": "env",
+            "session_hours": ADMIN_SESSION_HOURS,
+            "expires_at": expires_at,
+            "session_renewed": True,
+        }
+    )
 
 
 # ── stats / sync ───────────────────────────────────────────────────────────
@@ -226,8 +256,21 @@ async def handle_clients_list(request: web.Request) -> web.Response:
     rows, total = await list_customers(
         segment=segment, search=search, page=page, page_size=page_size
     )
+    next_events = await next_events_for_customers([c["id"] for c in rows])
     items = []
     for c in rows:
+        ev = next_events.get(c["id"])
+        next_event = None
+        if ev:
+            when, when_cls = _when_label(ev["days_until"])
+            next_event = {
+                "title": ev["title"],
+                "kind": ev["kind"],
+                "days_until": ev["days_until"],
+                "next_date": ev["next_date"],
+                "when_label": when,
+                "when_cls": when_cls,
+            }
         items.append(
             {
                 "id": c["id"],
@@ -242,6 +285,7 @@ async def handle_clients_list(request: web.Request) -> web.Response:
                 "last_order_at": c.get("last_order_at"),
                 "last_order_label": _format_relative(c.get("last_order_at")),
                 "created_in_pf_at": c.get("created_in_pf_at"),
+                "next_event": next_event,
             }
         )
     return _json({"items": items, "total": total, "page": page, "page_size": page_size})
@@ -577,21 +621,65 @@ async def handle_accounts_list(request: web.Request) -> web.Response:
     if err:
         return err
     rows = await list_send_accounts()
+    check_live = request.query.get("check") == "1"
+
+    # Параллельно проверяем живые Telethon-сессии при ?check=1
+    session_checks: dict[int, dict[str, Any]] = {}
+    if check_live:
+        tg_rows = [
+            a
+            for a in rows
+            if a.get("kind") == "tg_userbot" and a.get("session_file")
+        ]
+
+        async def _check_one(acc: dict[str, Any]) -> tuple[int, dict[str, Any]]:
+            result = await check_telegram_session(str(acc.get("session_file") or ""))
+            return int(acc["id"]), result
+
+        if tg_rows:
+            results = await asyncio.gather(
+                *[_check_one(a) for a in tg_rows], return_exceptions=True
+            )
+            for item in results:
+                if isinstance(item, Exception):
+                    logger.exception("account session check failed: %s", item)
+                    continue
+                acc_id, result = item
+                session_checks[acc_id] = result
+
     items = []
     for a in rows:
-        items.append(
-            {
-                "id": a["id"],
-                "kind": a["kind"],
-                "label": a["label"],
-                "phone": a["phone"],
-                "phone_masked": _mask_phone(a["phone"]) if a["phone"] else a["label"],
-                "daily_limit": a["daily_limit"],
-                "sent_today": a["sent_today"],
-                "status": a["status"],
-                "warmup_until": a.get("warmup_until"),
-            }
-        )
+        entry: dict[str, Any] = {
+            "id": a["id"],
+            "kind": a["kind"],
+            "label": a["label"],
+            "phone": a["phone"],
+            "phone_masked": _mask_phone(a["phone"]) if a["phone"] else a["label"],
+            "daily_limit": a["daily_limit"],
+            "sent_today": a["sent_today"],
+            "status": a["status"],
+            "warmup_until": a.get("warmup_until"),
+            "has_session": bool(a.get("session_file")),
+            "last_checked_at": a.get("last_checked_at"),
+            "last_ok_at": a.get("last_ok_at"),
+            "last_error": a.get("last_error"),
+        }
+        live = session_checks.get(int(a["id"]))
+        if live is not None:
+            entry["session_ok"] = bool(live.get("ok") and live.get("authorized"))
+            entry["session_error"] = live.get("error")
+            if live.get("username"):
+                entry["tg_username"] = live["username"]
+            if live.get("label"):
+                entry["tg_name"] = live["label"]
+            if live.get("ok") and a.get("kind") == "tg_userbot":
+                # Подтянуть имя из живой сессии, если в БД только телефон
+                if live.get("label") and (
+                    not a.get("label") or a.get("label") == a.get("phone")
+                ):
+                    await update_send_account(int(a["id"]), label=live["label"])
+                    entry["label"] = live["label"]
+        items.append(entry)
     # Заглушка MAX, если токена нет и аккаунта нет
     has_max = any(a["kind"] == "max_bot" for a in rows)
     max_ok = is_max_configured()
@@ -615,6 +703,7 @@ async def handle_accounts_list(request: web.Request) -> web.Response:
             "items": items,
             "telethon_configured": is_telethon_configured(),
             "max_configured": max_ok,
+            "checked": check_live,
         }
     )
 
@@ -667,7 +756,103 @@ async def handle_telegram_connect_confirm(request: web.Request) -> web.Response:
         status="warmup",
         warmup_until=warmup,
     )
-    return _json({"ok": True, "account_id": account_id, **result})
+    # Сразу проверяем, что сессия реально авторизована
+    live = await check_telegram_session(str(result.get("session_file") or ""))
+    return _json(
+        {
+            "ok": True,
+            "account_id": account_id,
+            "session_ok": bool(live.get("ok") and live.get("authorized")),
+            "session_error": live.get("error"),
+            "tg_username": live.get("username"),
+            **result,
+        }
+    )
+
+
+async def handle_telegram_account_check(request: web.Request) -> web.Response:
+    """Проверить живой коннект Telethon-аккаунта."""
+    err = await _require_admin(request)
+    if err:
+        return err
+    try:
+        account_id = int(request.match_info["id"])
+    except (KeyError, TypeError, ValueError):
+        return _json({"error": "invalid_id"}, status=400)
+    acc = await get_send_account(account_id)
+    if not acc:
+        return _json({"error": "not_found"}, status=404)
+    if acc.get("kind") != "tg_userbot":
+        return _json({"error": "not_telegram_account"}, status=400)
+
+    live = await check_telegram_session(str(acc.get("session_file") or ""))
+    authorized = bool(live.get("ok") and live.get("authorized"))
+    now = datetime.now().isoformat(timespec="seconds")
+    patch: dict[str, Any] = {
+        "last_checked_at": now,
+        "last_error": None if authorized else (live.get("error") or "unauthorized"),
+    }
+    if not authorized and acc.get("status") not in ("unavailable", "blocked"):
+        patch["status"] = "unavailable"
+    elif authorized:
+        patch["last_ok_at"] = now
+        today = datetime.now().date().isoformat()
+        wu = acc.get("warmup_until")
+        if acc.get("status") == "unavailable":
+            if wu and str(wu) > today:
+                patch["status"] = "warmup"
+            else:
+                patch["status"] = "ready"
+        if live.get("label"):
+            patch["label"] = live["label"]
+    await update_send_account(account_id, **patch)
+
+    return _json(
+        {
+            "ok": authorized,
+            "authorized": authorized,
+            "account_id": account_id,
+            "error": live.get("error"),
+            "tg_id": live.get("tg_id"),
+            "username": live.get("username"),
+            "label": live.get("label"),
+            "phone": live.get("phone") or acc.get("phone"),
+            "last_ok_at": now if authorized else acc.get("last_ok_at"),
+        }
+    )
+
+
+async def handle_telegram_account_delete(request: web.Request) -> web.Response:
+    """Отключить Telegram-аккаунт: удалить запись и файл сессии."""
+    err = await _require_admin(request)
+    if err:
+        return err
+    try:
+        account_id = int(request.match_info["id"])
+    except (KeyError, TypeError, ValueError):
+        return _json({"error": "invalid_id"}, status=400)
+    acc = await get_send_account(account_id)
+    if not acc:
+        return _json({"error": "not_found"}, status=404)
+    if acc.get("kind") != "tg_userbot":
+        return _json({"error": "not_telegram_account"}, status=400)
+
+    deleted = await delete_send_account(account_id)
+    if not deleted:
+        return _json({"error": "not_found"}, status=404)
+    remove_session_file(str(deleted.get("session_file") or ""))
+    return _json({"ok": True, "id": account_id})
+
+
+async def handle_telegram_keepalive(request: web.Request) -> web.Response:
+    """Принудительно продлить/проверить все Telegram-сессии."""
+    err = await _require_admin(request)
+    if err:
+        return err
+    from senders.session_keepalive import keepalive_all_telegram_sessions
+
+    result = await keepalive_all_telegram_sessions()
+    return _json(result)
 
 
 async def handle_telegram_settings_get(request: web.Request) -> web.Response:
@@ -821,12 +1006,323 @@ async def handle_segment_counts(request: web.Request) -> web.Response:
     )
 
 
+async def handle_ai_compose(request: web.Request) -> web.Response:
+    """POST /api/admin/ai/compose — сгенерировать текст рассылки."""
+    err = await _require_admin(request)
+    if err:
+        return err
+    if not is_ai_configured():
+        return _json(
+            {
+                "error": "ai_not_configured",
+                "detail": "Подключите ИИ в Настройках → Сервисы",
+            },
+            status=503,
+        )
+    try:
+        body = await request.json()
+    except Exception:
+        return _json({"error": "invalid_json"}, status=400)
+
+    prompt = str(body.get("prompt") or "").strip()
+    current_text = str(body.get("current_text") or "")
+    segment = str(body.get("segment") or "all").strip() or "all"
+    mode = str(body.get("mode") or "write").strip() or "write"
+    if mode not in ("write", "improve"):
+        mode = "write"
+
+    try:
+        text = await generate_mailing_text(
+            prompt=prompt,
+            current_text=current_text,
+            segment=segment,
+            mode=mode,
+        )
+    except AiComposeError as exc:
+        status = 400 if exc.code in ("prompt_required",) else 502
+        if exc.code == "ai_not_configured":
+            status = 503
+        return _json({"error": exc.code, "detail": exc.message}, status=status)
+
+    return _json({"ok": True, "text": text})
+
+
+async def handle_ai_settings_get(request: web.Request) -> web.Response:
+    err = await _require_admin(request)
+    if err:
+        return err
+    return _json(ai_settings_public())
+
+
+async def handle_ai_settings_save(request: web.Request) -> web.Response:
+    """POST /api/admin/ai/settings — сохранить или сбросить настройки ИИ."""
+    err = await _require_admin(request)
+    if err:
+        return err
+    try:
+        body = await request.json()
+    except Exception:
+        return _json({"error": "invalid_json"}, status=400)
+
+    if body.get("clear"):
+        runtime_settings.delete_keys(
+            "ai_provider",
+            "ai_api_key",
+            "ai_api_base",
+            "ai_model",
+            "ai_folder_id",
+        )
+        return _json({"ok": True, "cleared": True, **ai_settings_public()})
+
+    provider = str(body.get("provider") or "").strip().lower()
+    if provider and provider not in PROVIDERS:
+        return _json({"error": "invalid_provider", "detail": "Неизвестный оператор"}, status=400)
+
+    api_key = str(body.get("api_key") or "").strip()
+    api_base = str(body.get("api_base") or "").strip().rstrip("/")
+    model = str(body.get("model") or "").strip()
+    folder_id = str(body.get("folder_id") or "").strip()
+
+    if not api_key and not is_ai_configured():
+        return _json({"error": "api_key_required", "detail": "Укажите API-ключ"}, status=400)
+
+    values: dict = {}
+    if provider:
+        values["ai_provider"] = provider
+    else:
+        provider = str(runtime_settings.get("ai_provider") or "openai")
+
+    if api_key:
+        values["ai_api_key"] = api_key
+
+    preset = PROVIDER_PRESETS.get(provider) or PROVIDER_PRESETS["openai"]
+    if provider == "custom":
+        if api_base:
+            values["ai_api_base"] = api_base
+        elif "api_base" in body:
+            values["ai_api_base"] = preset["api_base"]
+    else:
+        # Фиксированный endpoint оператора (можно переопределить явно)
+        values["ai_api_base"] = api_base or preset["api_base"]
+
+    if model:
+        values["ai_model"] = model
+    elif "model" in body or provider:
+        values["ai_model"] = model or preset["model"]
+
+    if provider == "yandexgpt":
+        if folder_id:
+            values["ai_folder_id"] = folder_id
+        elif not runtime_settings.get("ai_folder_id"):
+            return _json(
+                {
+                    "error": "folder_id_required",
+                    "detail": "Для YandexGPT укажите Folder ID каталога в Yandex Cloud",
+                },
+                status=400,
+            )
+    elif "folder_id" in body:
+        values["ai_folder_id"] = folder_id
+
+    if values:
+        runtime_settings.set_many(values)
+
+    return _json({"ok": True, **ai_settings_public()})
+
+
+def _parse_iso(ts: str | None) -> datetime | None:
+    if not ts:
+        return None
+    try:
+        return datetime.fromisoformat(ts)
+    except ValueError:
+        return None
+
+
+def _heartbeat_age_seconds(last_seen: str | None) -> float | None:
+    dt = _parse_iso(last_seen)
+    if not dt:
+        return None
+    return max(0.0, (datetime.now() - dt).total_seconds())
+
+
+async def _probe_telegram_bot() -> dict[str, Any]:
+    """Проверка Telegram Bot API (getMe)."""
+    token = (BOT_TOKEN or "").strip()
+    if not token:
+        return {
+            "configured": False,
+            "api_ok": False,
+            "username": None,
+            "name": None,
+            "bot_id": None,
+            "error": "not_configured",
+        }
+    try:
+        import aiohttp
+
+        url = f"https://api.telegram.org/bot{token}/getMe"
+        timeout = aiohttp.ClientTimeout(total=12)
+        async with aiohttp.ClientSession(timeout=timeout) as session:
+            async with session.get(url) as resp:
+                data = await resp.json(content_type=None)
+        if not data.get("ok"):
+            return {
+                "configured": True,
+                "api_ok": False,
+                "username": None,
+                "name": None,
+                "bot_id": None,
+                "error": str(data.get("description") or "getMe_failed"),
+            }
+        result = data.get("result") or {}
+        return {
+            "configured": True,
+            "api_ok": True,
+            "username": result.get("username"),
+            "name": result.get("first_name") or result.get("username"),
+            "bot_id": result.get("id"),
+            "error": None,
+        }
+    except Exception as exc:
+        logger.debug("Telegram getMe failed", exc_info=True)
+        return {
+            "configured": True,
+            "api_ok": False,
+            "username": None,
+            "name": None,
+            "bot_id": None,
+            "error": str(exc)[:200],
+        }
+
+
+async def _probe_max_bot() -> dict[str, Any]:
+    token = get_max_bot_token()
+    if not token:
+        return {
+            "configured": False,
+            "api_ok": False,
+            "username": None,
+            "name": None,
+            "bot_id": None,
+            "error": "not_configured",
+        }
+    try:
+        from max_bot.api import MaxBotAPI
+
+        api = MaxBotAPI(token)
+        try:
+            me = await api.get_me()
+        finally:
+            await api.close()
+        return {
+            "configured": True,
+            "api_ok": True,
+            "username": me.get("username"),
+            "name": me.get("name") or me.get("first_name") or me.get("username"),
+            "bot_id": me.get("user_id"),
+            "error": None,
+        }
+    except Exception as exc:
+        logger.debug("MAX getMe failed", exc_info=True)
+        return {
+            "configured": True,
+            "api_ok": False,
+            "username": None,
+            "name": None,
+            "bot_id": None,
+            "error": str(exc)[:200],
+        }
+
+
+def _resolve_bot_status(
+    *,
+    configured: bool,
+    api_ok: bool,
+    last_seen: str | None,
+    stale_after: float = 90.0,
+) -> str:
+    """online | idle | offline | not_configured"""
+    if not configured:
+        return "not_configured"
+    if not api_ok:
+        return "offline"
+    age = _heartbeat_age_seconds(last_seen)
+    if age is None:
+        return "idle"
+    if age <= stale_after:
+        return "online"
+    return "idle"
+
+
+async def handle_bots_status(request: web.Request) -> web.Response:
+    """GET /api/admin/bots/status — статус TG/MAX + запуски и анкеты."""
+    err = await _require_admin(request)
+    if err:
+        return err
+
+    await init_bot_metrics()
+    metrics = await get_bot_metrics()
+    tg_probe, max_probe = await asyncio.gather(
+        _probe_telegram_bot(),
+        _probe_max_bot(),
+    )
+
+    tg_m = metrics.get("telegram") or {}
+    max_m = metrics.get("max") or {}
+
+    telegram = {
+        **tg_probe,
+        "status": _resolve_bot_status(
+            configured=bool(tg_probe.get("configured")),
+            api_ok=bool(tg_probe.get("api_ok")),
+            last_seen=tg_m.get("last_seen"),
+        ),
+        "starts": tg_m.get("starts", 0),
+        "starts_total": tg_m.get("starts_total", 0),
+        "starts_today": tg_m.get("starts_today", 0),
+        "surveys": tg_m.get("surveys", 0),
+        "surveys_today": tg_m.get("surveys_today", 0),
+        "last_seen": tg_m.get("last_seen"),
+    }
+    max_bot = {
+        **max_probe,
+        "status": _resolve_bot_status(
+            configured=bool(max_probe.get("configured")),
+            api_ok=bool(max_probe.get("api_ok")),
+            last_seen=max_m.get("last_seen"),
+        ),
+        "starts": max_m.get("starts", 0),
+        "starts_total": max_m.get("starts_total", 0),
+        "starts_today": max_m.get("starts_today", 0),
+        "surveys": max_m.get("surveys", 0),
+        "surveys_today": max_m.get("surveys_today", 0),
+        "last_seen": max_m.get("last_seen"),
+    }
+
+    return _json(
+        {
+            "telegram": telegram,
+            "max": max_bot,
+            "totals": {
+                "starts": int(telegram["starts"]) + int(max_bot["starts"]),
+                "surveys": int(telegram["surveys"]) + int(max_bot["surveys"]),
+                "starts_today": int(telegram["starts_today"])
+                + int(max_bot["starts_today"]),
+                "surveys_today": int(telegram["surveys_today"])
+                + int(max_bot["surveys_today"]),
+            },
+        }
+    )
+
+
 def setup_admin_routes(app: web.Application) -> None:
     routes = [
         ("/api/admin/login", handle_login, "POST"),
         ("/api/admin/logout", handle_logout, "POST"),
         ("/api/admin/me", handle_me, "GET"),
         ("/api/admin/stats", handle_stats, "GET"),
+        ("/api/admin/bots/status", handle_bots_status, "GET"),
         ("/api/admin/sync", handle_sync, "POST"),
         ("/api/admin/clients", handle_clients_list, "GET"),
         ("/api/admin/clients/{id}", handle_client_detail, "GET"),
@@ -843,9 +1339,15 @@ def setup_admin_routes(app: web.Application) -> None:
         ("/api/admin/accounts/telegram/settings", handle_telegram_settings_save, "POST"),
         ("/api/admin/accounts/telegram/start", handle_telegram_connect_start, "POST"),
         ("/api/admin/accounts/telegram/confirm", handle_telegram_connect_confirm, "POST"),
+        ("/api/admin/accounts/telegram/keepalive", handle_telegram_keepalive, "POST"),
+        ("/api/admin/accounts/{id}/check", handle_telegram_account_check, "POST"),
+        ("/api/admin/accounts/{id}", handle_telegram_account_delete, "DELETE"),
         ("/api/admin/accounts/max/settings", handle_max_settings_get, "GET"),
         ("/api/admin/accounts/max/settings", handle_max_settings_save, "POST"),
         ("/api/admin/segments", handle_segment_counts, "GET"),
+        ("/api/admin/ai/compose", handle_ai_compose, "POST"),
+        ("/api/admin/ai/settings", handle_ai_settings_get, "GET"),
+        ("/api/admin/ai/settings", handle_ai_settings_save, "POST"),
     ]
     options_done: set[str] = set()
     for path, handler, method in routes:

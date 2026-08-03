@@ -144,6 +144,89 @@ async def cancel_telegram_login(phone: str) -> None:
             pass
 
 
+async def check_telegram_session(session_file: str) -> dict[str, Any]:
+    """Проверить, что .session живая и авторизована (полный коннект)."""
+    if not is_telethon_configured():
+        return {
+            "ok": False,
+            "authorized": False,
+            "error": "TELEGRAM_API_ID / TELEGRAM_API_HASH не заданы",
+        }
+    if not session_file:
+        return {"ok": False, "authorized": False, "error": "session_file пустой"}
+
+    session_path = Path(session_file)
+    base = str(session_path)
+    if base.endswith(".session"):
+        base = base[:-8]
+    # Telethon пишет рядом .session; без файла коннекта нет
+    if not Path(f"{base}.session").exists() and not session_path.exists():
+        return {
+            "ok": False,
+            "authorized": False,
+            "error": "Файл сессии не найден — переподключите аккаунт",
+        }
+
+    try:
+        from telethon import TelegramClient
+    except ImportError:
+        return {"ok": False, "authorized": False, "error": "telethon не установлен"}
+
+    api_id, api_hash = get_api_credentials()
+    client = TelegramClient(base, api_id, api_hash)
+    try:
+        await asyncio.wait_for(client.connect(), timeout=20)
+        authorized = await client.is_user_authorized()
+        if not authorized:
+            return {
+                "ok": False,
+                "authorized": False,
+                "error": "Сессия не авторизована — переподключите аккаунт",
+            }
+        me = await client.get_me()
+        username = getattr(me, "username", None) if me else None
+        first = getattr(me, "first_name", None) if me else None
+        last = getattr(me, "last_name", None) if me else None
+        label = " ".join(filter(None, [first, last])) or None
+        return {
+            "ok": True,
+            "authorized": True,
+            "tg_id": getattr(me, "id", None) if me else None,
+            "username": username,
+            "label": label,
+            "phone": getattr(me, "phone", None) if me else None,
+        }
+    except asyncio.TimeoutError:
+        return {"ok": False, "authorized": False, "error": "Таймаут подключения к Telegram"}
+    except Exception as exc:
+        logger.exception("check_telegram_session failed")
+        return {"ok": False, "authorized": False, "error": str(exc)}
+    finally:
+        try:
+            await client.disconnect()
+        except Exception:
+            pass
+
+
+def remove_session_file(session_file: str) -> None:
+    """Удалить файл сессии Telethon (и journal, если есть)."""
+    if not session_file:
+        return
+    path = Path(session_file)
+    candidates = [path]
+    if path.suffix == ".session":
+        candidates.append(Path(str(path) + "-journal"))
+    else:
+        candidates.append(Path(str(path) + ".session"))
+        candidates.append(Path(str(path) + ".session-journal"))
+    for p in candidates:
+        try:
+            if p.exists():
+                p.unlink()
+        except OSError:
+            logger.warning("Не удалось удалить session file %s", p)
+
+
 class TelegramUserbotSender:
     """Отправка через одну Telethon-сессию."""
 

@@ -79,6 +79,7 @@
     if (tab === "compose") setStep(0);
     if (tab === "home") loadHome();
     if (tab === "clients") loadClients();
+    if (tab === "bots") loadBotsStatus();
     if (tab === "settings") loadSettings();
     if (tab === "aichat") initAiChat();
   }
@@ -86,13 +87,50 @@
 
   // ── auth ────────────────────────────────────────────────────────────────
 
+  let adminKeepaliveTimer = null;
+  const ADMIN_KEEPALIVE_MS = 15 * 60 * 1000; // продлеваем вход каждые 15 мин
+
+  function stopAdminKeepalive() {
+    if (adminKeepaliveTimer) {
+      clearInterval(adminKeepaliveTimer);
+      adminKeepaliveTimer = null;
+    }
+  }
+
+  function startAdminKeepalive() {
+    stopAdminKeepalive();
+    adminKeepaliveTimer = setInterval(async () => {
+      if (!AdminAPI.getToken()) {
+        stopAdminKeepalive();
+        return;
+      }
+      try {
+        await AdminAPI.me();
+      } catch (err) {
+        if (err.status === 401) {
+          stopAdminKeepalive();
+          AdminAPI.setToken("");
+          showLogin();
+          const errEl = $("#loginErr");
+          if (errEl) {
+            errEl.textContent =
+              "Сессия истекла — войдите снова. Пока вы работаете в панели, вход продлевается сам.";
+            errEl.style.display = "block";
+          }
+        }
+      }
+    }, ADMIN_KEEPALIVE_MS);
+  }
+
   async function showApp() {
     $("#loginScreen").classList.add("hidden");
     $("#appShell").classList.remove("hidden");
+    startAdminKeepalive();
     await loadHome();
   }
 
   function showLogin() {
+    stopAdminKeepalive();
     $("#appShell").classList.add("hidden");
     $("#loginScreen").classList.remove("hidden");
     setTimeout(focusLogin, 50);
@@ -873,29 +911,41 @@
     });
   });
 
-  async function loadAccounts() {
+  async function loadAccounts(opts = {}) {
     const box = $("#accountsList");
     if (!box) return;
-    box.innerHTML = '<div class="loading">Загрузка…</div>';
+    const checkLive = !!opts.check;
+    box.innerHTML = checkLive
+      ? '<div class="loading">Проверка коннекта…</div>'
+      : '<div class="loading">Загрузка…</div>';
     try {
-      const data = await AdminAPI.accounts();
+      const data = await AdminAPI.accounts(checkLive ? { check: "1" } : {});
       accountsCache = data;
       const configured = !!data.telethon_configured;
       const hint = $("#tgHint");
       if (hint) {
         hint.textContent = configured
-          ? "Подключите номер: телефон → код из Telegram/SMS → при необходимости пароль 2FA."
+          ? "Подключите номер: телефон → код из Telegram/SMS → полный коннект MTProto."
           : "Сначала раскройте блок «Ключи Telegram API» ниже, затем подключайте номера.";
       }
       await loadTgApiStatus();
       const tgItems = (data.items || []).filter((a) => a.kind !== "max_bot");
       const ready = tgItems.filter((a) => !["warmup", "unavailable", "blocked"].includes(String(a.status || ""))).length;
-      updateTgSetupStatus(configured, tgItems.length, ready);
+      const liveOk = tgItems.filter((a) => a.session_ok === true).length;
+      updateTgSetupStatus(configured, tgItems.length, ready, checkLive ? liveOk : null);
       updateSettingsGlance(configured, tgItems.length);
+      renderTgSessionBanner(tgItems, configured);
       const connectBtn = $("#btnConnectTg");
       if (connectBtn) {
         connectBtn.classList.toggle("is-locked", !configured);
         connectBtn.title = configured ? "Подключить номер" : "Сначала сохраните API-ключи";
+      }
+      const checkBtn = $("#btnCheckTgAll");
+      if (checkBtn) {
+        checkBtn.disabled = !configured || !tgItems.length;
+        checkBtn.title = !tgItems.length
+          ? "Нет аккаунтов для проверки"
+          : "Проверить живые сессии Telegram";
       }
       const apiDetails = $("#tgApiForm");
       if (apiDetails && apiDetails.tagName === "DETAILS") {
@@ -905,7 +955,7 @@
         box.innerHTML = `<div class="empty-rich" style="padding:28px 16px">
           <div class="er-ic" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><rect x="6" y="2" width="12" height="20" rx="3"/><path d="M11 18h2"/></svg></div>
           <div class="t">Нет подключённых номеров</div>
-          <p class="d">${configured ? "Нажмите «Подключить», чтобы добавить Telegram-аккаунт." : "Сохраните API-ключи в блоке ниже — затем появится кнопка подключения."}</p>
+          <p class="d">${configured ? "Нажмите «Подключить», чтобы добавить Telegram-аккаунт и получить полный коннект." : "Сохраните API-ключи в блоке ниже — затем появится кнопка подключения."}</p>
         </div>`;
       } else {
         box.innerHTML = tgItems
@@ -918,16 +968,94 @@
                 : "Прогрев";
               statusColor = "var(--warn)";
             } else if (a.status === "unavailable" || a.status === "blocked") {
-              statusLabel = a.status;
+              statusLabel = a.status === "blocked" ? "Заблокирован" : "Нет сессии";
               statusColor = "var(--ink-3)";
             }
-            return `<div class="acct">
+            let connectLabel = "";
+            let connectColor = "";
+            if (a.session_ok === true) {
+              connectLabel = "Коннект ок";
+              connectColor = "var(--ok)";
+            } else if (a.session_ok === false) {
+              connectLabel = "Нет коннекта";
+              connectColor = "#c0492f";
+            }
+            const nameBits = [];
+            if (a.label && a.label !== a.phone) nameBits.push(a.label);
+            if (a.tg_username) nameBits.push("@" + a.tg_username);
+            const aliveHint = a.last_ok_at
+              ? " · ок " + fmtRelTime(a.last_ok_at)
+              : a.last_checked_at
+                ? " · проверка " + fmtRelTime(a.last_checked_at)
+                : "";
+            const sub =
+              (nameBits.length ? nameBits.join(" · ") + " · " : "") +
+              "сегодня " +
+              String(a.sent_today) +
+              " из " +
+              String(a.daily_limit) +
+              aliveHint;
+            const id = a.id != null ? String(a.id) : "";
+            return `<div class="acct" data-acct-id="${esc(id)}">
               <div class="ico tg">TG</div>
-              <div class="m"><div class="n">${esc(a.phone_masked || a.label)}</div><div class="p">Telegram · сегодня ${esc(String(a.sent_today))} из ${esc(String(a.daily_limit))}</div></div>
-              <span class="tagi" style="color:${statusColor}"><span class="d" style="background:${statusColor}"></span>${esc(statusLabel)}</span>
+              <div class="m">
+                <div class="n">${esc(a.phone_masked || a.label || "Telegram")}</div>
+                <div class="p">${esc(sub)}</div>
+              </div>
+              <div class="acct-meta">
+                ${connectLabel ? `<span class="tagi" style="color:${connectColor}"><span class="d" style="background:${connectColor}"></span>${esc(connectLabel)}</span>` : ""}
+                <span class="tagi" style="color:${statusColor}"><span class="d" style="background:${statusColor}"></span>${esc(statusLabel)}</span>
+              </div>
+              <div class="acct-actions">
+                <button type="button" class="btn btn-sm" data-tg-check="${esc(id)}" ${!id ? "disabled" : ""}>Проверить</button>
+                <button type="button" class="btn btn-sm danger" data-tg-del="${esc(id)}" ${!id ? "disabled" : ""}>Отключить</button>
+              </div>
             </div>`;
           })
           .join("");
+
+        box.querySelectorAll("[data-tg-check]").forEach((btn) => {
+          btn.addEventListener("click", async () => {
+            const id = btn.getAttribute("data-tg-check");
+            if (!id) return;
+            btn.disabled = true;
+            btn.textContent = "…";
+            try {
+              const res = await AdminAPI.tgCheckAccount(id);
+              if (res.ok) {
+                alert(
+                  "Полный коннект активен" +
+                    (res.username ? " · @" + res.username : "") +
+                    (res.label ? " · " + res.label : "")
+                );
+              } else {
+                alert("Нет коннекта: " + (res.error || "сессия не авторизована"));
+              }
+              loadAccounts({ check: true });
+            } catch (err) {
+              alert(err.data?.error || err.message);
+              btn.disabled = false;
+              btn.textContent = "Проверить";
+            }
+          });
+        });
+
+        box.querySelectorAll("[data-tg-del]").forEach((btn) => {
+          btn.addEventListener("click", async () => {
+            const id = btn.getAttribute("data-tg-del");
+            if (!id) return;
+            if (!confirm("Отключить этот Telegram-аккаунт? Сессия будет удалена."))
+              return;
+            btn.disabled = true;
+            try {
+              await AdminAPI.tgDeleteAccount(id);
+              loadAccounts();
+            } catch (err) {
+              alert(err.data?.error || err.message);
+              btn.disabled = false;
+            }
+          });
+        });
       }
       if (settingsTab === "bots") loadBotsPane();
     } catch (err) {
@@ -955,7 +1083,175 @@
     updateSettingsGlanceMax(maxConfigured);
   }
 
-  function updateTgSetupStatus(configured, total, ready) {
+  function botStatusLabel(status) {
+    return (
+      {
+        online: "Онлайн",
+        idle: "Токен ок, процесс молчит",
+        offline: "Нет ответа",
+        not_configured: "Не настроен",
+      }[status] || status || "—"
+    );
+  }
+
+  function botStatusClass(status) {
+    if (status === "online") return "ok";
+    if (status === "idle") return "warn";
+    if (status === "offline") return "err";
+    return "muted";
+  }
+
+  function fmtRelTime(iso) {
+    if (!iso) return "ещё не было";
+    const t = Date.parse(iso);
+    if (!Number.isFinite(t)) return esc(iso);
+    const sec = Math.max(0, Math.round((Date.now() - t) / 1000));
+    if (sec < 45) return "только что";
+    if (sec < 3600) return Math.floor(sec / 60) + " мин назад";
+    if (sec < 86400) return Math.floor(sec / 3600) + " ч назад";
+    return Math.floor(sec / 86400) + " дн назад";
+  }
+
+  function renderBotCard(kind, data) {
+    const isTg = kind === "telegram";
+    const title = isTg ? "Telegram-бот" : "MAX-бот";
+    const channel = isTg ? "tg" : "max";
+    const handle = data.username
+      ? "@" + data.username
+      : data.name || (isTg ? "BotFather токен" : "Токен не задан");
+    const st = data.status || "offline";
+    const stClass = botStatusClass(st);
+    return `<article class="bot-card bot-${channel}">
+      <div class="bot-card-top">
+        <div class="bot-card-brand">
+          <div class="bot-card-ico ${channel}">${isTg ? "TG" : "MAX"}</div>
+          <div>
+            <div class="bot-card-title">${title}</div>
+            <div class="bot-card-meta">${esc(handle)}</div>
+          </div>
+        </div>
+        <span class="status-pill ${stClass}"><span class="d"></span>${esc(botStatusLabel(st))}</span>
+      </div>
+      <div class="bot-card-metrics">
+        <div><div class="n">${fmtNum(data.starts || 0)}</div><div class="l">Запусков</div><div class="s">сегодня ${fmtNum(data.starts_today || 0)}</div></div>
+        <div><div class="n">${fmtNum(data.surveys || 0)}</div><div class="l">Анкет</div><div class="s">сегодня ${fmtNum(data.surveys_today || 0)}</div></div>
+        <div><div class="n">${fmtNum(data.starts_total || 0)}</div><div class="l">Всего /start</div><div class="s">с повторами</div></div>
+      </div>
+      <div class="bot-card-foot">
+        <span>Активность: ${fmtRelTime(data.last_seen)}</span>
+        ${data.error && st !== "online" ? `<span class="bot-err">${esc(String(data.error).slice(0, 80))}</span>` : ""}
+        ${isTg ? "" : `<button type="button" class="btn tiny" data-goto-settings="bots">Настроить</button>`}
+      </div>
+    </article>`;
+  }
+
+  async function loadBotsStatus() {
+    const grid = $("#botsStatusGrid");
+    const totals = $("#botsTotals");
+    if (!grid) return;
+    grid.innerHTML = '<div class="loading">Загрузка…</div>';
+    try {
+      const data = await AdminAPI.botsStatus();
+      const t = data.totals || {};
+      if (totals) {
+        totals.innerHTML = `
+          <div class="stat"><div class="n">${fmtNum(t.starts || 0)}</div><div class="l">Запусков всего</div></div>
+          <div class="stat"><div class="n">${fmtNum(t.surveys || 0)}</div><div class="l">Анкет всего</div></div>
+          <div class="stat"><div class="n">${fmtNum(t.starts_today || 0)}</div><div class="l">Сегодня запусков</div></div>
+          <div class="stat"><div class="n">${fmtNum(t.surveys_today || 0)}</div><div class="l">Сегодня анкет</div></div>`;
+      }
+      grid.innerHTML =
+        renderBotCard("telegram", data.telegram || {}) +
+        renderBotCard("max", data.max || {});
+      grid.querySelectorAll("[data-goto-settings]").forEach((b) => {
+        b.addEventListener("click", () => {
+          go("settings");
+          setSettingsTab(b.dataset.gotoSettings || "bots");
+        });
+      });
+    } catch (err) {
+      if (err.status === 401) return showLogin();
+      grid.innerHTML = '<div class="empty-state">Не удалось загрузить статус ботов</div>';
+    }
+  }
+
+  $("#btnBotsRefresh")?.addEventListener("click", () => loadBotsStatus());
+
+  function renderTgSessionBanner(tgItems, configured) {
+    const banner = $("#tgSessionBanner");
+    if (!banner) return;
+    if (!configured || !tgItems.length) {
+      banner.classList.add("hidden");
+      banner.innerHTML = "";
+      return;
+    }
+    const dead = tgItems.filter(
+      (a) =>
+        a.status === "unavailable" ||
+        a.session_ok === false ||
+        (a.last_error && a.session_ok !== true && a.status === "unavailable")
+    );
+    if (!dead.length) {
+      banner.classList.add("hidden");
+      banner.innerHTML = "";
+      return;
+    }
+    const names = dead
+      .map((a) => a.phone_masked || a.label || "номер")
+      .slice(0, 3)
+      .join(", ");
+    banner.classList.remove("hidden");
+    banner.innerHTML =
+      "<strong>Нужно переподключить Telegram</strong> — сессия прервалась (" +
+      esc(names) +
+      (dead.length > 3 ? "…" : "") +
+      "). Нажмите «Подключить» с тем же номером или «Проверить», если это сбой сети." +
+      '<div class="ban-actions">' +
+      '<button type="button" class="btn btn-sm primary" id="tgBannerReconnect">Подключить снова</button>' +
+      '<button type="button" class="btn btn-sm" id="tgBannerCheck">Проверить сейчас</button>' +
+      "</div>";
+    $("#tgBannerReconnect")?.addEventListener("click", () => {
+      openConnectForm(true);
+    });
+    $("#tgBannerCheck")?.addEventListener("click", () => {
+      runTgKeepalive();
+    });
+  }
+
+  async function runTgKeepalive() {
+    const btn = $("#btnCheckTgAll");
+    if (btn) {
+      btn.disabled = true;
+      btn.textContent = "Продление…";
+    }
+    try {
+      const res = await AdminAPI.tgKeepalive();
+      if (res.skipped) {
+        alert("Сначала сохраните API-ключи Telegram");
+      } else if (res.bad_count > 0) {
+        alert(
+          "Проверено " +
+            res.checked +
+            ": " +
+            res.ok_count +
+            " ок, " +
+            res.bad_count +
+            " нужно переподключить"
+        );
+      }
+      await loadAccounts({ check: true });
+    } catch (err) {
+      alert(err.data?.error || err.message);
+      loadAccounts({ check: true });
+    } finally {
+      if (btn) {
+        btn.disabled = false;
+        btn.textContent = "Проверить";
+      }
+    }
+  }
+
+  function updateTgSetupStatus(configured, total, ready, liveOk) {
     const el = $("#tgSetupStatus");
     if (!el) return;
     const chips = [];
@@ -968,6 +1264,13 @@
       chips.push(
         `<span class="status-pill ${ready ? "ok" : "warn"}"><span class="d"></span>${ready} из ${total} готовы</span>`
       );
+      if (liveOk != null) {
+        chips.push(
+          liveOk > 0
+            ? `<span class="status-pill ok"><span class="d"></span>Коннект · ${liveOk}</span>`
+            : `<span class="status-pill err"><span class="d"></span>Нет живого коннекта</span>`
+        );
+      }
     } else {
       chips.push(`<span class="status-pill warn"><span class="d"></span>Нет номеров</span>`);
     }
@@ -1434,17 +1737,44 @@
     });
   }
 
+  function resetConnectForm() {
+    $("#tgConnectFields")?.classList.remove("hidden");
+    $("#tgConnectDone")?.classList.add("hidden");
+    $("#tgCodeStep")?.classList.add("hidden");
+    $("#tg2faWrap")?.classList.add("hidden");
+    if ($("#tgPhone")) $("#tgPhone").value = "";
+    if ($("#tgCode")) $("#tgCode").value = "";
+    if ($("#tg2fa")) $("#tg2fa").value = "";
+    setConnectStep(1);
+  }
+
   function openConnectForm(show) {
     const form = $("#acctForm");
     if (!form) return;
     form.classList.toggle("hidden", !show);
     if (show) {
-      setConnectStep(1);
+      resetConnectForm();
       $("#tgPhone")?.focus();
     } else {
-      $("#tgCodeStep")?.classList.add("hidden");
-      $("#tg2faWrap")?.classList.add("hidden");
-      setConnectStep(1);
+      resetConnectForm();
+    }
+  }
+
+  function showConnectDone(res) {
+    setConnectStep(3);
+    $("#tgConnectFields")?.classList.add("hidden");
+    const done = $("#tgConnectDone");
+    done?.classList.remove("hidden");
+    const text = $("#tgConnectDoneText");
+    if (text) {
+      const bits = [];
+      if (res.session_ok) bits.push("Сессия авторизована");
+      else bits.push("Аккаунт сохранён" + (res.session_error ? " — " + res.session_error : ""));
+      if (res.label) bits.push(res.label);
+      if (res.tg_username) bits.push("@" + res.tg_username);
+      else if (res.username) bits.push("@" + res.username);
+      if (res.phone) bits.push(res.phone);
+      text.textContent = bits.join(" · ") + ". Можно отправлять рассылки.";
     }
   }
 
@@ -1460,11 +1790,24 @@
     openConnectForm($("#acctForm")?.classList.contains("hidden"));
   });
 
+  $("#btnCheckTgAll")?.addEventListener("click", () => {
+    runTgKeepalive();
+  });
+
   $("#tgConnectCancel")?.addEventListener("click", () => openConnectForm(false));
+  $("#tgConnectDoneClose")?.addEventListener("click", () => {
+    openConnectForm(false);
+    loadAccounts({ check: true });
+  });
 
   $("#tgSendCode")?.addEventListener("click", async () => {
     const phone = $("#tgPhone").value.trim();
     if (!phone) return alert("Укажите телефон");
+    const btn = $("#tgSendCode");
+    if (btn) {
+      btn.disabled = true;
+      btn.textContent = "Отправка…";
+    }
     try {
       const res = await AdminAPI.tgStart(phone);
       if (!res.ok) return alert(res.error || "Ошибка");
@@ -1475,12 +1818,22 @@
       alert("Код отправлен в Telegram / SMS");
     } catch (err) {
       alert(err.data?.error || err.message);
+    } finally {
+      if (btn) {
+        btn.disabled = false;
+        btn.textContent = "Получить код";
+      }
     }
   });
 
   $("#tgConfirm")?.addEventListener("click", async () => {
     const code = $("#tgCode").value.trim();
     const password = $("#tg2fa").value.trim() || undefined;
+    const btn = $("#tgConfirm");
+    if (btn) {
+      btn.disabled = true;
+      btn.textContent = "Подключение…";
+    }
     try {
       const res = await AdminAPI.tgConfirm(state.tgPhone, code, password);
       if (res.need_2fa) {
@@ -1489,11 +1842,14 @@
         return;
       }
       if (!res.ok) return alert(res.error || "Ошибка");
-      alert("Аккаунт подключён");
-      $("#acctForm").classList.add("hidden");
-      loadAccounts();
+      showConnectDone(res);
     } catch (err) {
       alert(err.data?.error || err.message);
+    } finally {
+      if (btn) {
+        btn.disabled = false;
+        btn.textContent = "Подтвердить";
+      }
     }
   });
 
