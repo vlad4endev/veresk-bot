@@ -770,6 +770,8 @@
   .wiz-channels{margin-top:22px;padding-top:18px;border-top:1px solid var(--line);}
   .wiz-channels-title{font-weight:650;font-size:15px;margin-bottom:4px;}
   .wiz-channels-hint{margin:0 0 12px;}
+  .p-channels{margin:18px 0 6px;padding-top:16px;border-top:1px solid var(--line);}
+  .p-channels .chan-toggles{margin-top:4px;}
   .chan-toggles{display:flex;flex-wrap:wrap;gap:10px;}
   .chan-toggle{
     display:flex;flex-direction:column;align-items:flex-start;gap:2px;
@@ -779,10 +781,12 @@
   }
   .chan-toggle:hover{border-color:var(--accent-soft);}
   .chan-toggle.on{border-color:var(--accent);background:var(--accent-soft);}
+  .chan-toggle[data-channel="max"].on{border-color:var(--max);background:color-mix(in srgb, var(--max) 12%, var(--surface));}
   .chan-toggle-name{font-weight:650;font-size:14px;}
   .chan-toggle-meta{font-size:12px;color:var(--ink-3);}
   .chan-toggle.on .chan-toggle-meta{color:var(--ink-2);}
   .chan-toggle.is-off{opacity:.55;}
+  .chan-toggle:disabled{opacity:.45;cursor:not-allowed;}
   .match-preview{
     margin-top:14px;padding:12px 14px;border-radius:12px;background:var(--surface-2);
     display:flex;flex-direction:column;gap:6px;
@@ -2079,6 +2083,7 @@
     .ai-composer{padding:14px 16px 12px;}
 
     #personal .rcard,
+    #personal .p-channels,
     #personal .compose,
     #compose .compose,
     #compose #s0 .choices{width:100%;}

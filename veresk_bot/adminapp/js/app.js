@@ -501,24 +501,27 @@
       alert("Не найден клиент для этого события");
       return;
     }
-    if (e.channel_class === "none" || e.channel === "нет канала") {
+    const available = parsePersonalChannels(e.channel || e.channel_class);
+    if (!available.length || e.channel_class === "none" || e.channel === "нет канала") {
       alert("У клиента нет канала для отправки (Telegram или MAX)");
       return;
     }
     const kindBit = e.kind_label || e.title || "Событие";
     const dateBit = e.next_date_label || e.date_label || "";
-    const chanClass = e.channel_class === "max" ? "max" : "tg";
-    const chanLabel =
-      chanClass === "max" ? "MAX" : e.channel && e.channel.includes("MAX") && e.channel.includes("TG")
-        ? "Telegram"
-        : e.channel || "Telegram";
+    // Предпочитаем channel_class с бэка, если он среди доступных
+    const preferred =
+      e.channel_class === "max" && available.includes("max")
+        ? "max"
+        : e.channel_class === "tg" && available.includes("tg")
+          ? "tg"
+          : available[0];
     openPersonal({
       type: e.kind === "anniv" ? "anniv" : e.kind === "bday" ? "bday" : "plain",
       customer_id: e.customer_id,
       name: e.customer_name,
       contact: e.phone_masked,
-      chan: chanLabel === "TG · MAX" ? "Telegram" : chanLabel,
-      chanClass,
+      availableChannels: available,
+      chanClass: preferred,
       evText: `${kindBit} · ${e.when_label || ""}${dateBit ? " · " + dateBit : ""}`,
       whenClass: e.when_class,
     });
@@ -1205,14 +1208,18 @@
   function congratsCurrent(type) {
     const c = state.curClient;
     if (!c) return;
-    const chanLabel = (c.channels || "Telegram").split(",")[0].trim() || "Telegram";
+    const available = parsePersonalChannels(c.channels);
+    if (!available.length) {
+      alert("У клиента нет канала для отправки (Telegram или MAX)");
+      return;
+    }
     openPersonal({
       type: type === "anniv" ? "anniv" : type === "bday" ? "bday" : "plain",
       customer_id: c.id,
       name: c.name,
       contact: c.phone_masked || c.phone,
-      chan: chanLabel,
-      chanClass: chanLabel === "MAX" ? "max" : "tg",
+      availableChannels: available,
+      chanClass: available[0],
       evText: type === "bday" ? "День рождения" : type === "anniv" ? "Годовщина" : c.segment_label,
       whenClass: "today",
     });
@@ -1228,6 +1235,73 @@
 
   // ── personal ────────────────────────────────────────────────────────────
 
+  /** Разбирает строку каналов клиента/события → ["tg"] | ["max"] | ["tg","max"]. */
+  function parsePersonalChannels(raw) {
+    const s = String(raw || "").trim();
+    if (!s || s === "—" || s === "нет канала" || s === "none") return [];
+    const parts = s.split(/[,·|/]+/).map((x) => x.trim()).filter(Boolean);
+    const hasTg = parts.some((p) => {
+      const t = p.toLowerCase();
+      return t === "tg" || t === "telegram" || t === "телеграм";
+    });
+    const hasMax = parts.some((p) => {
+      const t = p.toLowerCase();
+      return t === "max" || t === "макс";
+    });
+    // "TG · MAX" / "Telegram, MAX" уже покрыты split; на всякий случай regex по всей строке
+    const list = [];
+    if (hasTg || /\b(tg|telegram|телеграм)\b/i.test(s)) list.push("tg");
+    if (hasMax || /\b(max|макс)\b/i.test(s)) list.push("max");
+    return list;
+  }
+
+  function channelLabel(chanClass) {
+    return chanClass === "max" ? "MAX" : "Telegram";
+  }
+
+  function syncPersonalChannelUi() {
+    const p = state.curPerson;
+    if (!p) return;
+    const available = p.availableChannels || [];
+    const selected = p.chanClass === "max" ? "max" : "tg";
+    const tgBtn = $("#pChanTg");
+    const maxBtn = $("#pChanMax");
+    const err = $("#pChanError");
+    const sendBtn = $("#pSend");
+
+    if (tgBtn) {
+      const on = available.includes("tg");
+      tgBtn.hidden = !on;
+      tgBtn.disabled = !on;
+      tgBtn.classList.toggle("on", on && selected === "tg");
+      tgBtn.setAttribute("aria-pressed", on && selected === "tg" ? "true" : "false");
+    }
+    if (maxBtn) {
+      const on = available.includes("max");
+      maxBtn.hidden = !on;
+      maxBtn.disabled = !on;
+      maxBtn.classList.toggle("on", on && selected === "max");
+      maxBtn.setAttribute("aria-pressed", on && selected === "max" ? "true" : "false");
+    }
+    if (err) err.hidden = available.length > 0;
+    if (sendBtn) sendBtn.disabled = !available.length || !available.includes(selected);
+
+    p.chan = channelLabel(selected);
+    const contact = p.contact || "—";
+    if ($("#pContact")) {
+      $("#pContact").innerHTML = `<span class="chan ${esc(selected)}">${esc(p.chan)}</span> · ${esc(contact)}`;
+    }
+  }
+
+  function setPersonalChannel(chan) {
+    const p = state.curPerson;
+    if (!p) return;
+    const next = chan === "max" ? "max" : "tg";
+    if (!(p.availableChannels || []).includes(next)) return;
+    p.chanClass = next;
+    syncPersonalChannelUi();
+  }
+
   function openPersonal(d) {
     const fn = (d.name || "").split(" ")[0] || "друг";
     const tpl = {
@@ -1235,9 +1309,16 @@
       anniv: `${fn}, поздравляем с годовщиной! 💍\n\nОтметьте этот особенный день красивым букетом — дарим −15%. Ваш Veresk 🌷`,
       plain: `Здравствуйте, ${fn}! 🌷\n\n`,
     };
+    const available =
+      Array.isArray(d.availableChannels) && d.availableChannels.length
+        ? d.availableChannels.filter((c) => c === "tg" || c === "max")
+        : parsePersonalChannels(d.chan || d.chanClass || "tg");
+    let chanClass = d.chanClass === "max" ? "max" : "tg";
+    if (!available.includes(chanClass)) {
+      chanClass = available[0] || "tg";
+    }
     $("#pAv").textContent = initials(d.name);
     $("#pName").textContent = d.name;
-    $("#pContact").innerHTML = `<span class="chan ${esc(d.chanClass)}">${esc(d.chan)}</span> · ${esc(d.contact)}`;
     const ev = $("#pEv");
     ev.textContent = d.evText || "";
     ev.className = "ev-when " + (d.whenClass || "later");
@@ -1246,7 +1327,15 @@
     $("#pSendLabel").textContent = "Отправить " + fn;
     $("#personalForm")?.classList.remove("hidden");
     $("#personalDone")?.classList.add("hidden");
-    state.curPerson = { ...d, fn, chan: d.chan };
+    state.curPerson = {
+      ...d,
+      fn,
+      availableChannels: available,
+      chanClass,
+      chan: channelLabel(chanClass),
+      contact: d.contact || "—",
+    };
+    syncPersonalChannelUi();
     go("personal");
   }
   window.openPersonal = openPersonal;
@@ -1256,21 +1345,31 @@
   }
   $("#pmsg")?.addEventListener("input", updatePPreview);
 
+  $$("#pChanToggles .chan-toggle").forEach((btn) =>
+    btn.addEventListener("click", () => {
+      setPersonalChannel(btn.getAttribute("data-channel") || "tg");
+    })
+  );
+
   $("#pSend")?.addEventListener("click", async () => {
     const p = state.curPerson;
     if (!p?.customer_id) return alert("Нет клиента");
+    const channel = p.chanClass === "max" ? "max" : "tg";
+    if (!(p.availableChannels || []).includes(channel)) {
+      return alert("У клиента нет канала для отправки (Telegram или MAX)");
+    }
     try {
       await AdminAPI.personal({
         customer_id: p.customer_id,
         message: $("#pmsg").value,
-        channel: p.chanClass === "max" ? "max" : "tg",
+        channel,
       });
       $("#doneName").textContent = p.fn;
-      $("#doneChan").textContent = p.chan;
+      $("#doneChan").textContent = channelLabel(channel);
       $("#personalForm")?.classList.add("hidden");
       $("#personalDone")?.classList.remove("hidden");
     } catch (err) {
-      alert("Ошибка: " + (err.data?.error || err.message));
+      alert("Ошибка: " + (err.data?.message || err.data?.error || err.message));
     }
   });
 
