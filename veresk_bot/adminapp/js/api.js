@@ -321,6 +321,24 @@ const AdminAPI = (() => {
         method: "POST",
         body: JSON.stringify(body),
       }),
+    maxChatSendMedia: (peerId, formData) =>
+      requestForm(
+        "/api/admin/max-chats/dialogs/" + encodeURIComponent(peerId) + "/send-media",
+        formData
+      ),
+    maxChatMediaUrl: (peerId, messageId, accountId, opts = {}) => {
+      const q = new URLSearchParams({ token: getToken() });
+      if (accountId) q.set("account_id", String(accountId));
+      if (opts.thumb) q.set("thumb", "1");
+      return (
+        "/api/admin/max-chats/dialogs/" +
+        encodeURIComponent(peerId) +
+        "/messages/" +
+        encodeURIComponent(messageId) +
+        "/media?" +
+        q.toString()
+      );
+    },
     maxChatCreate: (body) =>
       request("/api/admin/max-chats/dialogs", {
         method: "POST",

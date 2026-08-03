@@ -3422,6 +3422,200 @@ async def handle_max_chats_send(request: web.Request) -> web.Response:
     )
 
 
+async def handle_max_chats_message_media(request: web.Request) -> web.Response:
+    err = await _require_admin(request)
+    if err:
+        return err
+    await _ensure_max_chat_db()
+    acc, acc_err = await _resolve_max_chat_account(request)
+    if acc_err:
+        return acc_err
+
+    peer = str(request.match_info.get("peer_id") or "").strip()
+    message_id = str(request.match_info.get("message_id") or "").strip()
+    if not peer or not message_id:
+        return _json({"error": "invalid_ids"}, status=400)
+
+    try:
+        if acc is not None:
+            try:
+                peer_id = int(peer)
+            except (TypeError, ValueError):
+                return _json({"error": "invalid_peer_id"}, status=400)
+            from senders.max_userbot_chat import download_message_media
+
+            data, mime, filename = await download_message_media(
+                str(acc["session_file"]),
+                peer_id,
+                message_id,
+                phone=str(acc.get("phone") or ""),
+                account_id=int(acc["id"]),
+            )
+        else:
+            if not is_max_configured():
+                return _json({"error": "max_not_configured"}, status=400)
+            from senders.max_chat import download_message_media
+
+            data, mime, filename = await download_message_media(peer, message_id)
+    except FileNotFoundError:
+        return web.Response(status=404, headers=_cors())
+    except ValueError as exc:
+        return _json({"error": str(exc)}, status=413)
+    except Exception as exc:
+        logger.exception("MAX media download failed")
+        return _json({"error": str(exc)}, status=502)
+    return _media_response(data, mime, filename=filename)
+
+
+async def handle_max_chats_send_media(request: web.Request) -> web.Response:
+    """multipart/form-data: file|files, caption, account_id, as_document."""
+    err = await _require_admin(request)
+    if err:
+        return err
+    await _ensure_max_chat_db()
+
+    peer = str(request.match_info.get("peer_id") or "").strip()
+    if not peer:
+        return _json({"error": "invalid_peer_id"}, status=400)
+
+    if not request.content_type.startswith("multipart/"):
+        return _json({"error": "multipart_required"}, status=400)
+
+    reader = await request.multipart()
+    account_id_raw: str | None = None
+    caption = ""
+    as_document = False
+    files: list[dict[str, Any]] = []
+
+    while True:
+        part = await reader.next()
+        if part is None:
+            break
+        name = part.name or ""
+        if name == "account_id":
+            account_id_raw = (await part.text()).strip()
+        elif name in ("caption", "text", "message"):
+            caption = (await part.text()).strip()
+        elif name in ("as_document", "force_document"):
+            as_document = (await part.text()).strip().lower() in ("1", "true", "yes")
+        elif name in ("file", "files", "media"):
+            filename = part.filename or "file"
+            data = await part.read(decode=False)
+            if data:
+                files.append(
+                    {
+                        "filename": filename,
+                        "data": data,
+                        "mime": part.headers.get("Content-Type", ""),
+                    }
+                )
+        else:
+            await part.read(decode=False)
+
+    request._chat_body = {"account_id": account_id_raw}  # type: ignore[attr-defined]
+    acc, acc_err = await _resolve_max_chat_account(request)
+    if acc_err:
+        return acc_err
+
+    if not files:
+        return _json({"error": "file_required"}, status=400)
+
+    if acc is not None:
+        from senders.max_userbot_chat import (
+            MAX_UPLOAD_BYTES,
+            MAX_UPLOAD_FILES,
+            send_dialog_media,
+        )
+
+        if len(files) > MAX_UPLOAD_FILES:
+            return _json({"error": f"max_{MAX_UPLOAD_FILES}_files"}, status=400)
+        for f in files:
+            if len(f["data"]) > MAX_UPLOAD_BYTES:
+                return _json({"error": "file_too_large", "max_mb": 50}, status=413)
+        try:
+            peer_id = int(peer)
+        except (TypeError, ValueError):
+            return _json({"error": "invalid_peer_id"}, status=400)
+        try:
+            messages = await send_dialog_media(
+                str(acc["session_file"]),
+                peer_id,
+                files,
+                caption=caption,
+                force_document=as_document,
+                phone=str(acc.get("phone") or ""),
+                account_id=int(acc["id"]),
+            )
+        except ValueError as exc:
+            return _json({"error": str(exc)}, status=400)
+        except Exception as exc:
+            logger.exception("MAX userbot send media failed")
+            return _json({"error": str(exc)}, status=502)
+        return _json(
+            {
+                "ok": True,
+                "mode": "userbot",
+                "messages": messages,
+                "message": messages[-1] if messages else None,
+                "peer_id": peer_id,
+                "account_id": int(acc["id"]),
+            }
+        )
+
+    if not is_max_configured():
+        return _json({"error": "max_not_configured"}, status=400)
+    from senders.max_chat import MAX_UPLOAD_BYTES, MAX_UPLOAD_FILES, send_dialog_media
+
+    if len(files) > MAX_UPLOAD_FILES:
+        return _json({"error": f"max_{MAX_UPLOAD_FILES}_files"}, status=400)
+    for f in files:
+        if len(f["data"]) > MAX_UPLOAD_BYTES:
+            return _json({"error": "file_too_large", "max_mb": 50}, status=413)
+    try:
+        messages = await send_dialog_media(
+            peer,
+            files,
+            caption=caption,
+            force_document=as_document,
+        )
+    except ValueError as exc:
+        return _json({"error": str(exc)}, status=400)
+    except Exception as exc:
+        logger.exception("MAX bot send media failed")
+        return _json({"error": str(exc)}, status=502)
+
+    message = messages[-1] if messages else None
+    if message:
+        try:
+            from max_bot.hub import publish_outbound_message
+
+            await publish_outbound_message(
+                peer_id=peer,
+                message=message,
+                dialog={
+                    "peer_id": peer,
+                    "last_message": message.get("preview")
+                    or message.get("text")
+                    or "Медиа",
+                    "last_out": True,
+                    "date": message.get("date"),
+                    "title": None,
+                },
+            )
+        except Exception:
+            logger.debug("publish outbound media failed", exc_info=True)
+
+    return _json(
+        {
+            "ok": True,
+            "mode": "bot",
+            "messages": messages,
+            "message": message,
+            "peer_id": peer,
+        }
+    )
+
+
 async def handle_max_chats_create(request: web.Request) -> web.Response:
     """Новый чат с личного MAX-номера по телефону."""
     err = await _require_admin(request)
@@ -3825,7 +4019,9 @@ def setup_admin_routes(app: web.Application) -> None:
         ("/api/admin/max-chats/dialogs", handle_max_chats_dialogs, "GET"),
         ("/api/admin/max-chats/dialogs", handle_max_chats_create, "POST"),
         ("/api/admin/max-chats/dialogs/{peer_id}/messages", handle_max_chats_messages, "GET"),
+        ("/api/admin/max-chats/dialogs/{peer_id}/messages/{message_id}/media", handle_max_chats_message_media, "GET"),
         ("/api/admin/max-chats/dialogs/{peer_id}/send", handle_max_chats_send, "POST"),
+        ("/api/admin/max-chats/dialogs/{peer_id}/send-media", handle_max_chats_send_media, "POST"),
         ("/api/admin/max-chats/dialogs/{peer_id}/client", handle_max_chats_client, "GET"),
         ("/api/admin/max-chats/dialogs/{peer_id}/client", handle_max_chats_client_create, "POST"),
         ("/api/admin/max-chats/events", handle_max_chats_events, "GET"),

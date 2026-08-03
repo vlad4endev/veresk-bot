@@ -4012,15 +4012,29 @@
   }
 
   function tgMediaBlock(m) {
-    if (!m?.has_media || !tgState.peerId || !tgState.accountId) return "";
+    if (!m?.has_media || !tgState.peerId) return "";
     const kind = m.media_kind || "";
     if (["geo", "contact", "poll"].includes(kind)) {
       return `<div class="tg-media-fallback">${esc(m.preview || "Медиа")}</div>`;
     }
-    const url = AdminAPI.chatMediaUrl(tgState.peerId, m.id, tgState.accountId);
+    let url = m.media_url || "";
+    if (!url) {
+      if (isMaxChannel()) {
+        url = AdminAPI.maxChatMediaUrl(
+          tgState.peerId,
+          m.id,
+          isMaxUserbot() ? tgState.accountId : null
+        );
+      } else if (tgState.accountId) {
+        url = AdminAPI.chatMediaUrl(tgState.peerId, m.id, tgState.accountId);
+      }
+    }
+    if (!url) {
+      return `<div class="tg-media-fallback">${esc(m.preview || "Медиа")}</div>`;
+    }
     if (kind === "photo" || kind === "sticker" || kind === "animation" || kind === "webpage") {
       const cls = kind === "sticker" ? "tg-media-img sticker" : "tg-media-img";
-      return `<a class="tg-media" href="${esc(url)}" target="_blank" rel="noopener"><img class="${cls}" src="${esc(url)}" alt="" loading="lazy" decoding="async" onerror="this.closest('.tg-media').classList.add('failed')"></a>`;
+      return `<a class="tg-media" href="${esc(url)}" target="_blank" rel="noopener"><img class="${cls}" src="${esc(url)}" alt="" loading="lazy" decoding="async" referrerpolicy="no-referrer" onerror="this.closest('.tg-media').classList.add('failed')"></a>`;
     }
     if (kind === "video" || kind === "video_note") {
       const round = kind === "video_note" ? " round" : "";
@@ -4058,7 +4072,7 @@
           const side = m.out ? "out" : "in";
           const flags = `${m._pending ? " pending" : ""}${m._failed ? " failed" : ""}`;
           const raw = (m.text || "").replace(/\n{3,}/g, "\n\n").trim();
-          const media = isMaxChannel() ? "" : tgMediaBlock(m);
+          const media = tgMediaBlock(m);
           const text = raw
             ? `<div class="tg-bubble-text">${esc(raw)}</div>`
             : media
@@ -4669,19 +4683,22 @@
     if (!tgState.peerId || tgState.sending) return;
 
     if (isMaxChannel()) {
-      if (!text) return;
+      const files = tgState.attachments.map((a) => a.file);
+      if (!text && !files.length) return;
       const tmpId = "tmp:" + Date.now();
       const optimistic = {
         id: tmpId,
-        text,
-        preview: text.slice(0, 120),
+        text: text || "",
+        preview: text ? text.slice(0, 120) : files.length ? "Медиа" : "",
         out: true,
         date: new Date().toISOString(),
+        has_media: !!files.length,
+        media_kind: files.length ? "media" : null,
         _pending: true,
       };
       tgState.messages = [...tgState.messages, optimistic];
       tgState.historyHint = "";
-      if (input) {
+      if (input && !files.length) {
         input.value = "";
         input.style.height = "auto";
       }
@@ -4690,10 +4707,28 @@
       const btn = $("#tgSendBtn");
       if (btn) btn.disabled = true;
       try {
-        const data = await AdminAPI.maxChatSend(tgState.peerId, {
-          text,
-          account_id: isMaxUserbot() ? currentMaxAccountId() : undefined,
-        });
+        let data;
+        if (files.length) {
+          const fd = new FormData();
+          if (isMaxUserbot()) {
+            const accountId = currentMaxAccountId();
+            if (accountId) fd.append("account_id", String(accountId));
+          }
+          if (text) fd.append("caption", text);
+          if ($("#tgAsDocument")?.checked) fd.append("as_document", "1");
+          for (const f of files) fd.append("files", f, f.name);
+          data = await AdminAPI.maxChatSendMedia(tgState.peerId, fd);
+          clearTgAttachments();
+          if (input) {
+            input.value = "";
+            input.style.height = "auto";
+          }
+        } else {
+          data = await AdminAPI.maxChatSend(tgState.peerId, {
+            text,
+            account_id: isMaxUserbot() ? currentMaxAccountId() : undefined,
+          });
+        }
         if (data.message?.peer_id && String(data.message.peer_id) !== String(tgState.peerId)) {
           tgState.peerId = data.message.peer_id;
         }
@@ -4701,9 +4736,13 @@
           tgState.peerId = data.peer_id;
         }
         const idx = tgState.messages.findIndex((m) => m.id === tmpId);
-        if (data.message) {
-          if (idx >= 0) tgState.messages[idx] = data.message;
-          else tgState.messages = [...tgState.messages, data.message];
+        const added = data.messages || (data.message ? [data.message] : []);
+        if (added.length) {
+          if (idx >= 0) {
+            tgState.messages.splice(idx, 1, ...added);
+          } else {
+            tgState.messages = [...tgState.messages, ...added];
+          }
         } else if (idx >= 0) {
           tgState.messages[idx] = { ...optimistic, _pending: false, id: tmpId };
         }
@@ -4988,7 +5027,6 @@
     });
 
     $("#tgAttachBtn")?.addEventListener("click", () => {
-      if (isMaxChannel()) return;
       $("#tgFileInput")?.click();
     });
     $("#tgFileInput")?.addEventListener("change", (e) => {
@@ -5013,7 +5051,6 @@
       input.style.height = Math.min(input.scrollHeight, 140) + "px";
     });
     input?.addEventListener("paste", (e) => {
-      if (isMaxChannel()) return;
       const items = [...(e.clipboardData?.items || [])];
       const files = items
         .filter((it) => it.kind === "file")
@@ -5026,7 +5063,6 @@
 
     const dropZone = $("#tgThread") || $("#tgComposerWrap");
     dropZone?.addEventListener("dragover", (e) => {
-      if (isMaxChannel()) return;
       if (![...e.dataTransfer.types].includes("Files")) return;
       e.preventDefault();
       $("#tgComposerWrap")?.classList.add("dragover");
@@ -5038,7 +5074,6 @@
     });
     dropZone?.addEventListener("drop", (e) => {
       $("#tgComposerWrap")?.classList.remove("dragover");
-      if (isMaxChannel()) return;
       if (!e.dataTransfer?.files?.length) return;
       e.preventDefault();
       if (!tgState.peerId) return;

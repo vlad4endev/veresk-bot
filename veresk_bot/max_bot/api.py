@@ -97,8 +97,9 @@ class MaxBotAPI:
         *,
         user_id: int | None = None,
         chat_id: int | None = None,
-        text: str,
+        text: str = "",
         keyboard: list[list[dict[str, Any]]] | None = None,
+        attachments: list[dict[str, Any]] | None = None,
         markdown: bool = True,
     ) -> dict[str, Any]:
         params: dict[str, Any] = {}
@@ -109,14 +110,94 @@ class MaxBotAPI:
         else:
             raise ValueError("Нужен user_id или chat_id")
 
-        body: dict[str, Any] = {"text": text[:4000]}
-        if markdown:
+        body: dict[str, Any] = {"text": (text or "")[:4000]}
+        if markdown and (text or "").strip():
             body["format"] = "markdown"
+        atts: list[dict[str, Any]] = list(attachments or [])
         if keyboard:
-            body["attachments"] = [
-                {"type": "inline_keyboard", "payload": {"buttons": keyboard}}
-            ]
+            atts.append({"type": "inline_keyboard", "payload": {"buttons": keyboard}})
+        if atts:
+            body["attachments"] = atts
         return await self._request("POST", "/messages", params=params, json_body=body)
+
+    async def create_upload(self, upload_type: str) -> dict[str, Any]:
+        """POST /uploads?type=image|video|audio|file → {url, token?}."""
+        kind = (upload_type or "file").strip().lower()
+        if kind not in ("image", "video", "audio", "file"):
+            kind = "file"
+        return await self._request("POST", "/uploads", params={"type": kind})
+
+    async def upload_file(
+        self,
+        upload_type: str,
+        data: bytes,
+        *,
+        filename: str = "file",
+        content_type: str = "application/octet-stream",
+    ) -> dict[str, Any]:
+        """Получить слот загрузки и отправить байты. Возвращает payload для attachment."""
+        slot = await self.create_upload(upload_type)
+        upload_url = str(slot.get("url") or "").strip()
+        if not upload_url:
+            raise MaxAPIError(502, "upload slot without url")
+
+        session = await self._get_session()
+        uploaded: dict[str, Any] = {}
+        text = ""
+        # Сначала multipart (как в доках), затем raw PUT
+        form = aiohttp.FormData()
+        form.add_field(
+            "data",
+            data,
+            filename=filename or "file",
+            content_type=content_type or "application/octet-stream",
+        )
+        async with session.post(upload_url, data=form) as resp:
+            text = await resp.text()
+            if resp.status < 400:
+                try:
+                    uploaded = await resp.json(content_type=None)
+                except Exception:
+                    uploaded = {}
+            else:
+                headers = {"Content-Type": content_type or "application/octet-stream"}
+                async with session.put(upload_url, data=data, headers=headers) as resp2:
+                    text = await resp2.text()
+                    if resp2.status >= 400:
+                        raise MaxAPIError(resp2.status, text)
+                    try:
+                        uploaded = await resp2.json(content_type=None)
+                    except Exception:
+                        uploaded = {}
+
+        token = (
+            uploaded.get("token")
+            or slot.get("token")
+            or (uploaded.get("payload") or {}).get("token")
+        )
+        # image upload часто возвращает {photos: {…: {token}}}
+        if not token and isinstance(uploaded.get("photos"), dict):
+            for photo in uploaded["photos"].values():
+                if isinstance(photo, dict) and photo.get("token"):
+                    token = photo["token"]
+                    break
+        url = uploaded.get("url")
+        payload: dict[str, Any] = {}
+        if token:
+            payload["token"] = token
+        elif url:
+            payload["url"] = url
+        else:
+            raise MaxAPIError(502, f"upload without token: {text[:200]}")
+
+        kind = (upload_type or "file").strip().lower()
+        att_type = {
+            "image": "image",
+            "video": "video",
+            "audio": "audio",
+            "file": "file",
+        }.get(kind, "file")
+        return {"type": att_type, "payload": payload}
 
     async def get_messages(
         self,

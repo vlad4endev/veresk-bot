@@ -149,27 +149,133 @@ async def _persist_peer_profile(peer_info: dict[str, Any]) -> None:
 
 def _message_text(msg: dict[str, Any]) -> str:
     body = msg.get("body") or {}
-    text = (body.get("text") or "").strip()
-    if text:
-        return text
-    attachments = body.get("attachments") or []
-    if attachments:
-        kinds = [str(a.get("type") or "file") for a in attachments]
-        return ", ".join(kinds)
-    return ""
+    return (body.get("text") or "").strip()
 
 
-def _bot_user_id(me: dict[str, Any] | None) -> int | None:
-    if not me:
+_MEDIA_KIND_MAP = {
+    "image": "photo",
+    "photo": "photo",
+    "video": "video",
+    "audio": "audio",
+    "file": "document",
+    "document": "document",
+    "sticker": "sticker",
+    "share": "webpage",
+    "contact": "contact",
+    "inline_keyboard": None,
+}
+
+
+_MEDIA_PREVIEW = {
+    "photo": "🖼 Фото",
+    "sticker": "🎟 Стикер",
+    "video": "🎬 Видео",
+    "audio": "🎵 Аудио",
+    "voice": "🎤 Голосовое",
+    "document": "📎 Файл",
+    "webpage": "🔗 Ссылка",
+    "contact": "👤 Контакт",
+    "media": "Медиа",
+}
+
+
+def _normalize_bot_media_kind(raw: Any) -> str | None:
+    if raw is None:
         return None
-    for key in ("user_id", "userId", "id"):
-        raw = me.get(key)
-        if raw is not None:
-            try:
-                return int(raw)
-            except (TypeError, ValueError):
-                pass
-    return None
+    key = str(raw).strip().lower()
+    if key in _MEDIA_KIND_MAP:
+        return _MEDIA_KIND_MAP[key]
+    if key in ("geo", "poll", "animation", "video_note", "voice"):
+        return key
+    return "media"
+
+
+def _attachment_media_meta(att: dict[str, Any]) -> dict[str, Any]:
+    kind = _normalize_bot_media_kind(att.get("type"))
+    payload = att.get("payload") if isinstance(att.get("payload"), dict) else {}
+    url = None
+    for key in ("url", "photoUrl", "photo_url", "fileUrl", "file_url"):
+        val = payload.get(key) or att.get(key)
+        if val:
+            url = str(val).strip() or None
+            break
+    filename = None
+    for key in ("file_name", "filename", "name"):
+        val = payload.get(key) or att.get(key)
+        if val:
+            filename = str(val).strip() or None
+            break
+    return {
+        "kind": kind,
+        "media_url": url,
+        "file_name": filename,
+        "token": (payload.get("token") or None),
+    }
+
+
+def _display_attachments(attachments: list[Any]) -> list[dict[str, Any]]:
+    out: list[dict[str, Any]] = []
+    for att in attachments or []:
+        if not isinstance(att, dict):
+            continue
+        meta = _attachment_media_meta(att)
+        if not meta.get("kind"):
+            continue
+        out.append(meta)
+    return out
+
+
+def _guess_mime(data: bytes, fallback: str = "application/octet-stream") -> str:
+    if data.startswith(b"\xff\xd8\xff"):
+        return "image/jpeg"
+    if data.startswith(b"\x89PNG\r\n\x1a\n"):
+        return "image/png"
+    if data[:6] in (b"GIF87a", b"GIF89a"):
+        return "image/gif"
+    if data.startswith(b"RIFF") and data[8:12] == b"WEBP":
+        return "image/webp"
+    if len(data) > 12 and data[4:8] == b"ftyp":
+        return "video/mp4"
+    if data.startswith(b"ID3") or data[:2] == b"\xff\xfb":
+        return "audio/mpeg"
+    if data.startswith(b"OggS"):
+        return "audio/ogg"
+    return fallback
+
+
+def _upload_type_for_file(filename: str, mime: str, *, force_document: bool) -> str:
+    if force_document:
+        return "file"
+    name = (filename or "").lower()
+    mime_l = (mime or "").lower()
+    if mime_l.startswith("image/") or name.endswith((".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp")):
+        return "image"
+    if mime_l.startswith("video/") or name.endswith((".mp4", ".mov", ".webm", ".mkv")):
+        return "video"
+    if mime_l.startswith("audio/") or name.endswith((".mp3", ".ogg", ".m4a", ".wav", ".aac")):
+        return "audio"
+    return "file"
+
+
+async def _fetch_bytes(url: str, *, limit: int = 20 * 1024 * 1024) -> tuple[bytes, str]:
+    import aiohttp
+
+    from max_bot.ssl_ctx import build_max_ssl_context
+
+    ssl_ctx = build_max_ssl_context()
+    timeout = aiohttp.ClientTimeout(total=60)
+    async with aiohttp.ClientSession(
+        timeout=timeout,
+        connector=aiohttp.TCPConnector(ssl=ssl_ctx),
+    ) as session:
+        async with session.get(url) as resp:
+            if resp.status >= 400:
+                raise FileNotFoundError(f"download_http_{resp.status}")
+            data = await resp.content.read(limit + 1)
+            if len(data) > limit:
+                raise ValueError("media_too_large")
+            ctype = (resp.headers.get("Content-Type") or "").split(";")[0].strip()
+            return data, ctype or "application/octet-stream"
 
 
 def serialize_max_message(
@@ -194,21 +300,201 @@ def serialize_max_message(
     mid = body.get("mid") or msg.get("id") or msg.get("message_id")
     text = _message_text(msg)
     attachments = body.get("attachments") or []
-    has_media = bool(attachments) and not text
+    media_atts = _display_attachments(attachments if isinstance(attachments, list) else [])
+    first = media_atts[0] if media_atts else None
+    kind = first["kind"] if first else None
+    preview = text[:160] if text else (_MEDIA_PREVIEW.get(kind or "", "Медиа") if kind else "")
 
     return {
         "id": str(mid) if mid is not None else str(msg.get("timestamp") or ""),
         "date": _ts_iso(msg.get("timestamp")),
         "out": out,
         "text": text,
-        "preview": text[:120] if text else ("Медиа" if has_media else ""),
-        "has_media": bool(attachments),
-        "media_kind": (attachments[0].get("type") if attachments else None),
-        "file_name": None,
+        "preview": preview,
+        "has_media": bool(kind),
+        "media_kind": kind,
+        "media_url": first.get("media_url") if first else None,
+        "file_name": first.get("file_name") if first else None,
         "from_id": sender_id_int,
         "from_name": "Вы" if out else _user_title(sender),
         "reply_to": None,
     }
+
+
+def _bot_user_id(me: dict[str, Any] | None) -> int | None:
+    if not me:
+        return None
+    for key in ("user_id", "userId", "id"):
+        raw = me.get(key)
+        if raw is not None:
+            try:
+                return int(raw)
+            except (TypeError, ValueError):
+                pass
+    return None
+
+
+MAX_UPLOAD_BYTES = 50 * 1024 * 1024
+MAX_UPLOAD_FILES = 10
+MAX_INLINE_MEDIA_BYTES = 20 * 1024 * 1024
+
+
+async def download_message_media(
+    peer: str,
+    message_id: str,
+) -> tuple[bytes, str, str | None]:
+    """Скачать медиа сообщения MAX Bot API. Возвращает (bytes, mime, filename)."""
+    peer_info = await resolve_peer_info(peer)
+    chat_id = peer_info.get("chat_id")
+    mid = str(message_id or "").strip()
+    if not mid:
+        raise FileNotFoundError("message_not_found")
+
+    api = await _api()
+    try:
+        if chat_id is not None:
+            data = await api.get_messages(chat_id=int(chat_id), count=100)
+        else:
+            data = await api.get_messages(message_ids=[mid])
+    finally:
+        await api.close()
+
+    raw_msgs = data.get("messages") or []
+    target = None
+    for msg in raw_msgs:
+        body = msg.get("body") or {}
+        cur = body.get("mid") or msg.get("id") or msg.get("message_id")
+        if str(cur) == mid:
+            target = msg
+            break
+    if target is None and chat_id is None:
+        raise FileNotFoundError("message_not_found")
+    if target is None:
+        # fallback: exact message_ids query
+        api2 = await _api()
+        try:
+            data2 = await api2.get_messages(message_ids=[mid])
+            raw2 = data2.get("messages") or []
+            target = raw2[0] if raw2 else None
+        finally:
+            await api2.close()
+    if not target:
+        raise FileNotFoundError("message_not_found")
+
+    attachments = (target.get("body") or {}).get("attachments") or []
+    media_atts = _display_attachments(attachments if isinstance(attachments, list) else [])
+    if not media_atts:
+        raise FileNotFoundError("no_media")
+    first = media_atts[0]
+    url = first.get("media_url")
+    if not url:
+        raise FileNotFoundError("no_media_url")
+    raw, ctype = await _fetch_bytes(url, limit=MAX_INLINE_MEDIA_BYTES)
+    mime = _guess_mime(raw, ctype or "application/octet-stream")
+    kind = first.get("kind")
+    if kind in ("photo", "sticker") and mime.startswith("application/"):
+        mime = "image/jpeg"
+    if kind == "video" and mime.startswith("application/"):
+        mime = "video/mp4"
+    if kind in ("audio", "voice") and mime.startswith("application/"):
+        mime = "audio/mpeg"
+    return raw, mime, first.get("file_name")
+
+
+async def send_dialog_media(
+    peer: str,
+    files: list[dict[str, Any]],
+    *,
+    caption: str = "",
+    force_document: bool = False,
+) -> list[dict[str, Any]]:
+    if not files:
+        raise ValueError("Нет файлов")
+    if len(files) > MAX_UPLOAD_FILES:
+        raise ValueError(f"Максимум {MAX_UPLOAD_FILES} файлов за раз")
+    caption = (caption or "").strip()
+    if len(caption) > 4000:
+        raise ValueError("Подпись длиннее 4000 символов")
+
+    peer_info = await resolve_peer_info(peer)
+    chat_id = peer_info.get("chat_id")
+    user_id = peer_info.get("max_user_id")
+    if chat_id is None and user_id is None:
+        raise ValueError("Неизвестный собеседник")
+
+    api = await _api()
+    bot_id = None
+    attachments: list[dict[str, Any]] = []
+    result: dict[str, Any] = {}
+    try:
+        me = await api.get_me()
+        bot_id = _bot_user_id(me)
+        for item in files:
+            raw = item.get("data") or b""
+            if not isinstance(raw, (bytes, bytearray)):
+                raise ValueError("Некорректные данные файла")
+            raw_b = bytes(raw)
+            if not raw_b:
+                raise ValueError("Пустой файл")
+            if len(raw_b) > MAX_UPLOAD_BYTES:
+                raise ValueError("Файл больше 50 МБ")
+            filename = str(item.get("filename") or "file")
+            mime = str(item.get("mime") or "application/octet-stream")
+            upload_type = _upload_type_for_file(filename, mime, force_document=force_document)
+            attachments.append(
+                await api.upload_file(
+                    upload_type,
+                    raw_b,
+                    filename=filename,
+                    content_type=mime,
+                )
+            )
+
+        # MAX Bot API: одно сообщение с несколькими attachments
+        if user_id is not None:
+            result = await api.send_message(
+                user_id=int(user_id),
+                text=caption,
+                attachments=attachments,
+                markdown=False,
+            )
+        elif chat_id is not None:
+            result = await api.send_message(
+                chat_id=int(chat_id),
+                text=caption,
+                attachments=attachments,
+                markdown=False,
+            )
+        else:
+            raise ValueError("Неизвестный собеседник")
+    finally:
+        await api.close()
+
+    msg = result.get("message") if isinstance(result.get("message"), dict) else result
+    if not isinstance(msg, dict):
+        msg = {
+            "timestamp": int(datetime.now(tz=timezone.utc).timestamp() * 1000),
+            "body": {"text": caption, "attachments": attachments},
+            "sender": {"user_id": bot_id, "is_bot": True},
+        }
+    serialized = serialize_max_message(msg, bot_id=bot_id)
+    if caption and not serialized.get("text"):
+        serialized["text"] = caption
+        serialized["preview"] = caption[:160]
+
+    # index dialog
+    try:
+        await upsert_dialog(
+            chat_id=int(chat_id) if chat_id is not None else None,
+            max_user_id=int(user_id) if user_id is not None else None,
+            last_text=serialized.get("preview") or caption or "Медиа",
+            last_out=True,
+            last_at=serialized.get("date"),
+        )
+    except Exception:
+        logger.debug("upsert after send media failed", exc_info=True)
+
+    return [serialized]
 
 
 async def _api() -> MaxBotAPI:

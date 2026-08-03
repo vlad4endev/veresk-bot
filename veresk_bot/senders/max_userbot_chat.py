@@ -412,16 +412,106 @@ def _peer_user_id(chat: Any, me_id: int | None) -> int | None:
 
 def _message_text(msg: Any) -> str:
     text = (getattr(msg, "text", None) or "").strip()
-    if text:
-        return text
-    attaches = getattr(msg, "attaches", None) or []
-    if attaches:
-        kinds = []
-        for a in attaches:
-            kind = getattr(a, "type", None) or type(a).__name__
-            kinds.append(str(getattr(kind, "value", kind)))
-        return ", ".join(kinds) if kinds else "Медиа"
-    return ""
+    return text
+
+
+_USERBOT_KIND_MAP = {
+    "PHOTO": "photo",
+    "VIDEO": "video",
+    "FILE": "document",
+    "AUDIO": "audio",
+    "STICKER": "sticker",
+    "SHARE": "webpage",
+    "CONTACT": "contact",
+    "CALL": None,
+    "CONTROL": None,
+    "INLINE_KEYBOARD": None,
+    "UNKNOWN": "media",
+}
+
+_USERBOT_PREVIEW = {
+    "photo": "🖼 Фото",
+    "sticker": "🎟 Стикер",
+    "video": "🎬 Видео",
+    "audio": "🎵 Аудио",
+    "voice": "🎤 Голосовое",
+    "document": "📎 Файл",
+    "webpage": "🔗 Ссылка",
+    "contact": "👤 Контакт",
+    "media": "Медиа",
+}
+
+
+def _attach_type_str(att: Any) -> str:
+    raw = getattr(att, "type", None)
+    return str(getattr(raw, "value", raw) or type(att).__name__).upper()
+
+
+def _normalize_userbot_kind(att: Any) -> str | None:
+    key = _attach_type_str(att)
+    if key in _USERBOT_KIND_MAP:
+        return _USERBOT_KIND_MAP[key]
+    # class name fallback
+    name = type(att).__name__.upper()
+    for token, kind in (
+        ("PHOTO", "photo"),
+        ("VIDEO", "video"),
+        ("FILE", "document"),
+        ("AUDIO", "audio"),
+        ("STICKER", "sticker"),
+    ):
+        if token in name or token in key:
+            return kind
+    return "media"
+
+
+def _attach_media_url(att: Any) -> str | None:
+    for attr in ("base_url", "url", "thumbnail", "lottie_url"):
+        val = getattr(att, attr, None)
+        if val:
+            return str(val).strip() or None
+    return None
+
+
+def _attach_file_name(att: Any) -> str | None:
+    for attr in ("name", "file_name", "filename"):
+        val = getattr(att, attr, None)
+        if val:
+            return str(val).strip() or None
+    return None
+
+
+def _guess_mime(data: bytes, fallback: str = "application/octet-stream") -> str:
+    if data.startswith(b"\xff\xd8\xff"):
+        return "image/jpeg"
+    if data.startswith(b"\x89PNG\r\n\x1a\n"):
+        return "image/png"
+    if data[:6] in (b"GIF87a", b"GIF89a"):
+        return "image/gif"
+    if data.startswith(b"RIFF") and data[8:12] == b"WEBP":
+        return "image/webp"
+    if len(data) > 12 and data[4:8] == b"ftyp":
+        return "video/mp4"
+    if data.startswith(b"ID3") or data[:2] == b"\xff\xfb":
+        return "audio/mpeg"
+    if data.startswith(b"OggS"):
+        return "audio/ogg"
+    return fallback
+
+
+async def _http_get_bytes(url: str, *, limit: int = 20 * 1024 * 1024) -> tuple[bytes, str]:
+    import aiohttp
+
+    timeout = aiohttp.ClientTimeout(total=60)
+    async with aiohttp.ClientSession(timeout=timeout) as session:
+        async with session.get(url) as resp:
+            if resp.status >= 400:
+                raise FileNotFoundError(f"download_http_{resp.status}")
+            data = await resp.content.read(limit + 1)
+            if len(data) > limit:
+                raise ValueError("media_too_large")
+            ctype = (resp.headers.get("Content-Type") or "").split(";")[0].strip()
+            return data, ctype or "application/octet-stream"
 
 
 def _serialize_message(
@@ -444,19 +534,47 @@ def _serialize_message(
         from_name = _contact_name(contacts.get(sender_id))
     if not from_name:
         from_name = f"MAX {sender_id}" if sender_id is not None else None
+
+    first_kind = None
+    media_url = None
+    file_name = None
+    file_id = None
+    video_id = None
+    for att in attaches:
+        kind = _normalize_userbot_kind(att)
+        if not kind:
+            continue
+        first_kind = kind
+        media_url = _attach_media_url(att)
+        file_name = _attach_file_name(att)
+        raw_fid = getattr(att, "file_id", None)
+        raw_vid = getattr(att, "video_id", None)
+        try:
+            file_id = int(raw_fid) if raw_fid is not None else None
+        except (TypeError, ValueError):
+            file_id = None
+        try:
+            video_id = int(raw_vid) if raw_vid is not None else None
+        except (TypeError, ValueError):
+            video_id = None
+        break
+
+    preview = text[:160] if text else (
+        _USERBOT_PREVIEW.get(first_kind or "", "Медиа") if first_kind else ""
+    )
+
     return {
         "id": str(mid) if mid is not None else str(getattr(msg, "time", "") or ""),
         "date": _ts_iso(getattr(msg, "time", None)),
         "out": out,
         "text": text,
-        "preview": text[:120] if text else ("Медиа" if attaches else ""),
-        "has_media": bool(attaches),
-        "media_kind": (
-            str(getattr(getattr(attaches[0], "type", None), "value", getattr(attaches[0], "type", None)))
-            if attaches
-            else None
-        ),
-        "file_name": None,
+        "preview": preview,
+        "has_media": bool(first_kind),
+        "media_kind": first_kind,
+        "media_url": media_url,
+        "file_name": file_name,
+        "file_id": file_id,
+        "video_id": video_id,
         "from_id": sender_id,
         "from_name": from_name,
         "reply_to": None,
@@ -751,6 +869,7 @@ async def send_dialog_message(
 
     async with max_session(session_file, phone=phone, account_id=account_id) as client:
         me_id = _user_id(client.me)
+        contacts = _contact_map(client)
         sent = await client.send_message(chat_id=int(peer_id), text=body)
         if sent is None:
             return {
@@ -761,12 +880,216 @@ async def send_dialog_message(
                 "preview": body[:120],
                 "has_media": False,
                 "media_kind": None,
+                "media_url": None,
                 "file_name": None,
                 "from_id": me_id,
                 "from_name": "Вы",
                 "reply_to": None,
             }
-        return _serialize_message(sent, me_id=me_id)
+        return _serialize_message(sent, me_id=me_id, contacts=contacts)
+
+
+MAX_UPLOAD_BYTES = 50 * 1024 * 1024
+MAX_UPLOAD_FILES = 10
+MAX_INLINE_MEDIA_BYTES = 20 * 1024 * 1024
+
+
+def _pick_attach_builder(filename: str, mime: str, *, force_document: bool):
+    from pymax import File, Photo, Video
+
+    if force_document:
+        return File
+    name = (filename or "").lower()
+    mime_l = (mime or "").lower()
+    if mime_l.startswith("image/") or name.endswith(
+        (".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp")
+    ):
+        return Photo
+    if mime_l.startswith("video/") or name.endswith((".mp4", ".mov", ".webm", ".mkv")):
+        return Video
+    return File
+
+
+async def download_message_media(
+    session_file: str,
+    peer_id: int,
+    message_id: str | int,
+    *,
+    phone: str = "",
+    account_id: int | None = None,
+) -> tuple[bytes, str, str | None]:
+    mid_raw = str(message_id).strip()
+    try:
+        mid_int = int(mid_raw)
+    except (TypeError, ValueError):
+        mid_int = None
+
+    async with max_session(session_file, phone=phone, account_id=account_id) as client:
+        msg = None
+        if mid_int is not None and hasattr(client, "get_messages"):
+            try:
+                found = await client.get_messages(int(peer_id), [mid_int])
+                if found:
+                    msg = found[0]
+            except Exception:
+                logger.debug("get_messages by id failed", exc_info=True)
+        if msg is None:
+            # fallback: scan recent history
+            history = await client.fetch_history(
+                chat_id=int(peer_id),
+                backward=80,
+                forward=0,
+                from_time=int(time.time() * 1000),
+            )
+            for candidate in history or []:
+                if str(getattr(candidate, "id", "")) == mid_raw:
+                    msg = candidate
+                    break
+        if msg is None:
+            raise FileNotFoundError("message_not_found")
+
+        attaches = getattr(msg, "attaches", None) or []
+        if not attaches:
+            raise FileNotFoundError("no_media")
+
+        att = None
+        kind = None
+        for item in attaches:
+            kind = _normalize_userbot_kind(item)
+            if kind:
+                att = item
+                break
+        if att is None:
+            raise FileNotFoundError("no_media")
+
+        filename = _attach_file_name(att)
+        url = _attach_media_url(att)
+
+        # Resolve temporary URLs for file/video
+        if kind == "document" and hasattr(client, "get_file_by_id"):
+            file_id = getattr(att, "file_id", None)
+            if file_id is not None:
+                try:
+                    req = await client.get_file_by_id(
+                        int(peer_id),
+                        getattr(msg, "id", mid_raw),
+                        int(file_id),
+                    )
+                    if req is not None and getattr(req, "url", None):
+                        url = str(req.url)
+                except Exception:
+                    logger.debug("get_file_by_id failed", exc_info=True)
+        if kind == "video" and hasattr(client, "get_video_by_id"):
+            video_id = getattr(att, "video_id", None)
+            if video_id is not None:
+                try:
+                    req = await client.get_video_by_id(
+                        int(peer_id),
+                        getattr(msg, "id", mid_raw),
+                        int(video_id),
+                    )
+                    if req is not None and getattr(req, "url", None):
+                        url = str(req.url)
+                except Exception:
+                    logger.debug("get_video_by_id failed", exc_info=True)
+
+        if not url:
+            raise FileNotFoundError("no_media_url")
+
+        raw, ctype = await _http_get_bytes(url, limit=MAX_INLINE_MEDIA_BYTES)
+        mime = _guess_mime(raw, ctype or "application/octet-stream")
+        if kind in ("photo", "sticker") and mime.startswith("application/"):
+            mime = "image/jpeg"
+        if kind == "video" and mime.startswith("application/"):
+            mime = "video/mp4"
+        if kind in ("audio", "voice") and mime.startswith("application/"):
+            mime = "audio/mpeg"
+        return raw, mime, filename
+
+
+async def send_dialog_media(
+    session_file: str,
+    peer_id: int,
+    files: list[dict[str, Any]],
+    *,
+    caption: str = "",
+    force_document: bool = False,
+    phone: str = "",
+    account_id: int | None = None,
+) -> list[dict[str, Any]]:
+    if not files:
+        raise ValueError("Нет файлов")
+    if len(files) > MAX_UPLOAD_FILES:
+        raise ValueError(f"Максимум {MAX_UPLOAD_FILES} файлов за раз")
+    caption = (caption or "").strip()
+    if len(caption) > 4000:
+        raise ValueError("Подпись длиннее 4000 символов")
+
+    import tempfile
+
+    paths: list[str] = []
+    builders: list[Any] = []
+    try:
+        for item in files:
+            raw = item.get("data") or b""
+            if not isinstance(raw, (bytes, bytearray)):
+                raise ValueError("Некорректные данные файла")
+            raw_b = bytes(raw)
+            if not raw_b:
+                raise ValueError("Пустой файл")
+            if len(raw_b) > MAX_UPLOAD_BYTES:
+                raise ValueError("Файл больше 50 МБ")
+            filename = str(item.get("filename") or "file")
+            mime = str(item.get("mime") or "application/octet-stream")
+            suffix = Path(filename).suffix[:20] or ""
+            tmp = tempfile.NamedTemporaryFile(delete=False, suffix=suffix)
+            try:
+                tmp.write(raw_b)
+                tmp.flush()
+            finally:
+                tmp.close()
+            paths.append(tmp.name)
+            cls = _pick_attach_builder(filename, mime, force_document=force_document)
+            builders.append(cls(path=tmp.name, name=filename))
+
+        async with max_session(session_file, phone=phone, account_id=account_id) as client:
+            me_id = _user_id(client.me)
+            contacts = _contact_map(client)
+            sent = await client.send_message(
+                chat_id=int(peer_id),
+                text=caption or "",
+                attachments=builders,
+            )
+            if sent is None:
+                return [
+                    {
+                        "id": f"tmp:{int(time.time() * 1000)}",
+                        "date": datetime.now(tz=timezone.utc).isoformat(),
+                        "out": True,
+                        "text": caption,
+                        "preview": caption[:120] if caption else "Медиа",
+                        "has_media": True,
+                        "media_kind": "media",
+                        "media_url": None,
+                        "file_name": files[0].get("filename") if files else None,
+                        "from_id": me_id,
+                        "from_name": "Вы",
+                        "reply_to": None,
+                    }
+                ]
+            if isinstance(sent, list):
+                return [
+                    _serialize_message(m, me_id=me_id, contacts=contacts)
+                    for m in sent
+                    if m is not None
+                ]
+            return [_serialize_message(sent, me_id=me_id, contacts=contacts)]
+    finally:
+        for p in paths:
+            try:
+                Path(p).unlink(missing_ok=True)
+            except OSError:
+                pass
 
 
 async def create_or_open_dialog(
