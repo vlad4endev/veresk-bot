@@ -60,8 +60,9 @@
     curCampaign: null,
     curPerson: null,
     wizard: { segment: "regular", message: "", when: "later", date: "", time: "10:00", channels: ["tg"] },
-    step: 0,
     tgPhone: "",
+    maxPhone: "",
+    step: 0,
   };
 
   const panels = $$(".panel");
@@ -941,7 +942,9 @@
           : "Шаг 1: сохраните API-ключи. Шаг 2: подключите номер телефона.";
       }
       await loadTgApiStatus();
-      const tgItems = (data.items || []).filter((a) => a.kind !== "max_bot");
+      const tgItems = (data.items || []).filter((a) => a.kind === "tg_userbot");
+      const maxUserbotItems = (data.items || []).filter((a) => a.kind === "max_userbot");
+      renderMaxUserbotList(maxUserbotItems, data);
       const ready = tgItems.filter((a) => !["warmup", "unavailable", "blocked"].includes(String(a.status || ""))).length;
       const liveOk = tgItems.filter((a) => a.session_ok === true).length;
       updateTgSetupStatus(configured, tgItems.length, ready, checkLive ? liveOk : null);
@@ -1041,6 +1044,19 @@
       ? `<span class="status-pill ok"><span class="d"></span>Подключён${maxMeta ? " · " + esc(maxMeta) : ""}</span>`
       : `<span class="status-pill warn"><span class="d"></span>Токен не задан</span>`;
     updateSettingsGlanceMax(maxConfigured);
+    // Список личных MAX-номеров
+    try {
+      const data = accountsCache || (await AdminAPI.accounts());
+      accountsCache = data;
+      const maxItems = (data.items || []).filter((a) => a.kind === "max_userbot");
+      renderMaxUserbotList(maxItems, data);
+      if (data.max_userbot_ready) {
+        box.innerHTML =
+          `<span class="status-pill ok"><span class="d"></span>Личный аккаунт` +
+          (maxConfigured ? " + бот" : "") +
+          `</span>`;
+      }
+    } catch (_) {}
   }
 
   function renderMaxSettings(s) {
@@ -2024,8 +2040,14 @@
   });
 
   function setConnectStep(step) {
-    $$(".connect-step").forEach((el) => {
+    $$("#acctForm .connect-step").forEach((el) => {
       el.classList.toggle("on", Number(el.dataset.cstep) <= step);
+    });
+  }
+
+  function setMaxConnectStep(step) {
+    $$("#maxAcctForm .connect-step").forEach((el) => {
+      el.classList.toggle("on", Number(el.dataset.maxCstep) <= step);
     });
   }
 
@@ -2068,6 +2090,150 @@
       if (res.phone) bits.push(res.phone);
       text.textContent = bits.join(" · ") + ". Можно отправлять рассылки.";
     }
+  }
+
+  function resetMaxConnectForm() {
+    $("#maxConnectFields")?.classList.remove("hidden");
+    $("#maxConnectDone")?.classList.add("hidden");
+    $("#maxCodeStep")?.classList.add("hidden");
+    $("#max2faWrap")?.classList.add("hidden");
+    if ($("#maxPhone")) $("#maxPhone").value = "";
+    if ($("#maxCode")) $("#maxCode").value = "";
+    if ($("#max2fa")) $("#max2fa").value = "";
+    setMaxConnectStep(1);
+  }
+
+  function openMaxConnectForm(show) {
+    const form = $("#maxAcctForm");
+    if (!form) return;
+    form.classList.toggle("hidden", !show);
+    if (show) {
+      resetMaxConnectForm();
+      $("#maxPhone")?.focus();
+    } else {
+      resetMaxConnectForm();
+    }
+  }
+
+  function showMaxConnectDone(res) {
+    setMaxConnectStep(3);
+    $("#maxConnectFields")?.classList.add("hidden");
+    const done = $("#maxConnectDone");
+    done?.classList.remove("hidden");
+    const text = $("#maxConnectDoneText");
+    if (text) {
+      const bits = [];
+      if (res.session_ok) bits.push("Сессия авторизована");
+      else bits.push("Аккаунт сохранён" + (res.session_error ? " — " + res.session_error : ""));
+      if (res.label) bits.push(res.label);
+      if (res.max_user_id) bits.push("id " + res.max_user_id);
+      if (res.phone) bits.push(res.phone);
+      text.textContent = bits.join(" · ") + ". Рассылки MAX пойдут от этого номера.";
+    }
+  }
+
+  function maxErrorText(errOrRes) {
+    if (!errOrRes) return "Ошибка";
+    const data = errOrRes.data || errOrRes;
+    if (data.error === "pymax_missing" || /pymax|maxapi/i.test(String(data.error || ""))) {
+      return (
+        data.detail ||
+        "Библиотека maxapi-python не установлена (нужен Python ≥3.10). pip install maxapi-python>=2.3.0"
+      );
+    }
+    return data.detail || data.message || data.error || errOrRes.message || "Ошибка";
+  }
+
+  function renderMaxAccountCard(a) {
+    let statusLabel = "Готов";
+    let statusColor = "var(--ok)";
+    if (a.status === "warmup") {
+      statusLabel = a.warmup_until
+        ? "Прогрев до " + fmtWarmupDate(a.warmup_until)
+        : "Прогрев";
+      statusColor = "var(--warn)";
+    } else if (a.status === "unavailable" || a.status === "blocked") {
+      statusLabel = a.status === "blocked" ? "Заблокирован" : "Нет сессии";
+      statusColor = "var(--ink-3)";
+    }
+    const sent = a.sent_today != null ? a.sent_today : 0;
+    const limit = a.daily_limit != null ? a.daily_limit : 150;
+    const id = a.id != null ? String(a.id) : "";
+    const nameBits = [];
+    if (a.label && a.label !== a.phone && a.label !== a.phone_masked) nameBits.push(a.label);
+    return `<div class="acct" data-acct-id="${esc(id)}">
+      <div class="acct-id">
+        <div class="ico max" aria-hidden="true">MX</div>
+        <div class="m">
+          <div class="n">${esc(a.phone_masked || a.label || "MAX")}</div>
+          <div class="p">${esc(nameBits.join(" · ") || "Личный аккаунт")}</div>
+        </div>
+      </div>
+      <div class="acct-info">
+        <div class="acct-quota"><strong>${esc(String(sent))}</strong> из ${esc(String(limit))} сегодня</div>
+        <div class="acct-tags">
+          <span class="tagi" style="color:${statusColor}"><span class="d" style="background:${statusColor}"></span>${esc(statusLabel)}</span>
+        </div>
+      </div>
+      <div class="acct-actions">
+        <button type="button" class="btn btn-sm" data-max-check="${esc(id)}" ${!id ? "disabled" : ""}>Проверить</button>
+        <button type="button" class="btn btn-sm danger" data-max-del="${esc(id)}" ${!id ? "disabled" : ""}>Отключить</button>
+      </div>
+    </div>`;
+  }
+
+  function renderMaxUserbotList(items, data) {
+    const box = $("#maxAccountsList");
+    if (!box) return;
+    const pymaxOk = data?.pymax_installed !== false;
+    if (!items.length) {
+      box.innerHTML = `<div class="empty-rich" style="padding:20px 12px">
+        <div class="t">Нет личного MAX-номера</div>
+        <p class="d">${
+          pymaxOk
+            ? "Нажмите «Подключить», чтобы войти по телефону и слать рассылки от имени аккаунта."
+            : "На сервере нужен Python ≥3.10 и пакет maxapi-python."
+        }</p>
+      </div>`;
+      return;
+    }
+    box.innerHTML = items.map((a) => renderMaxAccountCard(a)).join("");
+    box.querySelectorAll("[data-max-check]").forEach((btn) => {
+      btn.addEventListener("click", async () => {
+        const id = btn.getAttribute("data-max-check");
+        if (!id) return;
+        btn.disabled = true;
+        btn.textContent = "…";
+        try {
+          const res = await AdminAPI.tgCheckAccount(id);
+          if (res.ok) {
+            alert("Коннект активен" + (res.label ? " · " + res.label : ""));
+          } else {
+            alert("Нет коннекта: " + (res.error || "сессия не авторизована"));
+          }
+          loadAccounts({ check: true });
+        } catch (err) {
+          alert(maxErrorText(err));
+          btn.disabled = false;
+          btn.textContent = "Проверить";
+        }
+      });
+    });
+    box.querySelectorAll("[data-max-del]").forEach((btn) => {
+      btn.addEventListener("click", async () => {
+        const id = btn.getAttribute("data-max-del");
+        if (!id) return;
+        if (!confirm("Отключить этот MAX-аккаунт? Сессия будет удалена.")) return;
+        btn.disabled = true;
+        try {
+          await AdminAPI.tgDeleteAccount(id);
+          loadAccounts();
+        } catch (err) {
+          alert(maxErrorText(err));
+          btn.disabled = false;
+        }
+      });
+    });
   }
 
   $("#btnConnectTg")?.addEventListener("click", () => {
@@ -2173,6 +2339,91 @@
     }
   });
 
+  // ── MAX personal account connect ─────────────────────────────────────────
+
+  $("#btnConnectMax")?.addEventListener("click", () => {
+    openMaxConnectForm($("#maxAcctForm")?.classList.contains("hidden"));
+  });
+  $("#maxConnectCancel")?.addEventListener("click", () => openMaxConnectForm(false));
+  $("#maxConnectDoneClose")?.addEventListener("click", () => {
+    openMaxConnectForm(false);
+    loadAccounts({ check: true });
+    if (settingsTab === "bots") loadBotsPane();
+  });
+
+  $("#maxSendCode")?.addEventListener("click", async () => {
+    const phone = $("#maxPhone").value.trim();
+    if (!phone) return alert("Укажите телефон");
+    const btn = $("#maxSendCode");
+    if (btn) {
+      btn.disabled = true;
+      btn.textContent = "Отправка…";
+    }
+    try {
+      const res = await AdminAPI.maxUserbotStart(phone);
+      if (!res.ok) return alert(maxErrorText(res));
+      state.maxPhone = res.phone || phone;
+      if (res.already_authorized) {
+        showMaxConnectDone(res);
+        loadAccounts();
+        return;
+      }
+      if ($("#maxCode")) $("#maxCode").value = "";
+      $("#maxCodeStep").classList.remove("hidden");
+      setMaxConnectStep(2);
+      $("#maxCode")?.focus();
+      alert("Код отправлен. Введите код из SMS или приложения MAX.");
+    } catch (err) {
+      alert(maxErrorText(err));
+    } finally {
+      if (btn) {
+        btn.disabled = false;
+        btn.textContent = "Получить код";
+      }
+    }
+  });
+
+  $("#maxConfirm")?.addEventListener("click", async () => {
+    const code = $("#maxCode").value.trim();
+    const password = $("#max2fa").value.trim() || undefined;
+    const btn = $("#maxConfirm");
+    if (btn) {
+      btn.disabled = true;
+      btn.textContent = "Подключение…";
+    }
+    try {
+      const res = await AdminAPI.maxUserbotConfirm(state.maxPhone, code, password);
+      if (res.need_2fa) {
+        $("#max2faWrap").classList.remove("hidden");
+        alert("Введите пароль 2FA MAX");
+        return;
+      }
+      if (!res.ok) {
+        alert(maxErrorText(res));
+        if (res.need_new_code) {
+          if ($("#maxCode")) $("#maxCode").value = "";
+          $("#maxCode")?.focus();
+        }
+        return;
+      }
+      showMaxConnectDone(res);
+      loadAccounts({ check: true });
+    } catch (err) {
+      const data = err.data || {};
+      if (data.need_2fa) {
+        $("#max2faWrap").classList.remove("hidden");
+        alert("Введите пароль 2FA");
+      } else {
+        alert(maxErrorText(err));
+      }
+    } finally {
+      if (btn) {
+        btn.disabled = false;
+        btn.textContent = "Подтвердить";
+      }
+    }
+  });
+
   // ── wizard ──────────────────────────────────────────────────────────────
 
   function selectedChannels() {
@@ -2218,7 +2469,18 @@
           : "нет аккаунта";
       }
       if ($("#chanMaxMeta")) {
-        $("#chanMaxMeta").textContent = maxAcc?.ready ? "бот подключён" : "не подключён";
+        const mode = maxAcc?.mode;
+        if (mode === "userbot") {
+          $("#chanMaxMeta").textContent = maxAcc.label
+            ? "личный · " + maxAcc.label
+            : maxAcc.userbot_count > 1
+              ? maxAcc.userbot_count + " акк."
+              : "личный аккаунт";
+        } else if (mode === "bot") {
+          $("#chanMaxMeta").textContent = "бот подключён";
+        } else {
+          $("#chanMaxMeta").textContent = "не подключён";
+        }
       }
       $("#chanTg")?.classList.toggle("is-off", !tgAcc?.ready);
       $("#chanMax")?.classList.toggle("is-off", !maxAcc?.ready);

@@ -404,18 +404,76 @@
             <div class="set-hero">
               <div>
                 <h3>MAX</h3>
-                <p>Тот же сценарий анкеты, что в Telegram: /start → имя → телефон → даты → бюджет. Плюс рассылки и «Чаты».</p>
+                <p>Личный номер — рассылки от имени аккаунта. Бот — анкета, чаты и fallback-рассылки.</p>
               </div>
               <div class="set-hero-status" id="botsOverview"></div>
             </div>
 
             <div class="max-status-grid" id="maxStatusGrid" aria-live="polite"></div>
 
+            <div class="set-block">
+              <div class="set-block-head">
+                <div>
+                  <h4>1. Личный номер (рассылки)</h4>
+                  <p>Неофициальный вход в MAX как пользователь: телефон → код из SMS → рассылки от вашего имени. Нужен RU IP на сервере.</p>
+                </div>
+                <div class="set-block-actions">
+                  <button type="button" class="btn primary" id="btnConnectMax">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M12 5v14M5 12h14"/></svg>
+                    Подключить
+                  </button>
+                </div>
+              </div>
+              <div class="acards" id="maxAccountsList"></div>
+
+              <div class="acct-form connect-card hidden" id="maxAcctForm">
+                <div class="connect-steps" aria-hidden="true">
+                  <span class="connect-step on" data-max-cstep="1">1. Телефон</span>
+                  <span class="connect-bar"></span>
+                  <span class="connect-step" data-max-cstep="2">2. Код</span>
+                  <span class="connect-bar"></span>
+                  <span class="connect-step" data-max-cstep="3">3. Коннект</span>
+                </div>
+                <div id="maxConnectFields">
+                  <div class="acct-form-title">Новый номер MAX</div>
+                  <p class="form-lead">Введите телефон в формате +79001234567. Код придёт в SMS / приложение MAX.</p>
+                  <label for="maxPhone">Телефон</label>
+                  <input id="maxPhone" type="tel" placeholder="+79001234567" autocomplete="tel">
+                  <div class="form-actions">
+                    <button type="button" class="btn primary" id="maxSendCode">Получить код</button>
+                    <button type="button" class="btn" id="maxConnectCancel">Отмена</button>
+                  </div>
+                  <div id="maxCodeStep" class="hidden connect-next">
+                    <label for="maxCode">Код из SMS / MAX</label>
+                    <input id="maxCode" type="text" inputmode="numeric" placeholder="12345" autocomplete="one-time-code">
+                    <div id="max2faWrap" class="hidden">
+                      <label for="max2fa">Пароль 2FA</label>
+                      <input id="max2fa" type="password" placeholder="Пароль аккаунта MAX" autocomplete="current-password">
+                    </div>
+                    <div class="form-actions">
+                      <button type="button" class="btn primary" id="maxConfirm">Подтвердить</button>
+                    </div>
+                  </div>
+                </div>
+                <div id="maxConnectDone" class="hidden connect-done">
+                  <div class="connect-done-ic" aria-hidden="true">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 6L9 17l-5-5"/></svg>
+                  </div>
+                  <div class="acct-form-title">MAX-аккаунт подключён</div>
+                  <p class="form-lead" id="maxConnectDoneText">Сессия сохранена — рассылки пойдут от имени этого номера.</p>
+                  <div class="form-actions">
+                    <button type="button" class="btn primary" id="maxConnectDoneClose">Готово</button>
+                  </div>
+                </div>
+              </div>
+              <p class="form-foot">Риск: неофициальный API — аккаунт могут ограничить. Лучше отдельный номер, не основной.</p>
+            </div>
+
             <div class="set-block" id="maxTokenForm">
               <div class="set-block-head">
                 <div>
-                  <h4>1. Токен бота</h4>
-                  <p>Создайте бота у <strong>@MasterBot</strong> в MAX → скопируйте токен → сохраните здесь. Без токена сценарий анкеты в MAX не запускается.</p>
+                  <h4>2. Токен бота</h4>
+                  <p>Создайте бота у <strong>@MasterBot</strong> в MAX → скопируйте токен → сохраните здесь. Нужен для анкеты и чатов; также fallback, если личного номера нет.</p>
                 </div>
                 <div id="maxTokenStatus" class="form-status form-status-inline"></div>
               </div>
@@ -431,7 +489,7 @@
             <div class="set-block" id="maxWebhookForm">
               <div class="set-block-head">
                 <div>
-                  <h4>2. Realtime (webhook)</h4>
+                  <h4>3. Realtime (webhook)</h4>
                   <p>Max сам присылает новые сообщения на ваш сервер — чаты в админке обновляются сразу. Нужен публичный <strong>HTTPS</strong> (порт 443).</p>
                 </div>
                 <div id="maxWebhookStatus" class="form-status form-status-inline"></div>
@@ -455,7 +513,7 @@
             <div class="set-block" id="maxFloristForm">
               <div class="set-block-head">
                 <div>
-                  <h4>3. Уведомления флористу</h4>
+                  <h4>4. Уведомления флористу</h4>
                   <p>Куда в MAX слать готовые анкеты. Пусто — только в Telegram (если задан) или никуда.</p>
                 </div>
               </div>
@@ -794,7 +852,7 @@
             </button>
             <button type="button" class="chan-toggle" data-channel="max" id="chanMax" aria-pressed="false">
               <span class="chan-toggle-name">MAX</span>
-              <span class="chan-toggle-meta" id="chanMaxMeta">бот</span>
+              <span class="chan-toggle-meta" id="chanMaxMeta">аккаунт / бот</span>
             </button>
           </div>
           <div class="match-preview" id="matchPreview" hidden>

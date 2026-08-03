@@ -1,10 +1,5 @@
 """
-Фоновое продление / проверка Telegram userbot-сессий.
-
-Периодически подключается к каждому аккаунту (get_me), чтобы:
-- сессия оставалась «живой» и не засыпала без трафика;
-- вовремя пометить unavailable, если Telegram отозвал авторизацию;
-- обычный пользователь в админке видел понятный статус, а не тихий сбой рассылок.
+Фоновое продление / проверка userbot-сессий (Telegram Telethon + MAX PyMax).
 """
 
 from __future__ import annotations
@@ -16,11 +11,11 @@ from datetime import datetime
 from typing import Any
 
 from mailing_db import list_send_accounts, update_send_account
+from senders.max_userbot import check_max_session, is_pymax_installed
 from senders.telegram_userbot import check_telegram_session, is_telethon_configured
 
 logger = logging.getLogger(__name__)
 
-# Интервал между полными проходами (секунды). По умолчанию 30 минут.
 KEEPALIVE_INTERVAL_SEC = max(
     300, int(os.getenv("TG_SESSION_KEEPALIVE_SEC", "1800") or "1800")
 )
@@ -31,7 +26,6 @@ def _now() -> str:
 
 
 def _restore_status(acc: dict[str, Any]) -> str:
-    """Вернуть статус ready/warmup после успешного keepalive."""
     today = datetime.now().date().isoformat()
     wu = acc.get("warmup_until")
     if wu and str(wu) > today:
@@ -43,7 +37,14 @@ async def probe_account(acc: dict[str, Any]) -> dict[str, Any]:
     """Проверить один аккаунт и обновить поля в БД."""
     account_id = int(acc["id"])
     now = _now()
-    live = await check_telegram_session(str(acc.get("session_file") or ""))
+    kind = acc.get("kind")
+    if kind == "max_userbot":
+        live = await check_max_session(
+            str(acc.get("session_file") or ""),
+            phone=str(acc.get("phone") or "") or None,
+        )
+    else:
+        live = await check_telegram_session(str(acc.get("session_file") or ""))
     authorized = bool(live.get("ok") and live.get("authorized"))
 
     patch: dict[str, Any] = {
@@ -64,6 +65,7 @@ async def probe_account(acc: dict[str, Any]) -> dict[str, Any]:
     await update_send_account(account_id, **patch)
     return {
         "id": account_id,
+        "kind": kind,
         "ok": authorized,
         "error": live.get("error"),
         "username": live.get("username"),
@@ -72,18 +74,25 @@ async def probe_account(acc: dict[str, Any]) -> dict[str, Any]:
 
 
 async def keepalive_all_telegram_sessions() -> dict[str, Any]:
-    """Пройтись по всем tg_userbot и продлить/проверить сессии."""
-    if not is_telethon_configured():
-        return {"ok": False, "skipped": True, "reason": "telethon_not_configured", "items": []}
-
+    """Пройтись по tg_userbot и max_userbot, продлить/проверить сессии."""
     rows = await list_send_accounts()
-    tg_rows = [
+    targets = [
         a
         for a in rows
-        if a.get("kind") == "tg_userbot" and a.get("session_file")
+        if a.get("session_file")
+        and (
+            (a.get("kind") == "tg_userbot" and is_telethon_configured())
+            or (a.get("kind") == "max_userbot" and is_pymax_installed())
+        )
     ]
+    if not targets:
+        reason = "no_accounts"
+        if not is_telethon_configured() and not is_pymax_installed():
+            reason = "not_configured"
+        return {"ok": False, "skipped": True, "reason": reason, "items": []}
+
     items: list[dict[str, Any]] = []
-    for acc in tg_rows:
+    for acc in targets:
         try:
             items.append(await probe_account(acc))
         except Exception as exc:
@@ -91,6 +100,7 @@ async def keepalive_all_telegram_sessions() -> dict[str, Any]:
             items.append(
                 {
                     "id": acc.get("id"),
+                    "kind": acc.get("kind"),
                     "ok": False,
                     "error": str(exc),
                 }
@@ -109,26 +119,31 @@ async def keepalive_all_telegram_sessions() -> dict[str, Any]:
     bad_n = len(items) - ok_n
     if items:
         logger.info(
-            "Telegram keepalive: %s ok, %s проблем из %s",
+            "Session keepalive: %s ok, %s проблем из %s",
             ok_n,
             bad_n,
             len(items),
         )
-    return {"ok": True, "checked": len(items), "ok_count": ok_n, "bad_count": bad_n, "items": items}
+    return {
+        "ok": True,
+        "checked": len(items),
+        "ok_count": ok_n,
+        "bad_count": bad_n,
+        "items": items,
+    }
 
 
 async def _keepalive_loop() -> None:
-    # Небольшая пауза после старта, чтобы не конкурировать с ботом
     await asyncio.sleep(45)
     logger.info(
-        "Telegram session keepalive запущен (каждые %s с)",
+        "Userbot session keepalive запущен (каждые %s с)",
         KEEPALIVE_INTERVAL_SEC,
     )
     while True:
         try:
             await keepalive_all_telegram_sessions()
         except Exception:
-            logger.exception("Ошибка в цикле keepalive Telegram-сессий")
+            logger.exception("Ошибка в цикле keepalive сессий")
         await asyncio.sleep(KEEPALIVE_INTERVAL_SEC)
 
 

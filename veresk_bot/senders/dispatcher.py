@@ -29,11 +29,13 @@ from mailing_db import (
 )
 from senders.matching import normalize_channel, resolve_max_user_id_sync
 from senders.max_bot import MaxBotSender
+from senders.max_userbot import MaxUserbotSender
 from senders.telegram_userbot import TelegramUserbotSender
 
 logger = logging.getLogger(__name__)
 
 _sender_cache: dict[int, TelegramUserbotSender] = {}
+_max_sender_cache: dict[int, MaxUserbotSender] = {}
 _auto_done_day: str | None = None
 
 
@@ -64,6 +66,22 @@ async def _get_tg_sender(account: dict) -> TelegramUserbotSender | None:
         return None
     sender = TelegramUserbotSender(session, account_id=aid)
     _sender_cache[aid] = sender
+    return sender
+
+
+async def _get_max_userbot_sender(account: dict) -> MaxUserbotSender | None:
+    aid = int(account["id"])
+    if aid in _max_sender_cache:
+        return _max_sender_cache[aid]
+    session = account.get("session_file") or ""
+    if not session:
+        return None
+    sender = MaxUserbotSender(
+        session,
+        account_id=aid,
+        phone=str(account.get("phone") or ""),
+    )
+    _max_sender_cache[aid] = sender
     return sender
 
 
@@ -104,16 +122,35 @@ async def _send_via_channel(
         return result.ok, result.status, result.error
 
     if ch == "max":
-        # Дополнительная сверка: max_user_id из карточки или max_profiles
         resolved = await asyncio.to_thread(
             resolve_max_user_id_sync,
             max_user_id=max_user_id,
             phone=phone,
         )
-        sender = MaxBotSender()
-        if not sender.available:
-            return False, "failed", "MAX-бот не подключён"
-        result = await sender.send(
+        # 1) Личный MAX-аккаунт (PyMax)
+        account = await pick_ready_account("max_userbot")
+        if account:
+            sender = await _get_max_userbot_sender(account)
+            if sender and sender.available:
+                result = await sender.send(
+                    phone=phone,
+                    name=name,
+                    text=body,
+                    max_user_id=resolved,
+                )
+                if result.ok:
+                    await bump_account_sent(int(account["id"]))
+                    logger.info(
+                        "MAX userbot рассылка: %s (аккаунт %s)",
+                        name or phone,
+                        account.get("label") or account["id"],
+                    )
+                return result.ok, result.status, result.error
+        # 2) Fallback — официальный MAX-бот
+        bot_sender = MaxBotSender()
+        if not bot_sender.available:
+            return False, "failed", "Нет готового MAX-аккаунта и MAX-бот не подключён"
+        result = await bot_sender.send(
             phone=phone,
             name=name,
             text=body,

@@ -163,6 +163,16 @@ const AdminAPI = (() => {
         method: "POST",
         body: JSON.stringify({ phone, code, password }),
       }),
+    maxUserbotStart: (phone) =>
+      request("/api/admin/accounts/max/userbot/start", {
+        method: "POST",
+        body: JSON.stringify({ phone }),
+      }),
+    maxUserbotConfirm: (phone, code, password) =>
+      request("/api/admin/accounts/max/userbot/confirm", {
+        method: "POST",
+        body: JSON.stringify({ phone, code, password }),
+      }),
     tgKeepalive: () =>
       request("/api/admin/accounts/telegram/keepalive", { method: "POST" }),
     tgCheckAccount: (id) =>

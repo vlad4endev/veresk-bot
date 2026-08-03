@@ -74,6 +74,13 @@ from senders.matching import (
     preview_mailing_match,
 )
 from senders.max_bot import get_max_bot_token, is_max_configured
+from senders.max_userbot import (
+    check_max_session,
+    confirm_max_login,
+    is_pymax_installed,
+    remove_max_session_file,
+    start_max_login,
+)
 from senders.telegram_userbot import (
     check_telegram_session,
     confirm_telegram_login,
@@ -542,7 +549,12 @@ async def handle_campaign_create(request: web.Request) -> web.Response:
     # Сверка клиентов с аккаунтами до постановки в очередь
     customers = await customers_for_segment(segment)
     tg_ready = await pick_ready_account("tg_userbot") if "tg" in ch_list else None
-    max_ok = is_max_configured() if "max" in ch_list else False
+    max_userbot = await pick_ready_account("max_userbot") if "max" in ch_list else None
+    max_ok = (
+        bool(max_userbot) or is_max_configured()
+        if "max" in ch_list
+        else False
+    )
     match = build_recipients_for_customers(
         customers,
         ch_list,
@@ -566,6 +578,8 @@ async def handle_campaign_create(request: web.Request) -> web.Response:
                     "accounts": {
                         "tg_ready": bool(tg_ready),
                         "max_ready": max_ok,
+                        "max_userbot": bool(max_userbot),
+                        "max_bot": is_max_configured(),
                     },
                 },
             },
@@ -690,14 +704,16 @@ async def handle_personal(request: web.Request) -> web.Response:
                 },
                 status=400,
             )
-    elif channel == "max" and not is_max_configured():
-        return _json(
-            {
-                "error": "no_max_account",
-                "message": "MAX-бот не подключён",
-            },
-            status=400,
-        )
+    elif channel == "max":
+        max_userbot = await pick_ready_account("max_userbot")
+        if not max_userbot and not is_max_configured():
+            return _json(
+                {
+                    "error": "no_max_account",
+                    "message": "Нет готового MAX-аккаунта и MAX-бот не подключён",
+                },
+                status=400,
+            )
     msg_id = await create_personal_message(customer_id, message, channel=channel)
     return _json({"ok": True, "id": msg_id, "channel": channel})
 
@@ -769,17 +785,21 @@ async def handle_accounts_list(request: web.Request) -> web.Response:
                     await update_send_account(int(a["id"]), label=live["label"])
                     entry["label"] = live["label"]
         items.append(entry)
-    # Заглушка MAX, если токена нет и аккаунта нет
-    has_max = any(a["kind"] == "max_bot" for a in rows)
+    # Заглушка MAX-бота, если токена нет в списке как max_bot-строка
+    has_max_bot_row = any(a["kind"] == "max_bot" for a in rows)
+    has_max_userbot = any(
+        a["kind"] == "max_userbot" and a.get("status") in ("ready", "warmup")
+        for a in rows
+    )
     max_ok = is_max_configured()
-    if not has_max:
+    if not has_max_bot_row:
         items.append(
             {
                 "id": None,
                 "kind": "max_bot",
-                "label": "Veresk в MAX",
+                "label": "Veresk в MAX (бот)",
                 "phone": "",
-                "phone_masked": "MAX",
+                "phone_masked": "MAX-бот",
                 "daily_limit": 150,
                 "sent_today": 0,
                 "status": "ready" if max_ok else "unavailable",
@@ -792,6 +812,8 @@ async def handle_accounts_list(request: web.Request) -> web.Response:
             "items": items,
             "telethon_configured": is_telethon_configured(),
             "max_configured": max_ok,
+            "max_userbot_ready": has_max_userbot,
+            "pymax_installed": is_pymax_installed(),
             "checked": check_live,
         }
     )
@@ -869,7 +891,7 @@ async def handle_telegram_connect_confirm(request: web.Request) -> web.Response:
 
 
 async def handle_telegram_account_check(request: web.Request) -> web.Response:
-    """Проверить живой коннект Telethon-аккаунта."""
+    """Проверить живой коннект Telegram / MAX userbot-аккаунта."""
     err = await _require_admin(request)
     if err:
         return err
@@ -880,10 +902,17 @@ async def handle_telegram_account_check(request: web.Request) -> web.Response:
     acc = await get_send_account(account_id)
     if not acc:
         return _json({"error": "not_found"}, status=404)
-    if acc.get("kind") != "tg_userbot":
-        return _json({"error": "not_telegram_account"}, status=400)
+    kind = acc.get("kind")
+    if kind not in ("tg_userbot", "max_userbot"):
+        return _json({"error": "unsupported_account"}, status=400)
 
-    live = await check_telegram_session(str(acc.get("session_file") or ""))
+    if kind == "max_userbot":
+        live = await check_max_session(
+            str(acc.get("session_file") or ""),
+            phone=str(acc.get("phone") or "") or None,
+        )
+    else:
+        live = await check_telegram_session(str(acc.get("session_file") or ""))
     authorized = bool(live.get("ok") and live.get("authorized"))
     now = datetime.now().isoformat(timespec="seconds")
     patch: dict[str, Any] = {
@@ -910,8 +939,10 @@ async def handle_telegram_account_check(request: web.Request) -> web.Response:
             "ok": authorized,
             "authorized": authorized,
             "account_id": account_id,
+            "kind": kind,
             "error": live.get("error"),
             "tg_id": live.get("tg_id"),
+            "max_user_id": live.get("max_user_id"),
             "username": live.get("username"),
             "label": live.get("label"),
             "phone": live.get("phone") or acc.get("phone"),
@@ -921,7 +952,7 @@ async def handle_telegram_account_check(request: web.Request) -> web.Response:
 
 
 async def handle_telegram_account_delete(request: web.Request) -> web.Response:
-    """Отключить Telegram-аккаунт: удалить запись и файл сессии."""
+    """Отключить Telegram/MAX userbot-аккаунт: удалить запись и файл сессии."""
     err = await _require_admin(request)
     if err:
         return err
@@ -932,23 +963,103 @@ async def handle_telegram_account_delete(request: web.Request) -> web.Response:
     acc = await get_send_account(account_id)
     if not acc:
         return _json({"error": "not_found"}, status=404)
-    if acc.get("kind") != "tg_userbot":
-        return _json({"error": "not_telegram_account"}, status=400)
+    kind = acc.get("kind")
+    if kind not in ("tg_userbot", "max_userbot"):
+        return _json({"error": "unsupported_account"}, status=400)
 
     deleted = await delete_send_account(account_id)
     if not deleted:
         return _json({"error": "not_found"}, status=404)
-    try:
-        from senders.telegram_chat import release_session
+    session_file = str(deleted.get("session_file") or "")
+    if kind == "tg_userbot":
+        try:
+            from senders.telegram_chat import release_session
 
-        await release_session(
-            session_file=str(deleted.get("session_file") or ""),
-            account_id=account_id,
+            await release_session(session_file=session_file, account_id=account_id)
+        except Exception:
+            logger.exception("release chat session failed for account %s", account_id)
+        remove_session_file(session_file)
+    else:
+        remove_max_session_file(session_file)
+    return _json({"ok": True, "id": account_id, "kind": kind})
+
+
+async def _register_max_userbot_account(result: dict[str, Any], phone: str) -> dict[str, Any]:
+    warmup = (datetime.now() + timedelta(days=4)).date().isoformat()
+    account_id = await create_send_account(
+        kind="max_userbot",
+        label=result.get("label") or phone,
+        phone=result.get("phone") or phone,
+        session_file=result.get("session_file") or "",
+        daily_limit=150,
+        status="warmup",
+        warmup_until=warmup,
+    )
+    live = await check_max_session(
+        str(result.get("session_file") or ""),
+        phone=str(result.get("phone") or phone),
+    )
+    return {
+        "ok": True,
+        "account_id": account_id,
+        "session_ok": bool(live.get("ok") and live.get("authorized")),
+        "session_error": live.get("error"),
+        "max_user_id": live.get("max_user_id") or result.get("max_user_id"),
+        **result,
+    }
+
+
+async def handle_max_userbot_connect_start(request: web.Request) -> web.Response:
+    err = await _require_admin(request)
+    if err:
+        return err
+    if not is_pymax_installed():
+        return _json(
+            {"ok": False, "error": "pymax_missing", "detail": "Установите maxapi-python≥2.3.0 (Python ≥3.10)"},
+            status=503,
         )
+    try:
+        body = await request.json()
     except Exception:
-        logger.exception("release chat session failed for account %s", account_id)
-    remove_session_file(str(deleted.get("session_file") or ""))
-    return _json({"ok": True, "id": account_id})
+        return _json({"error": "invalid_json"}, status=400)
+    phone = str(body.get("phone") or "").strip()
+    if not phone:
+        return _json({"error": "phone_required"}, status=400)
+    result = await start_max_login(phone)
+    if not result.get("ok"):
+        return _json(result, status=400)
+    if result.get("already_authorized"):
+        registered = await _register_max_userbot_account(result, phone)
+        return _json(registered)
+    return _json(result)
+
+
+async def handle_max_userbot_connect_confirm(request: web.Request) -> web.Response:
+    err = await _require_admin(request)
+    if err:
+        return err
+    try:
+        body = await request.json()
+    except Exception:
+        return _json({"error": "invalid_json"}, status=400)
+    phone = str(body.get("phone") or "").strip()
+    code = str(body.get("code") or "").strip()
+    password = body.get("password")
+    if not phone:
+        return _json({"error": "phone_required"}, status=400)
+    if not code and not password:
+        return _json({"error": "phone_and_code_required"}, status=400)
+    result = await confirm_max_login(
+        phone, code, password=str(password) if password else None
+    )
+    if not result.get("ok"):
+        status = 400
+        if result.get("need_2fa"):
+            status = 200
+        return _json(result, status=status)
+
+    registered = await _register_max_userbot_account(result, phone)
+    return _json(registered)
 
 
 async def handle_telegram_keepalive(request: web.Request) -> web.Response:
@@ -2903,6 +3014,8 @@ def setup_admin_routes(app: web.Application) -> None:
         ("/api/admin/accounts/telegram/start", handle_telegram_connect_start, "POST"),
         ("/api/admin/accounts/telegram/confirm", handle_telegram_connect_confirm, "POST"),
         ("/api/admin/accounts/telegram/keepalive", handle_telegram_keepalive, "POST"),
+        ("/api/admin/accounts/max/userbot/start", handle_max_userbot_connect_start, "POST"),
+        ("/api/admin/accounts/max/userbot/confirm", handle_max_userbot_connect_confirm, "POST"),
         ("/api/admin/accounts/{id}/check", handle_telegram_account_check, "POST"),
         ("/api/admin/accounts/{id}", handle_telegram_account_delete, "DELETE"),
         ("/api/admin/accounts/max/settings", handle_max_settings_get, "GET"),

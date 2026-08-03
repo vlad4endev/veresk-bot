@@ -163,7 +163,7 @@ def build_recipients_for_customers(
                 _skip("Нет готовых Telegram-аккаунтов", name)
                 continue
             if ch == "max" and not max_configured:
-                _skip("MAX-бот не подключён", name)
+                _skip("Нет готового MAX-аккаунта (личный или бот)", name)
                 continue
             ok, err = customer_can_receive(cust, ch)
             if not ok:
@@ -200,13 +200,21 @@ async def preview_mailing_match(
         for a in accounts
         if a.get("kind") == "tg_userbot" and a.get("status") in ("ready", "warmup")
     )
-    max_ok = is_max_configured()
+    max_userbot = await pick_ready_account("max_userbot")
+    max_userbot_count = sum(
+        1
+        for a in accounts
+        if a.get("kind") == "max_userbot" and a.get("status") in ("ready", "warmup")
+    )
+    max_bot_ok = is_max_configured()
+    max_ready = bool(max_userbot) or max_bot_ok
     match = build_recipients_for_customers(
         customers,
         channels,
         tg_accounts_ready=bool(tg_ready),
-        max_configured=max_ok,
+        max_configured=max_ready,
     )
+    max_mode = "userbot" if max_userbot else ("bot" if max_bot_ok else "none")
     return {
         "segment": segment or "all",
         "segment_total": match["segment_total"],
@@ -218,8 +226,13 @@ async def preview_mailing_match(
                 "label": (tg_ready or {}).get("label") if tg_ready else None,
             },
             "max": {
-                "ready": max_ok,
-                "configured": max_ok,
+                "ready": max_ready,
+                "configured": max_ready,
+                "mode": max_mode,
+                "userbot_ready": bool(max_userbot),
+                "userbot_count": max_userbot_count,
+                "bot_ready": max_bot_ok,
+                "label": (max_userbot or {}).get("label") if max_userbot else None,
             },
         },
         "reachable": match["reachable"],
