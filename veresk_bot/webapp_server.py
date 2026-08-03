@@ -302,5 +302,5 @@ async def start_webapp_server(redis, host: str, port: int, bot=None) -> web.AppR
     await runner.setup()
     site = web.TCPSite(runner, host, port)
     await site.start()
-    logger.info("🌐 API Mini App: http://%s:%s/api/", host, port)
+    logger.info("🌐 API Mini App: http://%s:%s/api/ (health /api/health)", host, port)
     return runner

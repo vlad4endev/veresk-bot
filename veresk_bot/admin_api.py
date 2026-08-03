@@ -4042,8 +4042,8 @@ def setup_admin_routes(app: web.Application) -> None:
         app.router.add_route(method, path, handler)
 
 
-async def on_admin_startup(_app: web.Application) -> None:
-    """Подписка на Max webhook (если MAX_WEBHOOK_URL задан)."""
+async def _admin_background_startup() -> None:
+    """Posiflora + MAX webhook — после того, как HTTP уже слушает порт."""
     try:
         from max_bot.webhook_runtime import (
             ensure_runtime,
@@ -4066,3 +4066,8 @@ async def on_admin_startup(_app: web.Application) -> None:
         await register_webhook_subscription()
     except Exception:
         logger.exception("MAX webhook startup failed")
+
+
+async def on_admin_startup(_app: web.Application) -> None:
+    """Не блокируем bind :3005 — иначе deploy/nginx ловят Connection refused / 502."""
+    asyncio.create_task(_admin_background_startup(), name="admin-background-startup")

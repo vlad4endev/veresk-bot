@@ -47,12 +47,9 @@ docker compose up -d --build
 docker compose up -d nginx
 docker compose exec -T nginx nginx -s reload 2>/dev/null || docker compose restart nginx
 
-echo "==> статус контейнеров"
-docker compose ps
-
-echo "==> ждём API (/api/health)"
+echo "==> ждём API (/api/health), до 90с"
 ready=0
-for i in $(seq 1 40); do
+for i in $(seq 1 90); do
   if curl -fsS --max-time 2 http://127.0.0.1:3005/api/health >/dev/null 2>&1; then
     echo "health_ok after ${i}s"
     ready=1
@@ -67,14 +64,22 @@ print('bot_direct_health=ok')
     echo "bot API жив, но nginx ещё не проксирует — reload nginx"
     docker compose exec -T nginx nginx -s reload 2>/dev/null || docker compose restart nginx
   fi
+  if (( i % 5 == 0 )); then
+    echo "  … ещё ждём (${i}s), bot=$(docker compose ps --status running --format '{{.Status}}' bot 2>/dev/null | head -1 || echo '?')"
+  fi
   sleep 1
 done
+
+echo "==> статус контейнеров"
+docker compose ps
+
 if [[ "$ready" -ne 1 ]]; then
-  echo "WARN: /api/health не ответил за 40с — смотрите логи ниже"
+  echo "WARN: /api/health не ответил за 90с — смотрите логи ниже"
 fi
 
 echo "==> проверка UI/API"
 curl -fsS http://127.0.0.1:3005/ | grep -oE 'api\.js\?v=[0-9]+' | head -1 || true
+curl -fsS http://127.0.0.1:3005/ | grep -oE 'app\.js\?v=[0-9]+' | head -1 || true
 docker compose exec -T bot python -c "
 import urllib.request
 req=urllib.request.Request('http://127.0.0.1:3005/api/admin/login', data=b'{\"username\":\"x\",\"password\":\"y\"}', headers={'Content-Type':'application/json'}, method='POST')
@@ -83,15 +88,25 @@ try:
 except Exception as e:
     print('bot_direct_login=', getattr(e, 'code', e))
 " 2>/dev/null || true
-curl -sS -o /dev/null -w "login_via_nginx=%{http_code}\n" \
+login_code="$(curl -sS -o /dev/null -w '%{http_code}' \
   -X POST http://127.0.0.1:3005/api/admin/login \
-  -H "Content-Type: application/json" \
-  -d '{"username":"x","password":"y"}' || true
+  -H 'Content-Type: application/json' \
+  -d '{"username":"x","password":"y"}' || echo fail)"
+echo "login_via_nginx=${login_code}"
+if [[ "$login_code" == "502" || "$login_code" == "000" || "$login_code" == "fail" ]]; then
+  echo "==> login ещё 502 — reload nginx и повтор через 3с"
+  docker compose exec -T nginx nginx -s reload 2>/dev/null || docker compose restart nginx
+  sleep 3
+  curl -sS -o /dev/null -w "login_via_nginx_retry=%{http_code}\n" \
+    -X POST http://127.0.0.1:3005/api/admin/login \
+    -H "Content-Type: application/json" \
+    -d '{"username":"x","password":"y"}' || true
+fi
 docker compose logs --tail=60 bot || true
 docker compose logs --tail=20 nginx || true
 
 echo "Готово. Снаружи:"
-echo "  curl -s https://admin.veresk-flowers.ru/ | grep -oE 'api.js\\?v=[0-9]+'"
+echo "  curl -s https://admin.veresk-flowers.ru/ | grep -oE 'api.js\\?v=[0-9]+|app.js\\?v=[0-9]+'"
 echo "  curl -s -o /dev/null -w '%{http_code}\\n' https://admin.veresk-flowers.ru/api/health"
 echo "  curl -s -o /dev/null -w '%{http_code}\\n' -X POST https://admin.veresk-flowers.ru/api/admin/login -H 'Content-Type: application/json' -d '{\"username\":\"x\",\"password\":\"y\"}'"
 echo "В браузере: Ctrl+Shift+R"
