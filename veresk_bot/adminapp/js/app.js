@@ -134,12 +134,25 @@
     $$(".bnav-item.bnav-create, .create-btn").forEach((el) => {
       el.hidden = !perms.home;
     });
+    const mtopSettings = $("#mtopSettings");
+    if (mtopSettings) mtopSettings.hidden = !(perms.settings || perms.access);
+    const settingsBotsLink = $("#settingsBotsLink");
+    if (settingsBotsLink) settingsBotsLink.hidden = !perms.bots;
     $$(".settings-tab").forEach((tab) => {
       const pane = tab.dataset.settings;
       if (pane === "users") tab.hidden = !perms.access;
       else tab.hidden = !perms.settings;
     });
   }
+
+  const HIDE_BNAV_TABS = new Set([
+    "compose",
+    "detail",
+    "personal",
+    "client",
+    "settings",
+    "bots",
+  ]);
 
   function go(tab) {
     if (tab === "accounts") tab = "settings";
@@ -153,7 +166,18 @@
       ({ compose: "home", detail: "home", personal: "home", client: "clients" })[tab] ||
       tab;
     navItems.forEach((n) => n.classList.toggle("active", n.dataset.nav === navKey));
-    document.body.classList.toggle("hide-bnav", tab === "compose");
+    document.body.classList.toggle("hide-bnav", HIDE_BNAV_TABS.has(tab));
+    const mtopHi = $(".mtop-hi");
+    const mtopSub = $(".mtop-sub");
+    if (mtopHi && mtopSub) {
+      if (tab === "clients") {
+        mtopHi.textContent = "Клиенты";
+        mtopSub.textContent = "База из Posiflora";
+      } else if (tab === "home") {
+        mtopHi.textContent = "Здравствуйте";
+        mtopSub.textContent = "Что отправим клиентам сегодня?";
+      }
+    }
     if (tab !== "chats") {
       document.body.classList.remove("tg-thread-open");
       $("#tgShell")?.classList.remove("thread-open");

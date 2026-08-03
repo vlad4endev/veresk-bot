@@ -122,8 +122,11 @@
   /* mobile top bar */
   .mtop{display:flex;align-items:center;gap:12px;margin-bottom:20px;}
   .mtop .logo{width:68px;margin:0;flex:none;}
+  .mtop-text{min-width:0;flex:1;}
   .mtop-hi{font-size:20px;letter-spacing:-.3px;line-height:1.2;}
   .mtop-sub{font-size:13px;color:var(--ink-2);margin-top:2px;font-family:var(--font);}
+  .mtop .spacer{flex:0 0 0;width:0;min-width:0;}
+  .mtop-settings{flex:none;margin-left:auto;}
   .icon-btn{width:42px;height:42px;border-radius:12px;border:1.5px solid var(--line);background:var(--surface);color:var(--ink-2);display:grid;place-items:center;}
   .icon-btn:hover{background:var(--surface-2);color:var(--ink);} .icon-btn svg{width:19px;height:19px;}
   .spacer{flex:1;}
@@ -500,14 +503,8 @@
   .hide-mob{display:none;} @media (min-width:900px){ th.hide-mob,td.hide-mob{display:table-cell;} }
   .who .nm{font-weight:600;} .who .h{color:var(--ink-3);font-size:12px;}
   .hint{font-size:13px;color:var(--ink-3);margin-top:14px;}
-  @media (max-width:899px){
-    .clients-tbl table{table-layout:auto;min-width:640px;}
-    .clients-tbl th:nth-child(1),.clients-tbl td:nth-child(1){width:auto;min-width:180px;}
-  }
   @media (max-width:560px){
     .clients-head #btnSync{width:100%;justify-content:center;}
-    .clients-tbl th,.clients-tbl td{padding:11px 10px;}
-    .cl-who-av{width:34px;height:34px;font-size:11.5px;}
   }
 
   /* accounts */
@@ -1690,6 +1687,7 @@
     margin-bottom:4px;
   }
   .settings-top .page-desc{margin-bottom:0;}
+  .settings-top-actions{display:flex;flex-wrap:wrap;gap:10px;align-items:center;}
   .settings-glance{display:flex;flex-wrap:wrap;gap:8px;align-items:center;}
   .glance-chip{
     display:inline-flex;align-items:center;gap:7px;
@@ -1933,3 +1931,193 @@
   .status-pill.err{background:#f7ded6;color:#c0492f;}
   .status-pill.muted{background:var(--surface-2);color:var(--ink-3);}
   .btn.tiny{padding:6px 10px;font-size:12.5px;border-radius:10px;}
+
+  /* ===== Deep mobile adaptation (v37) ===== */
+  @media (max-width:899px){
+    /* Hide greeting bar on focused / fullscreen screens */
+    body.hide-bnav .mtop,
+    body:has(#chats.active) .mtop,
+    body:has(#aichat.active) .mtop{
+      display:none !important;
+    }
+
+    /* iOS: prevent input zoom (needs ≥16px) */
+    input,select,textarea,
+    .searchbox input,
+    .textarea,
+    .ai-prompt,
+    .login-card input,
+    .acct-form input,
+    .set-block > input,
+    .set-details-body input,
+    .integ-ai-form input,
+    .datebox input,
+    .tg-search input,
+    .tg-composer textarea,
+    .ai-composer textarea{
+      font-size:16px !important;
+    }
+
+    /* —— Clients: card list instead of wide table —— */
+    .clients-tbl{
+      border:none;background:transparent;box-shadow:none;overflow:visible;
+    }
+    .clients-tbl table{
+      table-layout:auto;min-width:0;width:100%;
+      border-collapse:separate;border-spacing:0 10px;
+    }
+    .clients-tbl thead{display:none;}
+    .clients-tbl tbody tr[data-id]{
+      display:grid;
+      grid-template-columns:minmax(0,1fr) auto auto;
+      grid-template-areas:
+        "who who chev"
+        "seg ch chev"
+        "event event event";
+      gap:8px 10px;
+      align-items:center;
+      padding:14px 14px;
+      background:var(--surface);
+      border:1px solid var(--line);
+      border-radius:var(--radius);
+      box-shadow:var(--shadow);
+      min-height:64px;
+      touch-action:manipulation;
+      -webkit-tap-highlight-color:transparent;
+    }
+    .clients-tbl tbody tr[data-id]:active{background:var(--accent-soft);}
+    .clients-tbl tbody tr[data-id]:hover{background:var(--surface);}
+    .clients-tbl tbody tr[data-id] td{
+      border:none;padding:0;width:auto;min-width:0;
+      display:block;
+    }
+    .clients-tbl tbody tr[data-id] td:nth-child(1){grid-area:who;}
+    .clients-tbl tbody tr[data-id] td:nth-child(2){grid-area:seg;}
+    .clients-tbl tbody tr[data-id] td:nth-child(3){grid-area:ch;justify-self:end;}
+    .clients-tbl tbody tr[data-id] td:nth-child(4){display:none;}
+    .clients-tbl tbody tr[data-id] td:nth-child(5){grid-area:event;}
+    .clients-tbl tbody tr[data-id] td.cl-chev{
+      grid-area:chev;align-self:center;opacity:.55;text-align:center;
+    }
+    .clients-tbl tbody tr[data-id] td.cl-chev svg{width:18px;height:18px;}
+    .clients-tbl .cl-who-av{width:42px;height:42px;font-size:13px;}
+    .clients-tbl .cl-who .nm{font-size:15.5px;white-space:normal;}
+    .clients-tbl .cl-who .ph{font-size:13px;}
+    .clients-tbl tbody tr:not([data-id]){
+      display:block;background:var(--surface);border:1px solid var(--line);
+      border-radius:var(--radius);padding:8px;box-shadow:var(--shadow);
+    }
+    .clients-tbl tbody tr:not([data-id]) td{
+      display:block;border:none;padding:0;
+    }
+
+    /* Client / detail order & message tables → stacked cards */
+    #client .tbl-wrap,#detail .tbl-wrap,#detailBody .tbl-wrap{
+      border:none;background:transparent;box-shadow:none;overflow:visible;
+    }
+    #client .tbl-wrap table,#detail .tbl-wrap table,#detailBody .tbl-wrap table{
+      min-width:0;border-collapse:separate;border-spacing:0 8px;
+    }
+    #client .tbl-wrap thead,#detail .tbl-wrap thead,#detailBody .tbl-wrap thead{display:none;}
+    #client .tbl-wrap tbody tr,#detail .tbl-wrap tbody tr,#detailBody .tbl-wrap tbody tr{
+      display:flex;flex-wrap:wrap;gap:6px 12px;align-items:baseline;
+      padding:12px 14px;background:var(--surface);border:1px solid var(--line);
+      border-radius:12px;box-shadow:var(--shadow);
+    }
+    #client .tbl-wrap tbody td,#detail .tbl-wrap tbody td,#detailBody .tbl-wrap tbody td{
+      border:none;padding:0;width:auto;
+    }
+    #client .tbl-wrap tbody td.hide-mob,
+    #detail .tbl-wrap tbody td.hide-mob,
+    #detailBody .tbl-wrap tbody td.hide-mob{display:none;}
+
+    /* AI chat: fullscreen messenger */
+    body:has(#aichat.active) .main{
+      padding:0 0 calc(64px + env(safe-area-inset-bottom,0px));
+      overflow:hidden;
+    }
+    body:has(#aichat.active) .main-inner{
+      max-width:none;margin:0;
+      height:calc(100dvh - 64px - env(safe-area-inset-bottom,0px));
+      display:flex;flex-direction:column;
+    }
+    #aichat.active{
+      display:flex;flex-direction:column;gap:0;
+      width:100%;height:100%;min-height:0;padding:0;
+    }
+    #aichat .back{display:none !important;}
+    #aichat .ai-head{
+      flex:none;margin:0;padding:12px 14px 10px;
+      padding-top:max(12px, env(safe-area-inset-top,0px));
+      background:var(--surface);border-bottom:1px solid var(--line);
+      gap:10px;
+    }
+    #aichat .ai-head .page-title{font-size:20px;margin:0;}
+    #aichat .ai-head .page-desc{font-size:13px;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;}
+    #aichat .ai-shell{
+      flex:1;min-height:0;border:none;border-radius:0;box-shadow:none;
+      display:flex;flex-direction:column;
+    }
+    #aichat .ai-messages{
+      flex:1;min-height:0;overflow-y:auto;
+      -webkit-overflow-scrolling:touch;overscroll-behavior:contain;
+      padding:14px 12px 12px;
+    }
+    #aichat .ai-shell > .ai-chips{
+      flex:none;display:flex;flex-wrap:nowrap;gap:8px;
+      overflow-x:auto;-webkit-overflow-scrolling:touch;scrollbar-width:none;
+      padding:8px 12px;border-top:1px solid var(--line);
+    }
+    #aichat .ai-shell > .ai-chips::-webkit-scrollbar{display:none;}
+    #aichat .ai-shell > .ai-chips .ai-chip{flex:none;white-space:nowrap;min-height:36px;}
+    #aichat .ai-composer{
+      flex:none;padding:8px 10px calc(10px + env(safe-area-inset-bottom,0px));
+      box-shadow:0 -4px 16px rgba(42,33,64,.06);
+      gap:8px;
+    }
+    #aichat .ai-composer textarea{
+      min-height:44px;border-radius:20px;padding:11px 14px;
+    }
+    #aichat .ai-hint{padding:0 14px 10px;}
+    #aichat .ai-msg{max-width:min(94%,480px);}
+    #aichat .ai-bubble{font-size:15px;padding:10px 12px;}
+
+    /* Secondary screens without bottom nav: more breathing room */
+    body.hide-bnav .main{
+      padding-bottom:calc(24px + env(safe-area-inset-bottom,0px));
+    }
+    body.hide-bnav .wnav{
+      bottom:0;
+      padding-bottom:calc(10px + env(safe-area-inset-bottom,0px));
+    }
+
+    /* Login */
+    .login-card{padding:clamp(22px,5vw,28px) clamp(18px,4.5vw,24px);}
+    .login-submit{min-height:48px;}
+    .pass-toggle{width:44px;height:44px;}
+
+    /* Compose choices & channels full width */
+    .chan-toggles{flex-direction:column;}
+    .chan-toggle{width:100%;min-width:0;min-height:52px;}
+
+    /* Bots header */
+    .bots-head{flex-direction:column;align-items:stretch;}
+    .bots-head .btn{width:100%;justify-content:center;}
+    .bot-card-meta{max-width:100%;}
+    .bot-card-metrics{grid-template-columns:repeat(3,minmax(0,1fr));gap:8px;}
+    .bot-card-metrics .n{font-size:18px;}
+
+    /* Detail stats */
+    .dstrip .stat{min-width:calc(50% - 6px);}
+  }
+
+  @media (max-width:560px){
+    .kpi{padding:12px 14px;}
+    .kpi .n{font-size:20px;}
+    .hero{padding:16px;gap:12px;}
+    .hero .ht{font-size:16.5px;}
+    .bnav-item{font-size:10px;padding:5px 2px 3px;}
+    .bnav-item svg{width:21px;height:21px;}
+    .bnav-plus{width:46px;height:46px;border-radius:15px;}
+    #aichat .ai-head .page-desc{display:none;}
+  }
