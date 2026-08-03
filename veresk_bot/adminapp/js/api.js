@@ -137,5 +137,29 @@ const AdminAPI = (() => {
         method: "POST",
         body: JSON.stringify(body),
       }),
+    chatAccounts: () => request("/api/admin/chats/accounts"),
+    chatDialogs: (params = {}) => {
+      const q = new URLSearchParams(params).toString();
+      return request("/api/admin/chats/dialogs" + (q ? "?" + q : ""));
+    },
+    chatMessages: (peerId, params = {}) => {
+      const q = new URLSearchParams(params).toString();
+      return request(
+        "/api/admin/chats/dialogs/" +
+          encodeURIComponent(peerId) +
+          "/messages" +
+          (q ? "?" + q : "")
+      );
+    },
+    chatSend: (peerId, body) =>
+      request("/api/admin/chats/dialogs/" + encodeURIComponent(peerId) + "/send", {
+        method: "POST",
+        body: JSON.stringify(body),
+      }),
+    chatCreate: (body) =>
+      request("/api/admin/chats/dialogs", {
+        method: "POST",
+        body: JSON.stringify(body),
+      }),
   };
 })();
