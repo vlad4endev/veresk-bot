@@ -25,13 +25,22 @@ admin.veresk-flowers.ru  →  IP вашего сервера
 
 ## 2. Код на сервере
 
-Если бот уже крутится в Docker — обновите код и пересоберите:
+Репозиторий на GitHub содержит вложенную папку `veresk_bot/`. После клона путь часто такой:
+
+```text
+~/veresk/veresk_bot/           ← корень git, иногда старый compose + .env
+~/veresk/veresk_bot/veresk_bot/ ← актуальный код, deploy.sh, docker-compose.yml
+```
+
+**Деплой всегда из внутренней папки** (где лежат `deploy.sh` и свежий `adminapp/`):
 
 ```bash
-cd /path/to/veresk_bot   # каталог с docker-compose.yml и adminapp/
+cd ~/veresk/veresk_bot/veresk_bot
+# один раз: остановить старый стек снаружи, если он слушает :3005
+cd .. && docker compose down 2>/dev/null; cd veresk_bot
+
 chmod +x deploy.sh && ./deploy.sh
-# или вручную:
-# git pull && docker compose up -d --build
+# скрипт сам подхватит ../.env, ../data, ../logs при необходимости
 ```
 
 **Проверка, что выкатилось (иначе UI останется на старом `api.js?v=26`):**
@@ -41,9 +50,9 @@ curl -s https://admin.veresk-flowers.ru/ | grep -oE 'api.js\?v=[0-9]+|max-login-
 # ожидается: api.js?v=31  и  max-login-v31
 ```
 
-Если видите `v=26` — `git pull` сделан не в той папке, откуда nginx монтирует `./adminapp`.
+Если видите `v=26` — Docker/nginx запущены из **внешней** папки со старым `adminapp`, а не из `.../veresk_bot/veresk_bot`.
 
-Сохраните `./data/` (SQLite, сессии Telethon) и текущий `.env`.
+Сохраните `./data/` (SQLite, сессии) и `.env`.
 
 ---
 
