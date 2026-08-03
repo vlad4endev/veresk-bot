@@ -1,9 +1,10 @@
 # HTTPS для admin.veresk-flowers.ru (контейнер nginx).
+# Админка на /, Mini App на /miniapp/, API на /api/
 # Использование:
 #   1. Положите fullchain.pem и privkey.pem в ./ssl/
 #   2. cp nginx.ssl.conf.example nginx.conf
 #   3. В docker-compose раскомментируйте порты 80/443 и volume ./ssl
-# Альтернатива: SSL на хосте (certbot) и прокси на :3005 — см. nginx.host-proxy.conf.example
+# Альтернатива: SSL на хосте / NPM → :3005
 
 server {
     listen 80;
@@ -33,15 +34,11 @@ server {
         add_header Cache-Control "no-cache, no-store, must-revalidate";
     }
 
-    location /admin/ {
-        root /usr/share/nginx/html;
-        try_files $uri $uri/ /admin/index.html;
-        add_header Cache-Control "no-cache, no-store, must-revalidate";
+    location = /admin {
+        return 301 /;
     }
-
-    location ~* /admin/.*\.(css|js)$ {
-        root /usr/share/nginx/html;
-        add_header Cache-Control "no-cache, no-store, must-revalidate";
+    location /admin/ {
+        rewrite ^/admin/(.*)$ /$1 permanent;
     }
 
     location /api/admin/max-chats/events {
@@ -69,8 +66,9 @@ server {
         proxy_set_header Authorization $http_authorization;
     }
 
-    # редирект корня на админку
-    location = / {
-        return 302 /admin/;
+    location / {
+        root /usr/share/nginx/html/admin;
+        try_files $uri $uri/ /index.html;
+        add_header Cache-Control "no-cache, no-store, must-revalidate";
     }
 }
