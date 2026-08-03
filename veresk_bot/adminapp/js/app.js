@@ -3678,26 +3678,17 @@
       btn.classList.toggle("on", on);
       btn.setAttribute("aria-selected", on ? "true" : "false");
     });
-    const desc = $("#chatsPageDesc");
     const emptyHint = $("#tgThreadEmptyHint");
     const maxLabel = $("#maxAccountLabel");
     const input = $("#tgInput");
     const onlyWrap = $("#tgOnlyUsersWrap");
     if (isMaxChannel()) {
       if (isMaxUserbot()) {
-        if (desc)
-          desc.textContent =
-            "Переписка с личного номера MAX. Группы и каналы можно скрыть фильтром.";
-        if (emptyHint)
-          emptyHint.textContent =
-            "Слева — диалоги аккаунта MAX. Можно писать клиентам так же, как в мессенджере.";
+        if (emptyHint) emptyHint.textContent = "Диалоги аккаунта MAX слева";
         if (maxLabel) maxLabel.hidden = true;
         if (onlyWrap) onlyWrap.hidden = false;
       } else {
-        if (desc) desc.textContent = "Переписка клиентов с MAX-ботом. Отвечайте прямо отсюда.";
-        if (emptyHint)
-          emptyHint.textContent =
-            "Слева — кто писал боту или заполнил анкету. Ответ уйдёт в личный чат MAX.";
+        if (emptyHint) emptyHint.textContent = "Кто писал боту — слева";
         if (maxLabel) {
           maxLabel.hidden = false;
           maxLabel.textContent = tgState.maxLabel || "MAX-бот";
@@ -3709,16 +3700,11 @@
         input.maxLength = 4000;
       }
     } else {
-      if (desc)
-        desc.textContent =
-          "Переписка с клиентами из Telegram. Группы и каналы можно скрыть фильтром.";
-      if (emptyHint)
-        emptyHint.textContent =
-          "Слева — все диалоги аккаунта. Можно писать клиентам так же, как в Telegram.";
+      if (emptyHint) emptyHint.textContent = "Список диалогов слева";
       if (maxLabel) maxLabel.hidden = true;
       if (onlyWrap) onlyWrap.hidden = false;
       if (input) {
-        input.placeholder = "Сообщение или подпись…";
+        input.placeholder = "Сообщение…";
         input.maxLength = 4096;
       }
     }
