@@ -168,6 +168,33 @@ async def check_telegram_session(session_file: str) -> dict[str, Any]:
         }
 
     try:
+        from senders.telegram_chat import telegram_session
+    except ImportError:
+        telegram_session = None  # type: ignore[assignment]
+
+    if telegram_session is not None:
+        try:
+            async with telegram_session(session_file) as client:
+                me = await client.get_me()
+                username = getattr(me, "username", None) if me else None
+                first = getattr(me, "first_name", None) if me else None
+                last = getattr(me, "last_name", None) if me else None
+                label = " ".join(filter(None, [first, last])) or None
+                return {
+                    "ok": True,
+                    "authorized": True,
+                    "tg_id": getattr(me, "id", None) if me else None,
+                    "username": username,
+                    "label": label,
+                    "phone": getattr(me, "phone", None) if me else None,
+                }
+        except asyncio.TimeoutError:
+            return {"ok": False, "authorized": False, "error": "Таймаут подключения к Telegram"}
+        except Exception as exc:
+            logger.exception("check_telegram_session failed")
+            return {"ok": False, "authorized": False, "error": str(exc)}
+
+    try:
         from telethon import TelegramClient
     except ImportError:
         return {"ok": False, "authorized": False, "error": "telethon не установлен"}
@@ -264,33 +291,33 @@ class TelegramUserbotSender:
             from telethon.tl.functions.contacts import ImportContactsRequest
             from telethon.tl.types import InputPhoneContact
             from telethon.errors import FloodWaitError
+            from senders.telegram_chat import telegram_session
         except ImportError:
             return SendResult(ok=False, status="failed", error="telethon не установлен")
 
         phone_norm = _normalize_phone(phone)
         try:
-            client = await self._get_client()
-            contact = InputPhoneContact(
-                client_id=0,
-                phone=phone_norm,
-                first_name=name.split()[0] if name else "Клиент",
-                last_name=" ".join(name.split()[1:]) if name and len(name.split()) > 1 else "",
-            )
-            result = await client(ImportContactsRequest([contact]))
-            user = None
-            if result.users:
-                user = result.users[0]
-            if not user:
-                # Попробуем напрямую по телефону
-                try:
-                    user = await client.get_entity(phone_norm)
-                except Exception:
-                    return SendResult(
-                        ok=False,
-                        status="failed",
-                        error="Не удалось найти пользователя по телефону",
-                    )
-            await client.send_message(user, text)
+            async with telegram_session(self.session_file, self.account_id) as client:
+                contact = InputPhoneContact(
+                    client_id=0,
+                    phone=phone_norm,
+                    first_name=name.split()[0] if name else "Клиент",
+                    last_name=" ".join(name.split()[1:]) if name and len(name.split()) > 1 else "",
+                )
+                result = await client(ImportContactsRequest([contact]))
+                user = None
+                if result.users:
+                    user = result.users[0]
+                if not user:
+                    try:
+                        user = await client.get_entity(phone_norm)
+                    except Exception:
+                        return SendResult(
+                            ok=False,
+                            status="failed",
+                            error="Не удалось найти пользователя по телефону",
+                        )
+                await client.send_message(user, text)
             return SendResult(ok=True, status="sent")
         except FloodWaitError as exc:
             wait = int(getattr(exc, "seconds", 60))
@@ -302,9 +329,10 @@ class TelegramUserbotSender:
             return SendResult(ok=False, status="failed", error=str(exc))
 
     async def disconnect(self) -> None:
-        if self._client:
-            try:
-                await self._client.disconnect()
-            except Exception:
-                pass
-            self._client = None
+        from senders.telegram_chat import release_session
+
+        await release_session(
+            session_file=self.session_file,
+            account_id=self.account_id,
+        )
+        self._client = None

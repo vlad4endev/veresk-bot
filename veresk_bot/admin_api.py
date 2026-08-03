@@ -191,7 +191,7 @@ async def handle_logout(request: web.Request) -> web.Response:
 
 async def handle_me(request: web.Request) -> web.Response:
     err = await _require_admin(request)
-    if err:
+    if err is not None:
         return err
     token = _extract_token(request)
     expires_at = await touch_admin_session(token) if token else None
@@ -213,7 +213,7 @@ async def handle_me(request: web.Request) -> web.Response:
 
 async def handle_stats(request: web.Request) -> web.Response:
     err = await _require_admin(request)
-    if err:
+    if err is not None:
         return err
     stats = await get_stats()
     sync = last_sync_info()
@@ -222,7 +222,7 @@ async def handle_stats(request: web.Request) -> web.Response:
 
 async def handle_sync(request: web.Request) -> web.Response:
     err = await _require_admin(request)
-    if err:
+    if err is not None:
         return err
     result = await sync_from_posiflora()
     status = 200 if result.get("ok") else 502
@@ -234,7 +234,7 @@ async def handle_sync(request: web.Request) -> web.Response:
 
 async def handle_clients_list(request: web.Request) -> web.Response:
     err = await _require_admin(request)
-    if err:
+    if err is not None:
         return err
     segment = request.query.get("segment") or None
     if segment == "all":
@@ -293,7 +293,7 @@ async def handle_clients_list(request: web.Request) -> web.Response:
 
 async def handle_client_detail(request: web.Request) -> web.Response:
     err = await _require_admin(request)
-    if err:
+    if err is not None:
         return err
     try:
         customer_id = int(request.match_info["id"])
@@ -356,7 +356,7 @@ async def handle_client_detail(request: web.Request) -> web.Response:
 
 async def handle_events_upcoming(request: web.Request) -> web.Response:
     err = await _require_admin(request)
-    if err:
+    if err is not None:
         return err
     days = int(request.query.get("days", "14"))
     events = await list_upcoming_events(days=days)
@@ -389,7 +389,7 @@ async def handle_events_upcoming(request: web.Request) -> web.Response:
 
 async def handle_event_patch(request: web.Request) -> web.Response:
     err = await _require_admin(request)
-    if err:
+    if err is not None:
         return err
     try:
         event_id = int(request.match_info["id"])
@@ -454,7 +454,7 @@ def _campaign_public(c: dict) -> dict:
 
 async def handle_campaigns_list(request: web.Request) -> web.Response:
     err = await _require_admin(request)
-    if err:
+    if err is not None:
         return err
     rows = await list_campaigns()
     return _json({"items": [_campaign_public(c) for c in rows]})
@@ -462,7 +462,7 @@ async def handle_campaigns_list(request: web.Request) -> web.Response:
 
 async def handle_campaign_get(request: web.Request) -> web.Response:
     err = await _require_admin(request)
-    if err:
+    if err is not None:
         return err
     try:
         cid = int(request.match_info["id"])
@@ -476,7 +476,7 @@ async def handle_campaign_get(request: web.Request) -> web.Response:
 
 async def handle_campaign_create(request: web.Request) -> web.Response:
     err = await _require_admin(request)
-    if err:
+    if err is not None:
         return err
     try:
         body = await request.json()
@@ -529,7 +529,7 @@ async def handle_campaign_create(request: web.Request) -> web.Response:
 
 async def handle_campaign_patch(request: web.Request) -> web.Response:
     err = await _require_admin(request)
-    if err:
+    if err is not None:
         return err
     try:
         cid = int(request.match_info["id"])
@@ -555,7 +555,7 @@ async def handle_campaign_patch(request: web.Request) -> web.Response:
 
 async def handle_campaign_recipients(request: web.Request) -> web.Response:
     err = await _require_admin(request)
-    if err:
+    if err is not None:
         return err
     try:
         cid = int(request.match_info["id"])
@@ -588,7 +588,7 @@ async def handle_campaign_recipients(request: web.Request) -> web.Response:
 
 async def handle_personal(request: web.Request) -> web.Response:
     err = await _require_admin(request)
-    if err:
+    if err is not None:
         return err
     try:
         body = await request.json()
@@ -618,7 +618,7 @@ async def handle_personal(request: web.Request) -> web.Response:
 
 async def handle_accounts_list(request: web.Request) -> web.Response:
     err = await _require_admin(request)
-    if err:
+    if err is not None:
         return err
     rows = await list_send_accounts()
     check_live = request.query.get("check") == "1"
@@ -710,7 +710,7 @@ async def handle_accounts_list(request: web.Request) -> web.Response:
 
 async def handle_telegram_connect_start(request: web.Request) -> web.Response:
     err = await _require_admin(request)
-    if err:
+    if err is not None:
         return err
     try:
         body = await request.json()
@@ -726,7 +726,7 @@ async def handle_telegram_connect_start(request: web.Request) -> web.Response:
 
 async def handle_telegram_connect_confirm(request: web.Request) -> web.Response:
     err = await _require_admin(request)
-    if err:
+    if err is not None:
         return err
     try:
         body = await request.json()
@@ -773,7 +773,7 @@ async def handle_telegram_connect_confirm(request: web.Request) -> web.Response:
 async def handle_telegram_account_check(request: web.Request) -> web.Response:
     """Проверить живой коннект Telethon-аккаунта."""
     err = await _require_admin(request)
-    if err:
+    if err is not None:
         return err
     try:
         account_id = int(request.match_info["id"])
@@ -825,7 +825,7 @@ async def handle_telegram_account_check(request: web.Request) -> web.Response:
 async def handle_telegram_account_delete(request: web.Request) -> web.Response:
     """Отключить Telegram-аккаунт: удалить запись и файл сессии."""
     err = await _require_admin(request)
-    if err:
+    if err is not None:
         return err
     try:
         account_id = int(request.match_info["id"])
@@ -840,6 +840,15 @@ async def handle_telegram_account_delete(request: web.Request) -> web.Response:
     deleted = await delete_send_account(account_id)
     if not deleted:
         return _json({"error": "not_found"}, status=404)
+    try:
+        from senders.telegram_chat import release_session
+
+        await release_session(
+            session_file=str(deleted.get("session_file") or ""),
+            account_id=account_id,
+        )
+    except Exception:
+        logger.exception("release chat session failed for account %s", account_id)
     remove_session_file(str(deleted.get("session_file") or ""))
     return _json({"ok": True, "id": account_id})
 
@@ -847,7 +856,7 @@ async def handle_telegram_account_delete(request: web.Request) -> web.Response:
 async def handle_telegram_keepalive(request: web.Request) -> web.Response:
     """Принудительно продлить/проверить все Telegram-сессии."""
     err = await _require_admin(request)
-    if err:
+    if err is not None:
         return err
     from senders.session_keepalive import keepalive_all_telegram_sessions
 
@@ -857,7 +866,7 @@ async def handle_telegram_keepalive(request: web.Request) -> web.Response:
 
 async def handle_telegram_settings_get(request: web.Request) -> web.Response:
     err = await _require_admin(request)
-    if err:
+    if err is not None:
         return err
     api_id, api_hash = get_api_credentials()
     from_env = bool(runtime_settings.get("telegram_api_id")) is False and bool(api_id)
@@ -873,7 +882,7 @@ async def handle_telegram_settings_get(request: web.Request) -> web.Response:
 
 async def handle_telegram_settings_save(request: web.Request) -> web.Response:
     err = await _require_admin(request)
-    if err:
+    if err is not None:
         return err
     try:
         body = await request.json()
@@ -905,7 +914,7 @@ def _mask_token(token: str) -> str:
 
 async def handle_max_settings_get(request: web.Request) -> web.Response:
     err = await _require_admin(request)
-    if err:
+    if err is not None:
         return err
     token = get_max_bot_token()
     from_panel = bool(runtime_settings.get("max_bot_token"))
@@ -940,7 +949,7 @@ async def handle_max_settings_get(request: web.Request) -> web.Response:
 
 async def handle_max_settings_save(request: web.Request) -> web.Response:
     err = await _require_admin(request)
-    if err:
+    if err is not None:
         return err
     try:
         body = await request.json()
@@ -994,7 +1003,7 @@ async def handle_max_settings_save(request: web.Request) -> web.Response:
 
 async def handle_segment_counts(request: web.Request) -> web.Response:
     err = await _require_admin(request)
-    if err:
+    if err is not None:
         return err
     return _json(
         {
@@ -1009,7 +1018,7 @@ async def handle_segment_counts(request: web.Request) -> web.Response:
 async def handle_ai_compose(request: web.Request) -> web.Response:
     """POST /api/admin/ai/compose — сгенерировать текст рассылки."""
     err = await _require_admin(request)
-    if err:
+    if err is not None:
         return err
     if not is_ai_configured():
         return _json(
@@ -1049,7 +1058,7 @@ async def handle_ai_compose(request: web.Request) -> web.Response:
 
 async def handle_ai_settings_get(request: web.Request) -> web.Response:
     err = await _require_admin(request)
-    if err:
+    if err is not None:
         return err
     return _json(ai_settings_public())
 
@@ -1057,7 +1066,7 @@ async def handle_ai_settings_get(request: web.Request) -> web.Response:
 async def handle_ai_settings_save(request: web.Request) -> web.Response:
     """POST /api/admin/ai/settings — сохранить или сбросить настройки ИИ."""
     err = await _require_admin(request)
-    if err:
+    if err is not None:
         return err
     try:
         body = await request.json()
@@ -1258,7 +1267,7 @@ def _resolve_bot_status(
 async def handle_bots_status(request: web.Request) -> web.Response:
     """GET /api/admin/bots/status — статус TG/MAX + запуски и анкеты."""
     err = await _require_admin(request)
-    if err:
+    if err is not None:
         return err
 
     await init_bot_metrics()
@@ -1316,6 +1325,260 @@ async def handle_bots_status(request: web.Request) -> web.Response:
     )
 
 
+# ── Telegram chats (live userbot inbox) ─────────────────────────────────────
+
+
+async def _resolve_chat_account(
+    request: web.Request,
+) -> tuple[dict[str, Any] | None, web.Response | None]:
+    """account_id из query/body; если один tg-аккаунт — берём его."""
+    raw = request.query.get("account_id")
+    if raw in (None, ""):
+        body = getattr(request, "_chat_body", None)
+        if isinstance(body, dict):
+            raw = body.get("account_id")
+
+    rows = [
+        a
+        for a in await list_send_accounts()
+        if a.get("kind") == "tg_userbot" and a.get("session_file")
+    ]
+    if not rows:
+        return None, _json(
+            {
+                "error": "no_telegram_accounts",
+                "message": "Подключите Telegram-аккаунт в Настройках",
+            },
+            status=400,
+        )
+
+    if raw in (None, ""):
+        if len(rows) == 1:
+            return rows[0], None
+        return None, _json(
+            {
+                "error": "account_id_required",
+                "message": "Выберите Telegram-аккаунт",
+                "accounts": [
+                    {
+                        "id": a["id"],
+                        "label": a.get("label") or a.get("phone"),
+                        "phone": a.get("phone"),
+                        "status": a.get("status"),
+                    }
+                    for a in rows
+                ],
+            },
+            status=400,
+        )
+
+    try:
+        account_id = int(raw)
+    except (TypeError, ValueError):
+        return None, _json({"error": "invalid_account_id"}, status=400)
+
+    acc = await get_send_account(account_id)
+    if not acc or acc.get("kind") != "tg_userbot" or not acc.get("session_file"):
+        return None, _json({"error": "account_not_found"}, status=404)
+    return acc, None
+
+
+async def handle_chats_accounts(request: web.Request) -> web.Response:
+    err = await _require_admin(request)
+    if err is not None:
+        return err
+    rows = await list_send_accounts()
+    items = []
+    for a in rows:
+        if a.get("kind") != "tg_userbot" or not a.get("session_file"):
+            continue
+        items.append(
+            {
+                "id": a["id"],
+                "label": a.get("label") or a.get("phone") or f"Аккаунт {a['id']}",
+                "phone": a.get("phone"),
+                "status": a.get("status"),
+                "phone_masked": _mask_phone(a["phone"]) if a.get("phone") else None,
+            }
+        )
+    return _json(
+        {
+            "items": items,
+            "telethon_configured": is_telethon_configured(),
+        }
+    )
+
+
+async def handle_chats_dialogs(request: web.Request) -> web.Response:
+    err = await _require_admin(request)
+    if err is not None:
+        return err
+    acc, acc_err = await _resolve_chat_account(request)
+    if acc_err is not None:
+        return acc_err
+    assert acc is not None
+    try:
+        limit = int(request.query.get("limit") or 80)
+    except (TypeError, ValueError):
+        limit = 80
+    query = str(request.query.get("q") or "").strip()
+    from senders.telegram_chat import list_dialogs
+
+    try:
+        items = await list_dialogs(
+            str(acc["session_file"]),
+            account_id=int(acc["id"]),
+            limit=limit,
+            query=query,
+        )
+    except Exception as exc:
+        logger.exception("list dialogs failed")
+        return _json({"error": str(exc)}, status=502)
+    return _json(
+        {
+            "account_id": int(acc["id"]),
+            "account_label": acc.get("label") or acc.get("phone"),
+            "items": items,
+        }
+    )
+
+
+async def handle_chats_messages(request: web.Request) -> web.Response:
+    err = await _require_admin(request)
+    if err is not None:
+        return err
+    acc, acc_err = await _resolve_chat_account(request)
+    if acc_err is not None:
+        return acc_err
+    assert acc is not None
+    try:
+        peer_id = int(request.match_info["peer_id"])
+    except (KeyError, TypeError, ValueError):
+        return _json({"error": "invalid_peer_id"}, status=400)
+    try:
+        limit = int(request.query.get("limit") or 50)
+    except (TypeError, ValueError):
+        limit = 50
+    try:
+        offset_id = int(request.query.get("offset_id") or 0)
+    except (TypeError, ValueError):
+        offset_id = 0
+    mark_read = request.query.get("mark_read", "1") != "0"
+    from senders.telegram_chat import get_dialog_messages
+
+    try:
+        data = await get_dialog_messages(
+            str(acc["session_file"]),
+            peer_id,
+            account_id=int(acc["id"]),
+            limit=limit,
+            offset_id=offset_id,
+            mark_read=mark_read,
+        )
+    except Exception as exc:
+        logger.exception("get messages failed")
+        return _json({"error": str(exc)}, status=502)
+    data["account_id"] = int(acc["id"])
+    return _json(data)
+
+
+async def handle_chats_send(request: web.Request) -> web.Response:
+    err = await _require_admin(request)
+    if err is not None:
+        return err
+    try:
+        body = await request.json()
+    except Exception:
+        return _json({"error": "invalid_json"}, status=400)
+    request._chat_body = body  # type: ignore[attr-defined]
+    acc, acc_err = await _resolve_chat_account(request)
+    if acc_err is not None:
+        return acc_err
+    assert acc is not None
+    try:
+        peer_id = int(request.match_info["peer_id"])
+    except (KeyError, TypeError, ValueError):
+        return _json({"error": "invalid_peer_id"}, status=400)
+    text = str(body.get("text") or body.get("message") or "").strip()
+    if not text:
+        return _json({"error": "message_required"}, status=400)
+    from senders.telegram_chat import send_dialog_message
+
+    try:
+        from telethon.errors import FloodWaitError
+    except ImportError:
+        FloodWaitError = Exception  # type: ignore[misc,assignment]
+
+    try:
+        msg = await send_dialog_message(
+            str(acc["session_file"]),
+            peer_id,
+            text,
+            account_id=int(acc["id"]),
+        )
+    except FloodWaitError as exc:
+        return _json(
+            {"error": f"FloodWait {int(getattr(exc, 'seconds', 60))}s"},
+            status=429,
+        )
+    except ValueError as exc:
+        return _json({"error": str(exc)}, status=400)
+    except Exception as exc:
+        logger.exception("send chat message failed")
+        return _json({"error": str(exc)}, status=502)
+    return _json({"ok": True, "message": msg, "account_id": int(acc["id"])})
+
+
+async def handle_chats_create(request: web.Request) -> web.Response:
+    err = await _require_admin(request)
+    if err is not None:
+        return err
+    try:
+        body = await request.json()
+    except Exception:
+        return _json({"error": "invalid_json"}, status=400)
+    request._chat_body = body  # type: ignore[attr-defined]
+    acc, acc_err = await _resolve_chat_account(request)
+    if acc_err is not None:
+        return acc_err
+    assert acc is not None
+    phone = str(body.get("phone") or "").strip()
+    username = str(body.get("username") or "").strip()
+    name = str(body.get("name") or "").strip()
+    first_message = str(body.get("message") or body.get("text") or "").strip()
+    if not phone and not username:
+        return _json({"error": "phone_or_username_required"}, status=400)
+    from senders.telegram_chat import create_or_open_dialog
+
+    try:
+        from telethon.errors import FloodWaitError
+    except ImportError:
+        FloodWaitError = Exception  # type: ignore[misc,assignment]
+
+    try:
+        data = await create_or_open_dialog(
+            str(acc["session_file"]),
+            account_id=int(acc["id"]),
+            phone=phone,
+            username=username,
+            name=name,
+            first_message=first_message,
+        )
+    except FloodWaitError as exc:
+        return _json(
+            {"error": f"FloodWait {int(getattr(exc, 'seconds', 60))}s"},
+            status=429,
+        )
+    except ValueError as exc:
+        return _json({"error": str(exc)}, status=400)
+    except Exception as exc:
+        logger.exception("create dialog failed")
+        return _json({"error": str(exc)}, status=502)
+    data["ok"] = True
+    data["account_id"] = int(acc["id"])
+    return _json(data)
+
+
 def setup_admin_routes(app: web.Application) -> None:
     routes = [
         ("/api/admin/login", handle_login, "POST"),
@@ -1344,6 +1607,11 @@ def setup_admin_routes(app: web.Application) -> None:
         ("/api/admin/accounts/{id}", handle_telegram_account_delete, "DELETE"),
         ("/api/admin/accounts/max/settings", handle_max_settings_get, "GET"),
         ("/api/admin/accounts/max/settings", handle_max_settings_save, "POST"),
+        ("/api/admin/chats/accounts", handle_chats_accounts, "GET"),
+        ("/api/admin/chats/dialogs", handle_chats_dialogs, "GET"),
+        ("/api/admin/chats/dialogs", handle_chats_create, "POST"),
+        ("/api/admin/chats/dialogs/{peer_id}/messages", handle_chats_messages, "GET"),
+        ("/api/admin/chats/dialogs/{peer_id}/send", handle_chats_send, "POST"),
         ("/api/admin/segments", handle_segment_counts, "GET"),
         ("/api/admin/ai/compose", handle_ai_compose, "POST"),
         ("/api/admin/ai/settings", handle_ai_settings_get, "GET"),

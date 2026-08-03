@@ -15,7 +15,7 @@ from mailing_db import init_mailing_db, upsert_customer, upsert_customer_event, 
 
 ROOT = Path(__file__).resolve().parent
 ADMIN_DIR = ROOT / "adminapp"
-HOST = "127.0.0.1"
+HOST = "0.0.0.0"
 PORT = 3005
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
