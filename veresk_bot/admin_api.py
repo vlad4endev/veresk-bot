@@ -909,6 +909,7 @@ async def handle_campaign_create(request: web.Request) -> web.Response:
         ch_list,
         tg_accounts_ready=bool(tg_ready) if "tg" in ch_list else True,
         max_configured=max_ok if "max" in ch_list else True,
+        max_allow_phone=bool(max_userbot) if "max" in ch_list else False,
     )
     recipients = match["recipients"]
     if not recipients:

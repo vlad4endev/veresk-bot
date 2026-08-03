@@ -229,6 +229,7 @@ async def init_mailing_db() -> None:
             ):
                 _ensure_column(db, "admin_sessions", col, typedef)
             _ensure_column(db, "admin_users", "permissions", "TEXT DEFAULT ''")
+            _ensure_column(db, "customer_events", "last_auto_sent_on", "TEXT")
             # Миграция: приводим ранее сохранённые телефоны к +7(999)999-99-99
             rows = db.execute("SELECT id, phone FROM customers").fetchall()
             for row in rows:
@@ -761,9 +762,12 @@ async def get_event(event_id: int) -> dict[str, Any] | None:
 
 
 async def list_auto_events_for_today() -> list[dict[str, Any]]:
+    """События с auto_send на сегодня, ещё не поставленные в очередь сегодня."""
+
     def _list() -> list[dict[str, Any]]:
         today = datetime.now().date()
         mmdd = today.strftime("%m-%d")
+        today_iso = today.isoformat()
         with _connect() as db:
             rows = db.execute(
                 """
@@ -773,12 +777,28 @@ async def list_auto_events_for_today() -> list[dict[str, Any]]:
                 JOIN customers c ON c.id = e.customer_id
                 WHERE e.auto_send = 1
                   AND substr(e.date_from, 6, 5) = ?
+                  AND (e.last_auto_sent_on IS NULL OR e.last_auto_sent_on != ?)
                 """,
-                (mmdd,),
+                (mmdd, today_iso),
             ).fetchall()
         return [dict(r) for r in rows]
 
     return await _run_db(_list)
+
+
+async def mark_event_auto_sent(event_id: int, day: str | None = None) -> None:
+    """Помечает событие: авто-поздравление уже поставлено в очередь в этот день."""
+    on = day or datetime.now().date().isoformat()
+
+    def _mark() -> None:
+        with _connect() as db:
+            db.execute(
+                "UPDATE customer_events SET last_auto_sent_on = ? WHERE id = ?",
+                (on, event_id),
+            )
+            db.commit()
+
+    await _run_db(_mark)
 
 
 # ── orders (история покупок из Posiflora) ──────────────────────────────────
@@ -1085,6 +1105,8 @@ async def list_campaign_recipients(
 
 
 async def fetch_pending_recipients(limit: int = 20) -> list[dict[str, Any]]:
+    """Только кампании в статусе sending (scheduled активирует activate_due_campaigns)."""
+
     def _fetch() -> list[dict[str, Any]]:
         with _connect() as db:
             rows = db.execute(
@@ -1096,7 +1118,7 @@ async def fetch_pending_recipients(limit: int = 20) -> list[dict[str, Any]]:
                 JOIN customers c ON c.id = r.customer_id
                 JOIN campaigns camp ON camp.id = r.campaign_id
                 WHERE r.status = 'pending'
-                  AND camp.status IN ('sending', 'scheduled')
+                  AND camp.status = 'sending'
                 ORDER BY r.id
                 LIMIT ?
                 """,

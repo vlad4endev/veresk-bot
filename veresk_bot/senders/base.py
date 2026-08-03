@@ -9,7 +9,7 @@ from typing import Protocol
 @dataclass
 class SendResult:
     ok: bool
-    status: str = "sent"  # sent | delivered | failed
+    status: str = "sent"  # sent | delivered | failed | deferred
     error: str | None = None
 
 

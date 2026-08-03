@@ -467,7 +467,12 @@ class TelegramUserbotSender:
             wait = int(getattr(exc, "seconds", 60))
             logger.warning("FloodWait %ss for account %s", wait, self.account_id)
             await asyncio.sleep(min(wait, 120))
-            return SendResult(ok=False, status="failed", error=f"FloodWait {wait}s")
+            # Не failed: диспетчер оставит pending и повторит позже
+            return SendResult(
+                ok=False,
+                status="deferred",
+                error=f"FloodWait {wait}s",
+            )
         except Exception as exc:
             logger.exception(
                 "Telethon send failed to %s / tg_id=%s", phone_norm, tg_user_id

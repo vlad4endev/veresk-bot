@@ -1,11 +1,11 @@
 """Фоновый диспетчер рассылок: очередь, расписание, авто-поздравления.
 
 Сценарий отправки:
-1. Берём pending-получателей из БД (клиенты сегмента уже сверены при создании кампании).
+1. Берём pending-получателей только у кампаний со статусом sending
+   (scheduled → sending делает activate_due_campaigns по scheduled_at).
 2. Для Telegram — выбираем готовый userbot-аккаунт и шлём от его имени
    (по tg_user_id или телефону через ImportContacts).
-3. Для MAX — шлём от имени подключённого MAX-бота
-   (по max_user_id клиента / max_profiles).
+3. Для MAX — сначала личный MAX-аккаунт (PyMax), иначе официальный MAX-бот.
 """
 
 from __future__ import annotations
@@ -15,7 +15,7 @@ import logging
 from datetime import datetime
 from typing import Any
 
-from config import MAILING_BATCH_SIZE, MAILING_SEND_INTERVAL
+from config import MAILING_BATCH_SIZE, MAILING_DISCOUNT_TEXT, MAILING_SEND_INTERVAL
 from mailing_db import (
     activate_due_campaigns,
     bump_account_sent,
@@ -23,6 +23,7 @@ from mailing_db import (
     fetch_pending_personal,
     fetch_pending_recipients,
     list_auto_events_for_today,
+    mark_event_auto_sent,
     mark_personal_status,
     mark_recipient_status,
     pick_ready_account,
@@ -38,13 +39,23 @@ _sender_cache: dict[int, TelegramUserbotSender] = {}
 _max_sender_cache: dict[int, MaxUserbotSender] = {}
 _auto_done_day: str | None = None
 
+# Ошибки «нет аккаунта / дневной лимит» — оставляем pending, не failed
+_DEFER_ERRORS = (
+    "Нет готовых Telegram-аккаунтов",
+    "Нет готового MAX-аккаунта и MAX-бот не подключён",
+    "Нет session_file у аккаунта",
+)
 
-def _personalize(text: str, name: str) -> str:
+
+def _personalize(text: str, name: str, *, discount: str | None = None) -> str:
     first = (name or "").split()[0] if name else ""
+    disc = (discount if discount is not None else MAILING_DISCOUNT_TEXT) or "15%"
     return (
         text.replace("{имя}", first or "друг")
         .replace("{Имя}", first or "Друг")
         .replace("{name}", first or "друг")
+        .replace("{скидка}", disc)
+        .replace("{Скидка}", disc)
     )
 
 
@@ -94,17 +105,17 @@ async def _send_via_channel(
     tg_user_id: int | None = None,
     max_user_id: int | None = None,
 ) -> tuple[bool, str, str | None]:
-    """Возвращает (ok, status, error)."""
+    """Возвращает (ok, status, error). status: sent | failed | deferred."""
     body = _personalize(text, name)
     ch = normalize_channel(channel) or channel
 
     if ch == "tg":
         account = await pick_ready_account("tg_userbot")
         if not account:
-            return False, "failed", "Нет готовых Telegram-аккаунтов"
+            return False, "deferred", "Нет готовых Telegram-аккаунтов"
         sender = await _get_tg_sender(account)
         if not sender:
-            return False, "failed", "Нет session_file у аккаунта"
+            return False, "deferred", "Нет session_file у аккаунта"
         result = await sender.send(
             phone=phone,
             name=name,
@@ -149,7 +160,11 @@ async def _send_via_channel(
         # 2) Fallback — официальный MAX-бот
         bot_sender = MaxBotSender()
         if not bot_sender.available:
-            return False, "failed", "Нет готового MAX-аккаунта и MAX-бот не подключён"
+            return (
+                False,
+                "deferred",
+                "Нет готового MAX-аккаунта и MAX-бот не подключён",
+            )
         result = await bot_sender.send(
             phone=phone,
             name=name,
@@ -159,6 +174,16 @@ async def _send_via_channel(
         return result.ok, result.status, result.error
 
     return False, "failed", f"Неизвестный канал: {channel}"
+
+
+def _is_defer(status: str, error: str | None) -> bool:
+    if status == "deferred":
+        return True
+    if error and (
+        any(err in error for err in _DEFER_ERRORS) or error.startswith("FloodWait")
+    ):
+        return True
+    return False
 
 
 async def process_campaign_batch() -> int:
@@ -195,6 +220,14 @@ async def process_campaign_batch() -> int:
             tg_user_id=tg_uid,
             max_user_id=max_uid,
         )
+        if not ok and _is_defer(status, error):
+            # Дневной лимит / нет аккаунта — не сжигаем очередь, подождём
+            logger.info(
+                "Рассылка отложена (получатель %s): %s",
+                row.get("id"),
+                error,
+            )
+            break
         await mark_recipient_status(
             int(row["id"]),
             "sent" if ok else "failed",
@@ -238,6 +271,13 @@ async def process_personal_batch() -> int:
             tg_user_id=tg_uid,
             max_user_id=max_uid,
         )
+        if not ok and _is_defer(status, error):
+            logger.info(
+                "Личное сообщение отложено (id=%s): %s",
+                row.get("id"),
+                error,
+            )
+            break
         await mark_personal_status(
             int(row["id"]),
             "sent" if ok else "failed",
@@ -249,7 +289,10 @@ async def process_personal_batch() -> int:
 
 
 async def process_auto_greetings() -> int:
-    """Раз в день создаёт personal_messages для событий с auto_send."""
+    """Раз в день создаёт personal_messages для событий с auto_send.
+
+    Дедуп: last_auto_sent_on в customer_events + in-memory _auto_done_day.
+    """
     global _auto_done_day
     today = datetime.now().date().isoformat()
     if _auto_done_day == today:
@@ -276,10 +319,12 @@ async def process_auto_greetings() -> int:
         if ev.get("max_user_id") and not ev.get("tg_user_id") and not ev.get("customer_phone"):
             channel = "max"
         elif ev.get("max_user_id") and not ev.get("tg_user_id"):
-            # Есть MAX id, телефона может хватить для TG — предпочитаем TG если есть phone
             if not ev.get("customer_phone"):
                 channel = "max"
         await create_personal_message(int(ev["cust_id"]), text, channel=channel)
+        event_id = _parse_int(ev.get("id"))
+        if event_id is not None:
+            await mark_event_auto_sent(event_id, today)
         created += 1
     _auto_done_day = today
     if created:

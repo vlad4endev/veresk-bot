@@ -1,11 +1,12 @@
 """
-Сверка клиентов из базы с каналами отправки (Telegram userbot / MAX-бот).
+Сверка клиентов из базы с каналами отправки (Telegram userbot / MAX).
 
 Правила доставки:
 - Telegram: отправка от имени подключённого userbot-аккаунта.
   Нужен телефон (ImportContacts) и/или tg_user_id; и хотя бы один ready tg_userbot.
-- MAX: отправка от имени подключённого MAX-бота (единственный способ API).
-  Нужен max_user_id у клиента или в max_profiles по телефону; и токен MAX.
+- MAX: сначала личный MAX-аккаунт (PyMax userbot), иначе официальный MAX-бот.
+  Userbot: достаточно телефона (search/import) или max_user_id.
+  Бот: нужен max_user_id у клиента или в max_profiles по телефону.
 """
 
 from __future__ import annotations
@@ -13,11 +14,17 @@ from __future__ import annotations
 import logging
 import re
 import sqlite3
+import time
 from typing import Any
 
 from config import DATABASE_PATH
 
 logger = logging.getLogger(__name__)
+
+# Кэш phone_digits → max_user_id (полный скан max_profiles редко нужен)
+_MAX_PHONE_CACHE: dict[str, int] = {}
+_MAX_PHONE_CACHE_TS: float = 0.0
+_MAX_PHONE_CACHE_TTL = 60.0
 
 
 def normalize_channel(raw: str) -> str | None:
@@ -66,6 +73,47 @@ def _parse_int(value: Any) -> int | None:
         return None
 
 
+def invalidate_max_phone_cache() -> None:
+    global _MAX_PHONE_CACHE, _MAX_PHONE_CACHE_TS
+    _MAX_PHONE_CACHE = {}
+    _MAX_PHONE_CACHE_TS = 0.0
+
+
+def _load_max_phone_cache(force: bool = False) -> dict[str, int]:
+    global _MAX_PHONE_CACHE, _MAX_PHONE_CACHE_TS
+    now = time.monotonic()
+    if (
+        not force
+        and _MAX_PHONE_CACHE_TS
+        and (now - _MAX_PHONE_CACHE_TS) < _MAX_PHONE_CACHE_TTL
+        and _MAX_PHONE_CACHE is not None
+    ):
+        return _MAX_PHONE_CACHE
+    cache: dict[str, int] = {}
+    try:
+        conn = sqlite3.connect(DATABASE_PATH, check_same_thread=False)
+        try:
+            rows = conn.execute(
+                "SELECT max_user_id, phone FROM max_profiles"
+            ).fetchall()
+        finally:
+            conn.close()
+    except sqlite3.Error:
+        logger.debug("max_profiles недоступна для matching", exc_info=True)
+        _MAX_PHONE_CACHE = cache
+        _MAX_PHONE_CACHE_TS = now
+        return cache
+
+    for user_id, stored_phone in rows:
+        digits = phone_digits(stored_phone)
+        uid = _parse_int(user_id)
+        if digits and uid is not None and digits not in cache:
+            cache[digits] = uid
+    _MAX_PHONE_CACHE = cache
+    _MAX_PHONE_CACHE_TS = now
+    return cache
+
+
 def resolve_max_user_id_sync(
     *,
     max_user_id: Any = None,
@@ -79,22 +127,8 @@ def resolve_max_user_id_sync(
     target = phone_digits(phone)
     if not target:
         return None
-    try:
-        conn = sqlite3.connect(DATABASE_PATH, check_same_thread=False)
-        try:
-            rows = conn.execute(
-                "SELECT max_user_id, phone FROM max_profiles"
-            ).fetchall()
-        finally:
-            conn.close()
-    except sqlite3.Error:
-        logger.debug("max_profiles недоступна для matching", exc_info=True)
-        return None
-
-    for user_id, stored_phone in rows:
-        if phone_digits(stored_phone) == target:
-            return _parse_int(user_id)
-    return None
+    cache = _load_max_phone_cache()
+    return cache.get(target)
 
 
 def customer_can_receive_tg(customer: dict[str, Any]) -> tuple[bool, str | None]:
@@ -105,12 +139,22 @@ def customer_can_receive_tg(customer: dict[str, Any]) -> tuple[bool, str | None]
     return False, "Нет телефона и Telegram id"
 
 
-def customer_can_receive_max(customer: dict[str, Any]) -> tuple[bool, str | None]:
+def customer_can_receive_max(
+    customer: dict[str, Any],
+    *,
+    allow_phone: bool = False,
+) -> tuple[bool, str | None]:
+    """
+    allow_phone=True — можно слать через MAX userbot по телефону
+    (search_by_phone / import_contacts), без заранее известного max_user_id.
+    """
     mid = resolve_max_user_id_sync(
         max_user_id=customer.get("max_user_id"),
         phone=customer.get("phone"),
     )
     if mid is not None:
+        return True, None
+    if allow_phone and phone_digits(customer.get("phone")):
         return True, None
     return False, "Клиент не найден в MAX (нет max_user_id / анкеты)"
 
@@ -118,12 +162,14 @@ def customer_can_receive_max(customer: dict[str, Any]) -> tuple[bool, str | None
 def customer_can_receive(
     customer: dict[str, Any],
     channel: str,
+    *,
+    max_allow_phone: bool = False,
 ) -> tuple[bool, str | None]:
     ch = normalize_channel(channel) or channel
     if ch == "tg":
         return customer_can_receive_tg(customer)
     if ch == "max":
-        return customer_can_receive_max(customer)
+        return customer_can_receive_max(customer, allow_phone=max_allow_phone)
     return False, f"Неизвестный канал: {channel}"
 
 
@@ -133,6 +179,7 @@ def build_recipients_for_customers(
     *,
     tg_accounts_ready: bool = True,
     max_configured: bool = True,
+    max_allow_phone: bool = False,
 ) -> dict[str, Any]:
     """
     Сверяет клиентов сегмента с каналами и доступностью аккаунтов.
@@ -165,7 +212,9 @@ def build_recipients_for_customers(
             if ch == "max" and not max_configured:
                 _skip("Нет готового MAX-аккаунта (личный или бот)", name)
                 continue
-            ok, err = customer_can_receive(cust, ch)
+            ok, err = customer_can_receive(
+                cust, ch, max_allow_phone=max_allow_phone
+            )
             if not ok:
                 _skip(err or "Недоступен", name)
                 continue
@@ -213,6 +262,7 @@ async def preview_mailing_match(
         channels,
         tg_accounts_ready=bool(tg_ready),
         max_configured=max_ready,
+        max_allow_phone=bool(max_userbot),
     )
     max_mode = "userbot" if max_userbot else ("bot" if max_bot_ok else "none")
     return {

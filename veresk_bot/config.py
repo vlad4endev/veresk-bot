@@ -64,6 +64,8 @@ if not ADMIN_PASSWORD and ADMIN_TOKEN:
 POSIFLORA_SYNC_INTERVAL = int(os.getenv("POSIFLORA_SYNC_INTERVAL", "3600"))
 MAILING_SEND_INTERVAL = float(os.getenv("MAILING_SEND_INTERVAL", "3.0"))
 MAILING_BATCH_SIZE = int(os.getenv("MAILING_BATCH_SIZE", "10"))
+# Текст подстановки для плейсхолдера {скидка} в рассылках (напр. «15%», «−20%»)
+MAILING_DISCOUNT_TEXT = os.getenv("MAILING_DISCOUNT_TEXT", "15%").strip() or "15%"
 
 # Telethon (userbot для рассылок с личных номеров)
 TELEGRAM_API_ID = int(os.getenv("TELEGRAM_API_ID", "0") or "0")

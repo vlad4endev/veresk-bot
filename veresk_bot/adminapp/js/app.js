@@ -3195,8 +3195,10 @@
 
   const msgTa = $("#msg");
   function updatePreview() {
+    const disc = "15%"; // совпадает с MAILING_DISCOUNT_TEXT по умолчанию
     $("#msgPreview").innerHTML = esc(msgTa.value)
       .replace(/\{имя\}/g, "Мария")
+      .replace(/\{скидка\}/gi, disc)
       .replace(/\n/g, "<br>");
   }
   msgTa?.addEventListener("input", updatePreview);
