@@ -2600,10 +2600,10 @@
         "Библиотека maxapi-python не установлена (нужен Python ≥3.10). pip install maxapi-python≥2.3.0 и пересоберите bot."
       );
     }
-    if (data.error === "cancelled" || data.error === "confirm_timeout") {
+    if (data.error === "cancelled" || data.error === "confirm_timeout" || data.error === "connection_closed") {
       return (
         data.detail ||
-        "Вход прерван. Нажмите «Получить код» ещё раз и введите SMS-код, затем пароль 2FA (если спросит)."
+        "Соединение с MAX прервалось. Нажмите «Получить код» ещё раз, затем введите SMS-код и пароль 2FA."
       );
     }
     if (data.error === "bad_2fa" || data.error === "need_2fa") {

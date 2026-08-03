@@ -204,10 +204,34 @@ async def _run_client_once(
             await client.stop()
         except Exception:
             pass
-        return {"ok": False, "error": "Таймаут подключения к MAX"}
+        return {"ok": False, "error": "Таймаут подключения к MAX", "need_new_code": True}
+    except asyncio.CancelledError:
+        # PyMax часто кидает CancelledError при c.stop() после успешного on_start —
+        # это не «отмена пользователем».
+        if result_box.get("ok"):
+            return {"ok": True, **(result_box.get("payload") or {})}
+        if error_box:
+            return {"ok": False, "error": str(error_box[0])}
+        try:
+            await client.stop()
+        except Exception:
+            pass
+        return {
+            "ok": False,
+            "error": "connection_closed",
+            "detail": (
+                "Соединение с MAX закрылось во время входа. "
+                "Нажмите «Получить код» и повторите (SMS → пароль 2FA)."
+            ),
+            "need_new_code": True,
+        }
     except Exception as exc:
         logger.exception("PyMax client.start failed")
-        return {"ok": False, "error": str(exc)}
+        try:
+            await client.stop()
+        except Exception:
+            pass
+        return {"ok": False, "error": str(exc), "need_new_code": True}
 
     if error_box:
         return {"ok": False, "error": str(error_box[0])}
@@ -217,6 +241,7 @@ async def _run_client_once(
     return {
         "ok": False,
         "error": result_box.get("error") or "Не удалось авторизоваться в MAX",
+        "need_new_code": True,
     }
 
 
@@ -310,17 +335,18 @@ async def start_max_login(phone: str, *, reset_session: bool = True) -> dict[str
                 done.set_result(
                     {
                         "ok": False,
-                        "error": "cancelled",
+                        "error": "connection_closed",
                         "detail": (
-                            "Вход прерван. Нажмите «Получить код» ещё раз "
-                            "и не закрывайте форму, пока вводите пароль."
+                            "Соединение с MAX прервалось. "
+                            "Нажмите «Получить код» ещё раз, затем SMS-код и пароль 2FA."
                         ),
                         "need_new_code": True,
                     }
                 )
             if not cancel_flag.get("quiet") and not succeeded:
                 remove_max_session_file(session_file)
-            raise
+            # Не пробрасываем CancelledError дальше — иначе aiohttp может оборвать ответ
+            return
         except Exception as exc:
             logger.exception("MAX login job failed")
             remove_max_session_file(session_file)
@@ -388,6 +414,8 @@ async def confirm_max_login(
     reqs_before = pwd.requests
     if password_clean:
         await pwd.set_password(password_clean)
+        # Дать SmsAuthFlow забрать пароль из очереди, иначе ложный bad_2fa
+        await asyncio.sleep(0.4)
 
     # Ждём 2FA / успех / неверный пароль
     for _ in range(120):  # до ~60 сек (0.5s шаг)
@@ -430,8 +458,18 @@ async def confirm_max_login(
 
     result = done.result()
     _pending_logins.pop(phone_norm, None)
-    # Не cancel()-им задачу: она сама завершается после done.set_result.
-    # Cancel здесь давал ложный error=cancelled и мог стереть свежую сессию.
+    # Нормализуем старый код "cancelled" → понятный текст
+    if isinstance(result, dict) and result.get("error") == "cancelled":
+        result = {
+            **result,
+            "error": "connection_closed",
+            "detail": result.get("detail")
+            or (
+                "Соединение с MAX прервалось. Нажмите «Получить код» ещё раз, "
+                "затем SMS-код и пароль 2FA."
+            ),
+            "need_new_code": True,
+        }
     return result
 
 
