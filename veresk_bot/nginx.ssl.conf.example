@@ -1,6 +1,5 @@
-# HTTPS вариант (если SSL в контейнере, не через NPM).
-# Админка на /, Mini App /miniapp/, API /api/
-# adminapp → /usr/share/nginx/html (docker-compose)
+# HTTPS вариант (SSL в контейнере). Через NPM этот файл не нужен.
+# volumes: adminapp → /usr/share/nginx/admin, miniapp → /usr/share/nginx/html/miniapp
 
 server {
     listen 80;
@@ -17,11 +16,10 @@ server {
     ssl_protocols       TLSv1.2 TLSv1.3;
     ssl_ciphers         HIGH:!aNULL:!MD5;
 
-    root /usr/share/nginx/html;
-    index index.html;
     client_max_body_size 25m;
 
     location /miniapp/ {
+        root /usr/share/nginx/html;
         try_files $uri $uri/ /miniapp/index.html;
         add_header Cache-Control "no-cache, no-store, must-revalidate";
     }
@@ -63,6 +61,8 @@ server {
     }
 
     location / {
+        root /usr/share/nginx/admin;
+        index index.html;
         try_files $uri $uri/ /index.html;
         add_header Cache-Control "no-cache, no-store, must-revalidate";
     }
