@@ -9,7 +9,7 @@ from pathlib import Path
 
 from aiohttp import web
 
-from admin_api import setup_admin_routes
+from admin_api import on_admin_startup, setup_admin_routes
 from bot_metrics import init_bot_metrics
 from mailing_db import init_mailing_db, upsert_customer, upsert_customer_event, count_customers
 
@@ -78,6 +78,7 @@ async def main() -> None:
     app["redis"] = None
     app["bot"] = None
     setup_admin_routes(app)
+    app.on_startup.append(on_admin_startup)
 
     async def redirect_root(_request: web.Request) -> web.Response:
         raise web.HTTPFound("/admin/")

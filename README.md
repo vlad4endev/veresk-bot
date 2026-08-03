@@ -12,6 +12,29 @@
 - Уведомления клиенту при принятии или отклонении заказа
 - **Telegram Mini App** — 4 экрана: главная, заказ, статус, подтверждение (брендбук Veresk)
 - Трекер заказа в реальном времени через API
+- **MAX-бот** (`max_bot/`) — та же анкета в мессенджере MAX, без Mini App
+- **Чаты MAX в админке** — вкладка «Чаты» → MAX: история из Max API, realtime через webhook → SSE
+
+## MAX-бот
+
+Аналог Telegram-бота в мессенджере MAX (тот же сценарий анкеты, Posiflora, SQLite), без Mini App.
+
+1. Создайте бота у `@MasterBot` в MAX и получите токен.
+2. В `.env` заполните `MAX_BOT_TOKEN=` (и опционально `MAX_FLORIST_CHAT_ID=` — чат флориста в MAX для уведомлений об анкетах).
+3. Запуск:
+   - Docker: `docker compose up -d max_bot` (сервис уже описан в `docker-compose.yml`);
+   - локально: из папки `veresk_bot` — `python -m max_bot.main`.
+
+**Realtime / webhook (рекомендуется для продакшена):** задайте в `.env`
+
+```
+MAX_WEBHOOK_URL=https://florist.skypath.fun/api/max/webhook
+MAX_WEBHOOK_SECRET=длинный_секрет_5_256
+```
+
+При активной подписке Max перестаёт отдавать long polling: анкета и инбокс обрабатывает сервис `bot` (`POST /api/max/webhook` → SSE в админку). Список диалогов хранится локально (`max_dialogs`), история сообщений — `GET /messages`.
+
+Особенности MAX Bot API: клавиатуры только inline (выбор — кнопки под сообщением), телефон запрашивается кнопкой `request_contact`. Без webhook обновления читаются через long polling `GET /updates`, а SSE-хаб админки получает события через `MAX_HUB_NOTIFY_URL`. Анкеты — таблица `max_profiles`; рассылки MAX доставляются клиентам, прошедшим анкету.
 
 ## Структура проекта
 
@@ -52,9 +75,10 @@ cp .env.example .env
 | `POSIFLORA_STORE_ID` | ID магазина в Posiflora |
 | `POSIFLORA_BASE_URL` | URL API (по умолчанию demo) |
 | `REDIS_URL` | Redis для FSM, polling и Mini App |
-| `MINIAPP_URL` | Публичный **HTTPS**-адрес Mini App (например `https://orders.veresk.ru/miniapp/`) |
+| `MINIAPP_URL` | Публичный **HTTPS**-адрес Mini App (`https://florist.skypath.fun/miniapp/`) |
 | `WEBAPP_PORT` | Порт API внутри контейнера `bot` (по умолчанию `3005`) |
 | `DATABASE_PATH` | Путь к SQLite (в Docker: `/app/data/veresk.db`, том `./data`) |
+| `ADMIN_USERNAME` / `ADMIN_PASSWORD` | Логин и пароль админки (`https://florist.skypath.fun/admin/`) |
 
 **Как узнать `FLORIST_CHAT_ID`:** напишите боту [@userinfobot](https://t.me/userinfobot) из нужного чата или добавьте бота в группу и посмотрите `chat.id` в логах.
 
@@ -80,12 +104,15 @@ python bot.py
 
 ## Mini App
 
-1. В `nginx.conf` замените `YOUR_DOMAIN` на ваш домен.
-2. Положите сертификаты Let's Encrypt в `veresk_bot/ssl/` (`fullchain.pem`, `privkey.pem`).
-3. В `.env`: `MINIAPP_URL=https://ваш-домен/miniapp/` — **тот же URL**, что открывает Telegram (со слэшем в конце).
+Домен проекта: **florist.skypath.fun**.
+
+1. Для HTTPS используйте `nginx.ssl.conf.example` (уже с `server_name florist.skypath.fun`) или проксируйте 443 → контейнер.
+2. Положите сертификаты Let's Encrypt в `veresk_bot/ssl/` (`fullchain.pem`, `privkey.pem`), если SSL на этом nginx.
+3. В `.env`: `MINIAPP_URL=https://florist.skypath.fun/miniapp/` — **тот же URL**, что открывает Telegram (со слэшем в конце).
 4. `docker compose up -d --build`
-5. В [@BotFather](https://t.me/BotFather) → ваш бот → **Bot Settings** → **Domain** — укажите домен без `https://` (например `orders.veresk.ru`).
+5. В [@BotFather](https://t.me/BotFather) → ваш бот → **Bot Settings** → **Domain** — `florist.skypath.fun`.
 6. Mini App открывается **только inline-кнопками** в чате (`/start`, после заказа, `/orders`).
+7. Админка рассылок: `https://florist.skypath.fun/admin/` (логин/пароль — `ADMIN_USERNAME` / `ADMIN_PASSWORD` в `.env`).
 
 Команды бота: `/start` — inline «Статус заказа», `/order` — заказ в чате.
 

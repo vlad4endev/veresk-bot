@@ -113,6 +113,60 @@ class MaxBotAPI:
             ]
         return await self._request("POST", "/messages", params=params, json_body=body)
 
+    async def get_messages(
+        self,
+        *,
+        chat_id: int | None = None,
+        message_ids: list[str] | None = None,
+        count: int = 50,
+        from_ts: int | None = None,
+        to_ts: int | None = None,
+    ) -> dict[str, Any]:
+        """GET /messages — история чата или конкретные mid."""
+        params: dict[str, Any] = {
+            "count": max(1, min(int(count or 50), 100)),
+        }
+        if chat_id is not None:
+            params["chat_id"] = int(chat_id)
+        elif message_ids:
+            params["message_ids"] = ",".join(str(x) for x in message_ids)
+        else:
+            raise ValueError("Нужен chat_id или message_ids")
+        if from_ts is not None:
+            params["from"] = int(from_ts)
+        if to_ts is not None:
+            params["to"] = int(to_ts)
+        return await self._request("GET", "/messages", params=params)
+
+    async def get_chat(self, chat_id: int) -> dict[str, Any]:
+        """GET /chats/{chatId} — карточка чата/диалога."""
+        return await self._request("GET", f"/chats/{int(chat_id)}")
+
+    async def subscribe_webhook(
+        self,
+        url: str,
+        *,
+        update_types: list[str] | None = None,
+        secret: str | None = None,
+    ) -> dict[str, Any]:
+        """POST /subscriptions — доставка событий на HTTPS webhook."""
+        body: dict[str, Any] = {"url": url.strip()}
+        if update_types:
+            body["update_types"] = list(update_types)
+        if secret:
+            body["secret"] = secret.strip()
+        return await self._request("POST", "/subscriptions", json_body=body)
+
+    async def list_subscriptions(self) -> dict[str, Any]:
+        """GET /subscriptions — текущие webhook-подписки."""
+        return await self._request("GET", "/subscriptions")
+
+    async def unsubscribe_webhook(self, url: str) -> dict[str, Any]:
+        """DELETE /subscriptions?url=… — отписка от webhook."""
+        return await self._request(
+            "DELETE", "/subscriptions", params={"url": url.strip()}
+        )
+
     async def answer_callback(
         self, callback_id: str, notification: str | None = None
     ) -> None:

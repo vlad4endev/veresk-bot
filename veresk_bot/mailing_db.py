@@ -328,6 +328,31 @@ async def get_customer_by_tg_user_id(tg_user_id: int) -> dict[str, Any] | None:
     return await _run_db(_get)
 
 
+async def get_customer_by_max_user_id(max_user_id: int) -> dict[str, Any] | None:
+    """Найти клиента CRM по MAX user id."""
+    try:
+        mid = int(max_user_id)
+    except (TypeError, ValueError):
+        return None
+
+    def _get() -> dict[str, Any] | None:
+        with _connect() as db:
+            row = db.execute(
+                "SELECT * FROM customers WHERE max_user_id = ? LIMIT 1",
+                (str(mid),),
+            ).fetchone()
+            if row:
+                return dict(row)
+            # На случай, если хранится как число без приведения к TEXT
+            row = db.execute(
+                "SELECT * FROM customers WHERE CAST(max_user_id AS TEXT) = ? LIMIT 1",
+                (str(mid),),
+            ).fetchone()
+        return dict(row) if row else None
+
+    return await _run_db(_get)
+
+
 async def customer_contact_sets() -> tuple[set[int], set[str]]:
     """Наборы tg_user_id и телефонов (последние 10 цифр) для быстрой фильтрации чатов."""
 

@@ -14,6 +14,19 @@ services:
     depends_on:
       - redis
 
+  # MAX-бот (анкета как в Telegram, без Mini App).
+  # Запустится только если в .env задан MAX_BOT_TOKEN.
+  max_bot:
+    build: .
+    command: ["python", "-m", "max_bot.main"]
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      DATABASE_PATH: /app/data/veresk.db
+    volumes:
+      - ./logs:/app/logs
+      - ./data:/app/data
+
   nginx:
     image: nginx:alpine
     restart: unless-stopped

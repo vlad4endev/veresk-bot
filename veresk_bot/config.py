@@ -75,6 +75,13 @@ SESSIONS_DIR = os.getenv("SESSIONS_DIR", str(_default_sessions))
 MAX_BOT_TOKEN = os.getenv("MAX_BOT_TOKEN", "").strip()
 # Чат флориста в MAX для уведомлений об анкетах (0 — выключено)
 MAX_FLORIST_CHAT_ID = int(os.getenv("MAX_FLORIST_CHAT_ID", "0") or "0")
+# HTTPS URL webhook (порт 443), напр. https://florist.skypath.fun/api/max/webhook
+# Если задан — Max шлёт события на bot-сервис; long polling у max_bot отключается.
+MAX_WEBHOOK_URL = os.getenv("MAX_WEBHOOK_URL", "").strip()
+# Секрет для заголовка X-Max-Bot-Api-Secret (5–256: A-Z a-z 0-9 _ -)
+MAX_WEBHOOK_SECRET = os.getenv("MAX_WEBHOOK_SECRET", "").strip()
+# База MAX Bot API
+MAX_API_BASE = os.getenv("MAX_API_BASE", "https://platform-api2.max.ru").strip()
 
 # ИИ для текстов рассылок (OpenAI / OpenRouter / YandexGPT / свой API)
 # Удобнее задать в админке: Настройки → Сервисы → ИИ-редактор

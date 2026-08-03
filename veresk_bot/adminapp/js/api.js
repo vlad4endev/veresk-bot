@@ -132,15 +132,22 @@ const AdminAPI = (() => {
         body: JSON.stringify({ api_id, api_hash }),
       }),
     maxSettings: () => request("/api/admin/accounts/max/settings"),
-    maxSaveSettings: (token) =>
+    maxSaveSettings: (body) =>
       request("/api/admin/accounts/max/settings", {
         method: "POST",
-        body: JSON.stringify({ token }),
+        body: JSON.stringify(
+          typeof body === "string" ? { token: body } : body || {}
+        ),
       }),
     maxClearSettings: () =>
       request("/api/admin/accounts/max/settings", {
         method: "POST",
         body: JSON.stringify({ clear: true }),
+      }),
+    maxClearWebhook: () =>
+      request("/api/admin/accounts/max/settings", {
+        method: "POST",
+        body: JSON.stringify({ clear_webhook: true }),
       }),
     tgStart: (phone) =>
       request("/api/admin/accounts/telegram/start", {
@@ -161,6 +168,11 @@ const AdminAPI = (() => {
     segments: () => request("/api/admin/segments"),
     aiCompose: (body) =>
       request("/api/admin/ai/compose", {
+        method: "POST",
+        body: JSON.stringify(body),
+      }),
+    aiChat: (body) =>
+      request("/api/admin/ai/chat", {
         method: "POST",
         body: JSON.stringify(body),
       }),
@@ -239,6 +251,44 @@ const AdminAPI = (() => {
         "/media?" +
         q.toString()
       );
+    },
+    maxChatStatus: () => request("/api/admin/max-chats/status"),
+    maxChatDialogs: (params = {}) => {
+      const q = new URLSearchParams(params).toString();
+      return request("/api/admin/max-chats/dialogs" + (q ? "?" + q : ""));
+    },
+    maxChatMessages: (peerId, params = {}) => {
+      const q = new URLSearchParams(params).toString();
+      return request(
+        "/api/admin/max-chats/dialogs/" +
+          encodeURIComponent(peerId) +
+          "/messages" +
+          (q ? "?" + q : "")
+      );
+    },
+    maxChatSend: (peerId, body) =>
+      request("/api/admin/max-chats/dialogs/" + encodeURIComponent(peerId) + "/send", {
+        method: "POST",
+        body: JSON.stringify(body),
+      }),
+    maxChatClientStatus: (peerId) =>
+      request(
+        "/api/admin/max-chats/dialogs/" + encodeURIComponent(peerId) + "/client"
+      ),
+    maxChatEvents: (onEvent) => {
+      const q = new URLSearchParams({ token: getToken() });
+      const es = new EventSource(
+        "/api/admin/max-chats/events?" + q.toString()
+      );
+      es.onmessage = (ev) => {
+        try {
+          const data = JSON.parse(ev.data);
+          if (typeof onEvent === "function") onEvent(data);
+        } catch (_) {
+          /* ignore malformed */
+        }
+      };
+      return es;
     },
   };
 })();

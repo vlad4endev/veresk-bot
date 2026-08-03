@@ -18,9 +18,11 @@ from ai_compose import (
     PROVIDER_PRESETS,
     PROVIDERS,
     AiComposeError,
+    admin_assistant_reply,
     ai_settings_public,
     generate_mailing_text,
     is_ai_configured,
+    normalize_chat_messages,
 )
 from config import ADMIN_PASSWORD, ADMIN_USERNAME, BOT_TOKEN
 from mailing_db import (
@@ -936,6 +938,7 @@ async def handle_max_settings_get(request: web.Request) -> web.Response:
     from_env = bool(token) and not from_panel
     bot_name = None
     bot_username = None
+    bot_id = None
     if token:
         try:
             from max_bot.api import MaxBotAPI
@@ -945,10 +948,26 @@ async def handle_max_settings_get(request: web.Request) -> web.Response:
                 me = await api.get_me()
                 bot_name = me.get("name") or me.get("first_name")
                 bot_username = me.get("username")
+                bot_id = me.get("user_id")
             finally:
                 await api.close()
         except Exception:
             logger.debug("Не удалось проверить MAX-токен при GET settings", exc_info=True)
+
+    from max_bot.webhook_runtime import (
+        florist_chat_id,
+        webhook_enabled,
+        webhook_secret,
+        webhook_secret_source,
+        webhook_url,
+        webhook_url_source,
+    )
+
+    wh_url = webhook_url()
+    wh_secret = webhook_secret()
+    florist = florist_chat_id()
+    florist_from_panel = runtime_settings.get("max_florist_chat_id") not in (None, "")
+
     return _json(
         {
             "configured": bool(token),
@@ -958,8 +977,34 @@ async def handle_max_settings_get(request: web.Request) -> web.Response:
             "from_panel": from_panel,
             "bot_name": bot_name,
             "bot_username": bot_username,
+            "bot_id": bot_id,
+            "webhook_url": wh_url or None,
+            "webhook_enabled": webhook_enabled(),
+            "webhook_url_source": webhook_url_source(),
+            "webhook_secret_set": bool(wh_secret),
+            "webhook_secret_masked": _mask_token(wh_secret) if wh_secret else None,
+            "webhook_secret_source": webhook_secret_source(),
+            "florist_chat_id": florist or None,
+            "florist_from_panel": florist_from_panel,
+            "suggested_webhook_url": _suggested_max_webhook_url(request),
         }
     )
+
+
+def _suggested_max_webhook_url(request: web.Request) -> str | None:
+    """Подсказка URL webhook по Host запроса (если не localhost)."""
+    host = (request.headers.get("X-Forwarded-Host") or request.host or "").split(",")[0].strip()
+    proto = (request.headers.get("X-Forwarded-Proto") or request.scheme or "https").split(",")[0].strip()
+    if not host or host.startswith("127.") or "localhost" in host:
+        return "https://florist.skypath.fun/api/max/webhook"
+    if ":" in host and not host.startswith("["):
+        # убрать нестандартный порт из подсказки
+        name, _, port = host.rpartition(":")
+        if port.isdigit() and port not in ("443", "80"):
+            host = name or host
+    if proto != "https":
+        proto = "https"
+    return f"{proto}://{host}/api/max/webhook"
 
 
 async def handle_max_settings_save(request: web.Request) -> web.Response:
@@ -971,9 +1016,19 @@ async def handle_max_settings_save(request: web.Request) -> web.Response:
     except Exception:
         return _json({"error": "invalid_json"}, status=400)
 
+    from max_bot.webhook_runtime import (
+        register_webhook_subscription,
+        reset_runtime_cache,
+        unregister_webhook_subscription,
+        validate_webhook_secret,
+        validate_webhook_url,
+        webhook_url as current_webhook_url,
+    )
+
     # clear=true — убрать токен из панели (останется .env, если задан)
     if body.get("clear"):
         runtime_settings.delete_keys("max_bot_token")
+        reset_runtime_cache()
         return _json(
             {
                 "ok": True,
@@ -982,36 +1037,128 @@ async def handle_max_settings_save(request: web.Request) -> web.Response:
             }
         )
 
+    if body.get("clear_webhook"):
+        old_url = current_webhook_url()
+        if old_url and get_max_bot_token():
+            await unregister_webhook_subscription(old_url)
+        runtime_settings.delete_keys("max_webhook_url", "max_webhook_secret")
+        return _json({"ok": True, "webhook_cleared": True, "webhook_enabled": False})
+
+    updates: dict[str, Any] = {}
     token = str(body.get("token") or "").strip()
-    if not token:
-        return _json({"error": "token_required"}, status=400)
+    me: dict[str, Any] | None = None
 
-    # Проверяем токен через GET /me перед сохранением
-    from max_bot.api import MaxAPIError, MaxBotAPI
-
-    api = MaxBotAPI(token)
-    try:
-        me = await api.get_me()
-    except MaxAPIError as exc:
+    # Пустой «Сохранить токен» без значения
+    if "token" in body and not token and not any(
+        k in body for k in ("webhook_url", "webhook_secret", "florist_chat_id", "register_webhook")
+    ):
         return _json(
             {
                 "ok": False,
-                "error": "invalid_token",
-                "detail": str(exc),
+                "error": "token_required",
+                "detail": "Вставьте токен от @MasterBot в поле «Токен» и нажмите «Сохранить и проверить».",
             },
             status=400,
         )
-    finally:
-        await api.close()
 
-    runtime_settings.set_many({"max_bot_token": token})
+    if token:
+        from max_bot.api import MaxAPIError, MaxBotAPI
+
+        api = MaxBotAPI(token)
+        try:
+            me = await api.get_me()
+        except MaxAPIError as exc:
+            return _json(
+                {
+                    "ok": False,
+                    "error": "invalid_token",
+                    "detail": str(exc),
+                },
+                status=400,
+            )
+        finally:
+            await api.close()
+        updates["max_bot_token"] = token
+
+    if "webhook_url" in body:
+        wh = str(body.get("webhook_url") or "").strip()
+        if wh:
+            url_err = validate_webhook_url(wh)
+            if url_err:
+                return _json({"ok": False, "error": "invalid_webhook_url", "detail": url_err}, status=400)
+            updates["max_webhook_url"] = wh
+        else:
+            runtime_settings.delete_keys("max_webhook_url")
+
+    if "webhook_secret" in body:
+        sec = str(body.get("webhook_secret") or "").strip()
+        if sec:
+            sec_err = validate_webhook_secret(sec)
+            if sec_err:
+                return _json({"ok": False, "error": "invalid_webhook_secret", "detail": sec_err}, status=400)
+            updates["max_webhook_secret"] = sec
+        elif body.get("clear_webhook_secret"):
+            runtime_settings.delete_keys("max_webhook_secret")
+
+    if "florist_chat_id" in body:
+        raw_florist = body.get("florist_chat_id")
+        if raw_florist in (None, "", 0, "0"):
+            runtime_settings.delete_keys("max_florist_chat_id")
+        else:
+            try:
+                updates["max_florist_chat_id"] = str(int(raw_florist))
+            except (TypeError, ValueError):
+                return _json(
+                    {"ok": False, "error": "invalid_florist_chat_id", "detail": "Нужен числовой chat_id"},
+                    status=400,
+                )
+
+    if updates:
+        runtime_settings.set_many(updates)
+        reset_runtime_cache()
+
+    want_register = bool(body.get("register_webhook") or updates.get("max_webhook_url"))
+    subscribe_result = None
+    if want_register:
+        if not get_max_bot_token():
+            return _json(
+                {
+                    "ok": False,
+                    "error": "token_required",
+                    "detail": "Сначала сохраните токен бота (шаг 1). Токен выдаёт @MasterBot в MAX.",
+                    "webhook_url": current_webhook_url() or updates.get("max_webhook_url"),
+                },
+                status=400,
+            )
+        if current_webhook_url():
+            subscribe_result = await register_webhook_subscription()
+
+    from max_bot.webhook_runtime import (
+        florist_chat_id,
+        webhook_enabled,
+        webhook_secret,
+        webhook_secret_source,
+        webhook_url,
+        webhook_url_source,
+    )
+
+    wh_url = webhook_url()
+    wh_secret = webhook_secret()
     return _json(
         {
             "ok": True,
-            "configured": True,
-            "bot_name": me.get("name") or me.get("first_name"),
-            "bot_username": me.get("username"),
-            "bot_id": me.get("user_id"),
+            "configured": is_max_configured(),
+            "bot_name": (me or {}).get("name") or (me or {}).get("first_name"),
+            "bot_username": (me or {}).get("username"),
+            "bot_id": (me or {}).get("user_id"),
+            "webhook_url": wh_url or None,
+            "webhook_enabled": webhook_enabled(),
+            "webhook_url_source": webhook_url_source(),
+            "webhook_secret_set": bool(wh_secret),
+            "webhook_secret_masked": _mask_token(wh_secret) if wh_secret else None,
+            "webhook_secret_source": webhook_secret_source(),
+            "florist_chat_id": florist_chat_id() or None,
+            "subscribe": subscribe_result,
         }
     )
 
@@ -1069,6 +1216,163 @@ async def handle_ai_compose(request: web.Request) -> web.Response:
         return _json({"error": exc.code, "detail": exc.message}, status=status)
 
     return _json({"ok": True, "text": text})
+
+
+async def _build_ai_chat_context(user_message: str) -> str:
+    """Краткий снимок CRM для system prompt ИИ-чата."""
+    lines: list[str] = []
+    try:
+        stats = await get_stats()
+        lines.append(
+            "Сводка: клиентов={customers}, отправлено за 30д={sent_month}, "
+            "доставляемость={delivery_rate}%, TG-аккаунтов ready={accounts_ready}/{accounts_total}".format(
+                customers=stats.get("customers", 0),
+                sent_month=stats.get("sent_month", 0),
+                delivery_rate=stats.get("delivery_rate")
+                if stats.get("delivery_rate") is not None
+                else "—",
+                accounts_ready=stats.get("accounts_ready", 0),
+                accounts_total=stats.get("accounts_total", 0),
+            )
+        )
+    except Exception:
+        logger.debug("AI chat: stats failed", exc_info=True)
+
+    try:
+        seg_all = await count_customers()
+        seg_regular = await count_customers("regular")
+        seg_new = await count_customers("new")
+        seg_inactive = await count_customers("inactive")
+        lines.append(
+            f"Сегменты: all={seg_all}, regular={seg_regular}, "
+            f"new={seg_new}, inactive={seg_inactive}"
+        )
+    except Exception:
+        logger.debug("AI chat: segments failed", exc_info=True)
+
+    try:
+        events = await list_upcoming_events(days=21, limit=12)
+        if events:
+            lines.append("Ближайшие события (21 день):")
+            for ev in events[:12]:
+                name = (ev.get("customer_name") or ev.get("name") or "—").strip()
+                title = (ev.get("title") or ev.get("kind") or "событие").strip()
+                when = (ev.get("next_date") or ev.get("event_date") or "").strip()
+                lines.append(f"• {when}: {name} — {title}")
+        else:
+            lines.append("Ближайшие события (21 день): нет")
+    except Exception:
+        logger.debug("AI chat: events failed", exc_info=True)
+
+    try:
+        campaigns = await list_campaigns(limit=5)
+        if campaigns:
+            lines.append("Последние рассылки:")
+            for c in campaigns[:5]:
+                msg_preview = (c.get("message") or "")[:80]
+                lines.append(
+                    f"• #{c.get('id')} [{c.get('status')}] "
+                    f"сегмент={c.get('segment')} «{msg_preview}»"
+                )
+    except Exception:
+        logger.debug("AI chat: campaigns failed", exc_info=True)
+
+    # Поиск клиента по словам из сообщения (имя / телефон)
+    search_q = ""
+    msg = (user_message or "").strip()
+    phone_digits = re.sub(r"\D", "", msg)
+    if len(phone_digits) >= 10:
+        search_q = phone_digits[-10:]
+    else:
+        # Берём самое длинное «словo» кириллицей/латиницей ≥ 3 символов
+        tokens = re.findall(r"[A-Za-zА-Яа-яЁё]{3,}", msg)
+        tokens = [t for t in tokens if t.lower() not in {
+            "клиент", "клиенту", "клиента", "рассылка", "сегмент", "бюджет",
+            "букет", "текст", "напиши", "сделай", "привет", "здравствуйте",
+            "пожалуйста", "сколько", "какой", "какая", "какие", "нужен",
+        }]
+        if tokens:
+            search_q = max(tokens, key=len)
+
+    if search_q:
+        try:
+            rows, total = await list_customers(search=search_q, page=1, page_size=5)
+            if rows:
+                lines.append(f"Поиск клиентов по «{search_q}» (найдено {total}):")
+                for c in rows[:5]:
+                    lines.append(
+                        f"• id={c.get('id')} {c.get('name') or '—'} "
+                        f"тел={c.get('phone') or '—'} сегмент={c.get('segment') or '—'} "
+                        f"tg={c.get('tg_user_id') or '—'}"
+                    )
+                    try:
+                        ost = await get_order_stats_for_customer(int(c["id"]))
+                        if ost:
+                            lines.append(
+                                f"  заказы: count={ost.get('orders_count', 0)}, "
+                                f"sum={ost.get('total_spent', 0)}, "
+                                f"last={ost.get('last_order_at') or '—'}"
+                            )
+                    except Exception:
+                        pass
+                    try:
+                        cev = await list_events_for_customer(int(c["id"]))
+                        for ev in (cev or [])[:3]:
+                            lines.append(
+                                f"  событие: {ev.get('date_from') or '—'} "
+                                f"{ev.get('title') or ev.get('kind') or ''}"
+                            )
+                    except Exception:
+                        pass
+        except Exception:
+            logger.debug("AI chat: customer search failed", exc_info=True)
+
+    lines.append(
+        "Каналы: Telegram (бот + userbot-рассылки/чаты), MAX (бот + рассылки). "
+        "Сайт заказа: veresk.flowers"
+    )
+    return "\n".join(lines)
+
+
+async def handle_ai_chat(request: web.Request) -> web.Response:
+    """POST /api/admin/ai/chat — внутренний ИИ-помощник админки."""
+    err = await _require_admin(request)
+    if err:
+        return err
+    if not is_ai_configured():
+        return _json(
+            {
+                "error": "ai_not_configured",
+                "detail": "Подключите ИИ в Настройках → Сервисы",
+            },
+            status=503,
+        )
+    try:
+        body = await request.json()
+    except Exception:
+        return _json({"error": "invalid_json"}, status=400)
+
+    messages = normalize_chat_messages(body.get("messages"))
+    if not messages or messages[-1]["role"] != "user":
+        single = str(body.get("message") or body.get("prompt") or "").strip()
+        if single:
+            messages = [{"role": "user", "content": single}]
+        else:
+            return _json(
+                {"error": "prompt_required", "detail": "Напишите сообщение"},
+                status=400,
+            )
+
+    context = await _build_ai_chat_context(messages[-1]["content"])
+    try:
+        reply = await admin_assistant_reply(messages=messages, context=context)
+    except AiComposeError as exc:
+        status = 400 if exc.code in ("prompt_required",) else 502
+        if exc.code == "ai_not_configured":
+            status = 503
+        return _json({"error": exc.code, "detail": exc.message}, status=status)
+
+    return _json({"ok": True, "reply": reply, "message": reply})
 
 
 async def handle_ai_settings_get(request: web.Request) -> web.Response:
@@ -2071,6 +2375,329 @@ async def handle_chats_message_media(request: web.Request) -> web.Response:
     return _media_response(data, mime, filename=filename)
 
 
+# ── MAX chats inbox ───────────────────────────────────────────────────────────
+
+
+async def _ensure_max_chat_db() -> None:
+    from max_bot.storage import init_max_db
+
+    await init_max_db()
+
+
+async def handle_max_chats_status(request: web.Request) -> web.Response:
+    err = await _require_admin(request)
+    if err:
+        return err
+    await _ensure_max_chat_db()
+    token = get_max_bot_token()
+    bot_name = None
+    bot_username = None
+    if token:
+        try:
+            from max_bot.api import MaxBotAPI
+
+            api = MaxBotAPI(token)
+            try:
+                me = await api.get_me()
+                bot_name = me.get("name") or me.get("first_name")
+                bot_username = me.get("username")
+            finally:
+                await api.close()
+        except Exception as exc:
+            return _json(
+                {
+                    "configured": True,
+                    "ok": False,
+                    "error": str(exc),
+                    "bot_name": None,
+                    "bot_username": None,
+                }
+            )
+    from max_bot.webhook_runtime import webhook_enabled, webhook_url
+
+    return _json(
+        {
+            "configured": bool(token),
+            "ok": bool(token),
+            "bot_name": bot_name,
+            "bot_username": bot_username,
+            "label": (
+                f"@{bot_username}"
+                if bot_username
+                else bot_name or ("MAX-бот" if token else None)
+            ),
+            "webhook_enabled": webhook_enabled(),
+            "webhook_url": webhook_url() or None,
+        }
+    )
+
+
+async def handle_max_chats_dialogs(request: web.Request) -> web.Response:
+    err = await _require_admin(request)
+    if err:
+        return err
+    await _ensure_max_chat_db()
+    if not is_max_configured():
+        return _json(
+            {
+                "configured": False,
+                "items": [],
+                "error": "max_not_configured",
+            }
+        )
+    try:
+        limit = int(request.query.get("limit") or 80)
+    except (TypeError, ValueError):
+        limit = 80
+    query = str(request.query.get("q") or "").strip()
+    from senders.max_chat import list_dialogs
+
+    try:
+        items = await list_dialogs(query=query, limit=limit)
+    except Exception as exc:
+        logger.exception("MAX list dialogs failed")
+        return _json({"error": str(exc), "configured": True, "items": []}, status=502)
+    return _json(
+        {
+            "configured": True,
+            "items": items,
+            "account_label": "MAX",
+        }
+    )
+
+
+async def handle_max_chats_messages(request: web.Request) -> web.Response:
+    err = await _require_admin(request)
+    if err:
+        return err
+    await _ensure_max_chat_db()
+    if not is_max_configured():
+        return _json({"error": "max_not_configured"}, status=400)
+    peer = str(request.match_info.get("peer_id") or "").strip()
+    if not peer:
+        return _json({"error": "invalid_peer_id"}, status=400)
+    try:
+        limit = int(request.query.get("limit") or 50)
+    except (TypeError, ValueError):
+        limit = 50
+    before_raw = request.query.get("before") or request.query.get("to")
+    before_ts = None
+    if before_raw not in (None, ""):
+        try:
+            before_ts = int(before_raw)
+        except (TypeError, ValueError):
+            before_ts = None
+
+    from senders.max_chat import get_dialog_messages
+
+    try:
+        data = await get_dialog_messages(peer, limit=limit, before_ts=before_ts)
+    except ValueError as exc:
+        return _json({"error": str(exc)}, status=400)
+    except Exception as exc:
+        logger.exception("MAX get messages failed")
+        return _json({"error": str(exc)}, status=502)
+    return _json(data)
+
+
+async def handle_max_chats_send(request: web.Request) -> web.Response:
+    err = await _require_admin(request)
+    if err:
+        return err
+    await _ensure_max_chat_db()
+    if not is_max_configured():
+        return _json({"error": "max_not_configured"}, status=400)
+    peer = str(request.match_info.get("peer_id") or "").strip()
+    if not peer:
+        return _json({"error": "invalid_peer_id"}, status=400)
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    text = str((body or {}).get("text") or "").strip()
+    from senders.max_chat import send_dialog_message
+
+    try:
+        message = await send_dialog_message(peer, text)
+    except ValueError as exc:
+        return _json({"error": str(exc)}, status=400)
+    except Exception as exc:
+        logger.exception("MAX send failed")
+        return _json({"error": str(exc)}, status=502)
+    try:
+        from max_bot.hub import publish_outbound_message
+
+        await publish_outbound_message(
+            peer_id=peer,
+            message=message,
+            dialog={
+                "peer_id": peer,
+                "last_message": message.get("text") or message.get("preview") or "",
+                "last_out": True,
+                "date": message.get("date"),
+                "title": None,
+            },
+        )
+    except Exception:
+        logger.debug("MAX SSE publish after send failed", exc_info=True)
+    return _json(
+        {
+            "ok": True,
+            "message": message,
+            "messages": [message],
+            "peer_id": peer,
+        }
+    )
+
+
+async def handle_max_chats_client(request: web.Request) -> web.Response:
+    err = await _require_admin(request)
+    if err:
+        return err
+    await _ensure_max_chat_db()
+    peer = str(request.match_info.get("peer_id") or "").strip()
+    if not peer:
+        return _json({"error": "invalid_peer_id"}, status=400)
+    from senders.max_chat import client_lookup_for_peer
+
+    try:
+        data = await client_lookup_for_peer(peer)
+    except ValueError as exc:
+        return _json({"error": str(exc)}, status=400)
+    except Exception as exc:
+        logger.exception("MAX client status failed")
+        return _json({"error": str(exc)}, status=502)
+
+    customer = data.get("customer")
+    return _json(
+        {
+            "status": data.get("status"),
+            "label": data.get("label"),
+            "hint": data.get("hint"),
+            "can_create": bool(data.get("can_create")),
+            "need_phone": bool(data.get("need_phone")),
+            "in_base": bool(data.get("in_base")),
+            "peer": data.get("peer"),
+            "customer": _customer_public(customer) if customer else None,
+            "configured": bool(data.get("configured")),
+        }
+    )
+
+
+# ── MAX webhook + SSE ─────────────────────────────────────────────────────────
+
+
+async def handle_max_webhook(request: web.Request) -> web.Response:
+    """
+    Публичный endpoint для Max (POST /subscriptions).
+    Проверяет X-Max-Bot-Api-Secret, обновляет инбокс и крутит SurveyBot.
+    """
+    from max_bot.webhook_runtime import handle_incoming_update, webhook_secret
+
+    expected = webhook_secret()
+    if expected:
+        got = request.headers.get("X-Max-Bot-Api-Secret", "").strip()
+        if got != expected:
+            return web.Response(status=403, text="forbidden")
+
+    try:
+        body = await request.json()
+    except Exception:
+        return web.Response(status=400, text="invalid_json")
+
+    updates: list[dict[str, Any]] = []
+    if isinstance(body, dict):
+        if isinstance(body.get("updates"), list):
+            updates = [u for u in body["updates"] if isinstance(u, dict)]
+        elif body.get("update_type"):
+            updates = [body]
+
+    for update in updates:
+        try:
+            await handle_incoming_update(update)
+        except Exception:
+            logger.exception("MAX webhook update failed")
+
+    return web.Response(status=200, text="ok")
+
+
+async def handle_max_internal_event(request: web.Request) -> web.Response:
+    """Уведомление из max_bot (long polling) → SSE админки без повторной анкеты."""
+    from max_bot.hub import publish_update_event
+    from max_bot.webhook_runtime import webhook_secret
+
+    expected = webhook_secret() or get_max_bot_token()
+    got = (
+        request.headers.get("X-Max-Internal-Secret", "").strip()
+        or _extract_token(request)
+    )
+    if expected and got != expected:
+        return web.Response(status=403, text="forbidden")
+
+    try:
+        body = await request.json()
+    except Exception:
+        return _json({"error": "invalid_json"}, status=400)
+    update = body.get("update") if isinstance(body, dict) else None
+    if not isinstance(update, dict):
+        update = body if isinstance(body, dict) else None
+    if not isinstance(update, dict) or not update.get("update_type"):
+        return _json({"error": "invalid_update"}, status=400)
+
+    event = await publish_update_event(update)
+    return _json({"ok": True, "event": event})
+
+
+async def handle_max_chats_events(request: web.Request) -> web.Response:
+    """SSE-поток realtime-событий MAX-чатов для админки."""
+    err = await _require_admin(request)
+    if err:
+        return err
+
+    from max_bot.hub import hub
+
+    queue = await hub.subscribe()
+    headers = {
+        **_cors(),
+        "Content-Type": "text/event-stream; charset=utf-8",
+        "Cache-Control": "no-cache, no-store, must-revalidate",
+        "Connection": "keep-alive",
+        "X-Accel-Buffering": "no",
+    }
+    resp = web.StreamResponse(status=200, headers=headers)
+    await resp.prepare(request)
+    try:
+        await resp.write(b"event: ready\ndata: {\"ok\":true}\n\n")
+        while True:
+            try:
+                payload = await asyncio.wait_for(queue.get(), timeout=25.0)
+            except asyncio.TimeoutError:
+                await resp.write(b": ping\n\n")
+                continue
+            await resp.write(f"data: {payload}\n\n".encode("utf-8"))
+    except (asyncio.CancelledError, ConnectionResetError, BrokenPipeError):
+        pass
+    finally:
+        await hub.unsubscribe(queue)
+    return resp
+
+
+async def handle_max_webhook_status(request: web.Request) -> web.Response:
+    err = await _require_admin(request)
+    if err:
+        return err
+    from max_bot.hub import hub
+    from max_bot.webhook_runtime import webhook_enabled, webhook_url
+
+    return _json(
+        {
+            "webhook_enabled": webhook_enabled(),
+            "webhook_url": webhook_url() or None,
+            "sse_subscribers": hub.subscriber_count,
+        }
+    )
+
+
 def setup_admin_routes(app: web.Application) -> None:
     routes = [
         ("/api/admin/login", handle_login, "POST"),
@@ -2109,8 +2736,18 @@ def setup_admin_routes(app: web.Application) -> None:
         ("/api/admin/chats/dialogs/{peer_id}/send-media", handle_chats_send_media, "POST"),
         ("/api/admin/chats/dialogs/{peer_id}/client", handle_chats_client_status, "GET"),
         ("/api/admin/chats/dialogs/{peer_id}/client", handle_chats_client_create, "POST"),
+        ("/api/admin/max-chats/status", handle_max_chats_status, "GET"),
+        ("/api/admin/max-chats/dialogs", handle_max_chats_dialogs, "GET"),
+        ("/api/admin/max-chats/dialogs/{peer_id}/messages", handle_max_chats_messages, "GET"),
+        ("/api/admin/max-chats/dialogs/{peer_id}/send", handle_max_chats_send, "POST"),
+        ("/api/admin/max-chats/dialogs/{peer_id}/client", handle_max_chats_client, "GET"),
+        ("/api/admin/max-chats/events", handle_max_chats_events, "GET"),
+        ("/api/admin/max-chats/webhook", handle_max_webhook_status, "GET"),
+        ("/api/max/webhook", handle_max_webhook, "POST"),
+        ("/api/internal/max/event", handle_max_internal_event, "POST"),
         ("/api/admin/segments", handle_segment_counts, "GET"),
         ("/api/admin/ai/compose", handle_ai_compose, "POST"),
+        ("/api/admin/ai/chat", handle_ai_chat, "POST"),
         ("/api/admin/ai/settings", handle_ai_settings_get, "GET"),
         ("/api/admin/ai/settings", handle_ai_settings_save, "POST"),
     ]
@@ -2120,3 +2757,29 @@ def setup_admin_routes(app: web.Application) -> None:
             app.router.add_route("OPTIONS", path, handle_options)
             options_done.add(path)
         app.router.add_route(method, path, handler)
+
+
+async def on_admin_startup(_app: web.Application) -> None:
+    """Подписка на Max webhook (если MAX_WEBHOOK_URL задан)."""
+    try:
+        from max_bot.webhook_runtime import (
+            ensure_runtime,
+            register_webhook_subscription,
+            webhook_enabled,
+        )
+
+        if not webhook_enabled():
+            return
+        try:
+            from posiflora import start_token_refresher, warmup_token
+
+            await warmup_token()
+            start_token_refresher()
+        except Exception:
+            logger.exception(
+                "Posiflora недоступна — анкеты MAX (webhook) только локально"
+            )
+        await ensure_runtime()
+        await register_webhook_subscription()
+    except Exception:
+        logger.exception("MAX webhook startup failed")

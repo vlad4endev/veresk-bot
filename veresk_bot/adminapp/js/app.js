@@ -79,6 +79,7 @@
       document.body.classList.remove("tg-thread-open");
       $("#tgShell")?.classList.remove("thread-open");
       stopTgPoll();
+      stopMaxSSE();
     }
     window.scrollTo({ top: 0, behavior: "smooth" });
     if (tab === "compose") setStep(0);
@@ -1032,12 +1033,119 @@
       if (s.bot_username) maxMeta = "@" + s.bot_username;
       else if (s.bot_name) maxMeta = s.bot_name;
       else if (s.token_masked) maxMeta = s.token_masked;
-    } catch (_) {}
-    loadMaxTokenStatus();
+      renderMaxSettings(s);
+    } catch (_) {
+      renderMaxSettings(null);
+    }
     box.innerHTML = maxConfigured
       ? `<span class="status-pill ok"><span class="d"></span>Подключён${maxMeta ? " · " + esc(maxMeta) : ""}</span>`
       : `<span class="status-pill warn"><span class="d"></span>Токен не задан</span>`;
     updateSettingsGlanceMax(maxConfigured);
+  }
+
+  function renderMaxSettings(s) {
+    const grid = $("#maxStatusGrid");
+    const tokenStatus = $("#maxTokenStatus");
+    const whStatus = $("#maxWebhookStatus");
+    const hint = $("#maxWebhookHint");
+    const urlInput = $("#maxWebhookUrl");
+    const floristInput = $("#maxFloristChatId");
+
+    if (!s) {
+      if (grid) grid.innerHTML = "";
+      return;
+    }
+
+    const botLabel = s.bot_username
+      ? "@" + s.bot_username
+      : s.bot_name || (s.configured ? "Бот подключён" : "Нет бота");
+    const tokenSrc = s.from_panel ? "из панели" : s.from_env ? "из .env" : "—";
+    const whMode = s.webhook_enabled
+      ? "Webhook · мгновенно"
+      : s.configured
+        ? "Long polling · с задержкой"
+        : "Сначала токен";
+    const whCls = s.webhook_enabled ? "ok" : s.configured ? "warn" : "muted";
+
+    if (grid) {
+      grid.innerHTML = `
+        <div class="max-stat ${s.configured ? "ok" : "warn"}">
+          <div class="max-stat-k">Бот</div>
+          <div class="max-stat-v">${esc(botLabel)}</div>
+          <div class="max-stat-s">${s.configured ? esc(tokenSrc) : "Укажите токен ниже"}</div>
+        </div>
+        <div class="max-stat ${whCls}">
+          <div class="max-stat-k">Realtime</div>
+          <div class="max-stat-v">${esc(whMode)}</div>
+          <div class="max-stat-s">${
+            s.webhook_url
+              ? esc(s.webhook_url.length > 42 ? s.webhook_url.slice(0, 40) + "…" : s.webhook_url)
+              : "URL webhook не задан"
+          }</div>
+        </div>
+        <div class="max-stat muted">
+          <div class="max-stat-k">Флорист</div>
+          <div class="max-stat-v">${s.florist_chat_id ? esc(String(s.florist_chat_id)) : "Выкл."}</div>
+          <div class="max-stat-s">Уведомления об анкетах в MAX</div>
+        </div>`;
+    }
+
+    if (tokenStatus) {
+      if (s.configured) {
+        const bits = [];
+        if (s.from_env) bits.push(".env");
+        if (s.from_panel) bits.push("панель");
+        if (s.token_masked) bits.push(s.token_masked);
+        tokenStatus.innerHTML =
+          '<span class="status-pill ok"><span class="d"></span>Активен' +
+          (bits.length ? " · " + esc(bits.join(" · ")) : "") +
+          "</span>";
+      } else {
+        tokenStatus.innerHTML =
+          '<span class="status-pill warn"><span class="d"></span>Нужен токен</span>';
+      }
+    }
+
+    if (whStatus) {
+      if (s.webhook_enabled) {
+        const src = s.webhook_url_source === "env" ? " · .env" : s.webhook_url_source === "panel" ? " · панель" : "";
+        whStatus.innerHTML =
+          '<span class="status-pill ok"><span class="d"></span>Включён' +
+          esc(src) +
+          (s.webhook_secret_set ? " · секрет есть" : "") +
+          "</span>";
+      } else if (s.webhook_url) {
+        whStatus.innerHTML =
+          '<span class="status-pill warn"><span class="d"></span>URL есть, нужен токен</span>';
+      } else {
+        whStatus.innerHTML =
+          '<span class="status-pill muted"><span class="d"></span>Необязательно</span>';
+      }
+    }
+
+    if (hint) {
+      hint.textContent = s.suggested_webhook_url
+        ? "Обычно: " + s.suggested_webhook_url
+        : "Пример: https://florist.skypath.fun/api/max/webhook";
+      hint.dataset.suggest = s.suggested_webhook_url || "";
+    }
+
+    if (urlInput && !urlInput.dataset.touched) {
+      urlInput.value = s.webhook_url || "";
+    }
+    if (floristInput && !floristInput.dataset.touched) {
+      floristInput.value = s.florist_chat_id ? String(s.florist_chat_id) : "";
+    }
+
+    // keep suggest for button
+    window.__maxSuggestedWebhook = s.suggested_webhook_url || "";
+  }
+
+  async function loadMaxTokenStatus() {
+    try {
+      const s = await AdminAPI.maxSettings();
+      renderMaxSettings(s);
+    } catch (_) {}
   }
 
   function botStatusLabel(status) {
@@ -1378,8 +1486,12 @@
     const box = $("#integrationsList");
     if (!box) return;
     box.innerHTML = '<div class="loading">Загрузка…</div>';
-    let syncLabel = "Статус неизвестен";
+
+    let syncWhenHtml = "Ещё не синхронизировали";
     let syncOk = false;
+    let syncHasRun = false;
+    let syncError = "";
+    let customersCount = 0;
     let ai = {
       configured: false,
       provider: "openai",
@@ -1397,7 +1509,7 @@
           label: "OpenRouter",
           api_base: "https://openrouter.ai/api/v1",
           model: "openai/gpt-4o-mini",
-          hint: "Ключ с openrouter.ai/keys",
+          hint: "Один ключ — доступ к разным моделям",
           needs_folder: false,
         },
         {
@@ -1423,21 +1535,25 @@
       api_key_masked: null,
       from_env: false,
     };
+
     try {
       const [stats, aiSettings] = await Promise.all([
         AdminAPI.stats(),
         AdminAPI.aiSettings().catch(() => null),
       ]);
+      customersCount = Number(stats.customers) || 0;
       const sync = stats.sync || {};
       if (sync.at) {
+        syncHasRun = true;
         syncOk = !sync.error;
-        syncLabel = syncOk
-          ? "Последняя синхронизация · " + String(sync.at).replace("T", " ").slice(0, 16)
-          : "Ошибка · " + String(sync.error || "unknown");
+        syncError = sync.error ? String(sync.error) : "";
+        syncWhenHtml = syncOk
+          ? "Последняя · " + fmtRelTime(sync.at)
+          : "Ошибка синхронизации";
       } else if (sync.error) {
-        syncLabel = "Ошибка · " + String(sync.error);
-      } else {
-        syncLabel = "Ещё не синхронизировали";
+        syncHasRun = true;
+        syncError = String(sync.error);
+        syncWhenHtml = "Ошибка синхронизации";
       }
       if (aiSettings) {
         ai = Object.assign(ai, aiSettings);
@@ -1448,18 +1564,33 @@
     } catch (_) {}
 
     const providerLabel =
-      (ai.providers || []).find((p) => p.id === ai.provider)?.label || ai.provider || "ИИ";
-    const aiBadge = ai.configured
-      ? '<span class="badge-soft ok">OK</span>'
-      : '<span class="badge-soft warn">Настроить</span>';
-    const aiMeta = ai.configured
-      ? esc(providerLabel) +
-        " · " +
-        (ai.from_env ? "ключ из .env · " : "") +
-        esc(ai.api_key_masked || "••••") +
-        " · " +
-        esc(ai.model || "")
-      : "Выберите оператора и укажите API-ключ";
+      (ai.providers || []).find((p) => p.id === ai.provider)?.label ||
+      ai.provider ||
+      "ИИ";
+
+    const hero = $("#integHeroStatus");
+    if (hero) {
+      hero.innerHTML = [
+        `<span class="status-pill ${syncOk ? "ok" : syncHasRun && syncError ? "err" : "warn"}"><span class="d"></span>Posiflora · ${
+          syncOk ? "ок" : syncHasRun && syncError ? "ошибка" : "нет синхр."
+        }</span>`,
+        `<span class="status-pill ${ai.configured ? "ok" : "warn"}"><span class="d"></span>ИИ · ${
+          ai.configured ? esc(providerLabel) : "выкл"
+        }</span>`,
+      ].join("");
+    }
+
+    const pfStatus = syncOk
+      ? `<span class="status-pill ok"><span class="d"></span>Синхронизирована</span>`
+      : syncHasRun && syncError
+        ? `<span class="status-pill err"><span class="d"></span>Ошибка синхронизации</span>`
+        : `<span class="status-pill warn"><span class="d"></span>Ждёт первой синхронизации</span>`;
+
+    const aiStatus = ai.configured
+      ? `<span class="status-pill ok"><span class="d"></span>${esc(providerLabel)}${
+          ai.from_env ? " · .env" : ""
+        }</span>`
+      : `<span class="status-pill warn"><span class="d"></span>Не подключён</span>`;
 
     const providerChips = (ai.providers || [])
       .map(
@@ -1480,85 +1611,97 @@
     const showBase = ai.provider === "custom";
 
     box.innerHTML = `
-      <div class="integ-card">
-        <div class="integ-card-top">
-          <div class="integ-ico pf">PF</div>
-          <div style="flex:1;min-width:0">
-            <div class="n">Posiflora</div>
-            <div class="p">Клиенты, события и заказы для сегментов и поводов написать</div>
+      <div class="set-block svc-block">
+        <div class="set-block-head">
+          <div class="svc-title-row">
+            <div class="svc-ico pf" aria-hidden="true">PF</div>
+            <div>
+              <h4>Posiflora</h4>
+              <p>Клиенты, заказы и даты из CRM — основа сегментов и поводов написать.</p>
+            </div>
           </div>
-          <span class="badge-soft ${syncOk ? "ok" : "warn"}">${syncOk ? "OK" : "Настроить"}</span>
+          ${pfStatus}
         </div>
-        <div class="meta">${esc(syncLabel)}</div>
-        <div class="integ-actions">
-          <button class="btn" type="button" id="integSyncBtn">Синхронизировать сейчас</button>
+        <div class="svc-metrics">
+          <div class="svc-metric">
+            <div class="n">${fmtNum(customersCount)}</div>
+            <div class="l">клиентов в базе</div>
+          </div>
+          <div class="svc-metric svc-metric-wide">
+            <div class="n-sm">${syncWhenHtml}</div>
+            <div class="l">${
+              syncError
+                ? esc(String(syncError).slice(0, 140))
+                : customersCount
+                  ? "Данные из Posiflora готовы к сегментам и рассылкам"
+                  : "Нажмите «Синхронизировать», чтобы подтянуть клиентов"
+            }</div>
+          </div>
+        </div>
+        <div class="form-actions svc-actions">
+          <button class="btn primary" type="button" id="integSyncBtn">Синхронизировать</button>
           <button class="btn" type="button" onclick="go('clients')">Открыть клиентов</button>
         </div>
       </div>
-      <div class="integ-card integ-card-form">
-        <div class="integ-card-top">
-          <div class="integ-ico ai">AI</div>
-          <div style="flex:1;min-width:0">
-            <div class="n">ИИ-редактор</div>
-            <div class="p">Тексты рассылок · OpenAI, OpenRouter, YandexGPT</div>
-          </div>
-          ${aiBadge}
-        </div>
-        <div class="meta" id="aiSettingsMeta">${aiMeta}</div>
-        <div class="integ-ai-form" id="aiSettingsForm">
-          <label>Оператор</label>
-          <div class="ai-prov-row" id="aiProviderRow">${providerChips}</div>
-          <p class="ai-prov-hint" id="aiProvHint">${esc(curProv.hint || "")}</p>
-          <label for="aiApiKey">API-ключ</label>
-          <input id="aiApiKey" type="password" autocomplete="off" placeholder="${
-            ai.configured
-              ? "Оставьте пустым, чтобы не менять · " + esc(ai.api_key_masked || "••••")
-              : "Вставьте ключ оператора"
-          }">
-          <div class="form-grid-2" id="aiFolderRow" ${needsFolder ? "" : "hidden"}>
-            <div style="grid-column:1/-1">
-              <label for="aiFolderId">Folder ID (Yandex Cloud)</label>
-              <input id="aiFolderId" type="text" autocomplete="off" value="${esc(
-                ai.folder_id || ""
-              )}" placeholder="b1g…">
+
+      <div class="set-block svc-block">
+        <div class="set-block-head">
+          <div class="svc-title-row">
+            <div class="svc-ico ai" aria-hidden="true">AI</div>
+            <div>
+              <h4>ИИ-помощник</h4>
+              <p>Черновики рассылок и ответы в разделе «ИИ чат».</p>
             </div>
           </div>
-          <div class="form-grid-2">
+          ${aiStatus}
+        </div>
+
+        <div class="svc-ai-form" id="aiSettingsForm">
+          <div class="svc-field">
+            <label>Провайдер</label>
+            <div class="ai-prov-row" id="aiProviderRow">${providerChips}</div>
+            <p class="ai-prov-hint" id="aiProvHint">${esc(curProv.hint || "")}</p>
+          </div>
+
+          <div class="svc-field">
+            <label for="aiApiKey">API-ключ</label>
+            <input id="aiApiKey" type="password" autocomplete="off" placeholder="${
+              ai.configured
+                ? "Оставьте пустым, чтобы не менять · " + esc(ai.api_key_masked || "••••")
+                : "Вставьте ключ выбранного провайдера"
+            }">
+          </div>
+
+          <div class="svc-field" id="aiFolderRow" ${needsFolder ? "" : "hidden"}>
+            <label for="aiFolderId">Folder ID (Yandex Cloud)</label>
+            <input id="aiFolderId" type="text" autocomplete="off" value="${esc(
+              ai.folder_id || ""
+            )}" placeholder="b1g…">
+          </div>
+
+          <div class="form-grid-2 svc-field">
             <div id="aiBaseWrap" ${showBase ? "" : "hidden"}>
               <label for="aiApiBase">Базовый URL</label>
               <input id="aiApiBase" type="url" autocomplete="off" value="${esc(
                 ai.api_base || ""
               )}" placeholder="https://…/v1">
             </div>
-            <div ${showBase ? "" : 'style="grid-column:1/-1"'}>
+            <div id="aiModelWrap" ${showBase ? "" : 'style="grid-column:1/-1"'}>
               <label for="aiModel">Модель</label>
               <input id="aiModel" type="text" autocomplete="off" value="${esc(
                 ai.model || ""
               )}" placeholder="${esc(curProv.model || "model")}">
             </div>
           </div>
-          <div class="form-actions">
+
+          <div class="form-actions svc-actions">
             <button type="button" class="btn primary" id="aiSettingsSave">Сохранить</button>
             <button type="button" class="btn" id="aiSettingsClear" ${
               ai.configured ? "" : "disabled"
             }>Отключить</button>
-            <button type="button" class="btn" onclick="go('aichat')">ИИ чат</button>
+            <button type="button" class="btn" onclick="go('aichat')">Открыть ИИ-чат</button>
           </div>
-          <p class="form-foot">OpenRouter — модели вида <code>openai/gpt-4o-mini</code>. YandexGPT — <code>yandexgpt-lite/latest</code> или <code>yandexgpt/latest</code>.</p>
-        </div>
-      </div>
-      <div class="integ-card">
-        <div class="integ-card-top">
-          <div class="integ-ico tg">TG</div>
-          <div style="flex:1;min-width:0">
-            <div class="n">Каналы отправки</div>
-            <div class="p">Telegram-номера и MAX-бот настраиваются в соседних разделах</div>
-          </div>
-          <span class="badge-soft muted">Быстрый переход</span>
-        </div>
-        <div class="integ-actions">
-          <button class="btn" type="button" data-goto-settings="accounts">Telegram</button>
-          <button class="btn" type="button" data-goto-settings="bots">MAX</button>
+          <p class="form-foot">OpenRouter: <code>openai/gpt-4o-mini</code>. YandexGPT: <code>yandexgpt-lite/latest</code>.</p>
         </div>
       </div>`;
 
@@ -1580,7 +1723,7 @@
       if (folderRow) folderRow.hidden = btn.dataset.folder !== "1";
       const baseWrap = $("#aiBaseWrap");
       if (baseWrap) baseWrap.hidden = selectedProvider !== "custom";
-      const modelWrap = baseWrap?.parentElement?.querySelector("#aiModel")?.parentElement;
+      const modelWrap = $("#aiModelWrap");
       if (modelWrap) {
         if (selectedProvider === "custom") modelWrap.removeAttribute("style");
         else modelWrap.style.gridColumn = "1 / -1";
@@ -1613,7 +1756,7 @@
       }
       if (btn) {
         btn.disabled = false;
-        btn.textContent = "Синхронизировать сейчас";
+        btn.textContent = "Синхронизировать";
       }
     });
 
@@ -1659,10 +1802,6 @@
         alert(err.data?.detail || err.message || "Ошибка");
       }
     });
-
-    box.querySelectorAll("[data-goto-settings]").forEach((b) => {
-      b.addEventListener("click", () => setSettingsTab(b.dataset.gotoSettings));
-    });
   }
 
   async function loadTgApiStatus() {
@@ -1685,28 +1824,6 @@
     } catch (_) {}
   }
 
-  async function loadMaxTokenStatus() {
-    const box = $("#maxTokenStatus");
-    if (!box) return;
-    try {
-      const s = await AdminAPI.maxSettings();
-      if (s.configured) {
-        const bits = [];
-        if (s.from_env) bits.push(".env");
-        if (s.bot_username) bits.push("@" + s.bot_username);
-        else if (s.bot_name) bits.push(s.bot_name);
-        if (s.token_masked) bits.push(s.token_masked);
-        box.innerHTML =
-          '<span class="status-pill ok"><span class="d"></span>Активен' +
-          (bits.length ? " · " + esc(bits.join(" · ")) : "") +
-          "</span>";
-      } else {
-        box.innerHTML =
-          '<span class="status-pill warn"><span class="d"></span>Вставьте токен и нажмите «Сохранить»</span>';
-      }
-    } catch (_) {}
-  }
-
   $("#tgApiSave")?.addEventListener("click", async () => {
     const apiId = $("#tgApiId").value.trim();
     const apiHash = $("#tgApiHash").value.trim();
@@ -1722,12 +1839,31 @@
     }
   });
 
+  function maxSettingsError(err) {
+    const code = err?.data?.error || err?.message;
+    const detail = err?.data?.detail;
+    if (detail) return detail;
+    if (code === "token_required") {
+      return "Сначала сохраните токен бота (шаг 1). Токен выдаёт @MasterBot в MAX.";
+    }
+    if (code === "invalid_token") {
+      return "Неверный токен — проверьте у @MasterBot";
+    }
+    if (code === "invalid_webhook_url") {
+      return "Некорректный URL webhook (нужен https:// без порта)";
+    }
+    if (code === "invalid_webhook_secret") {
+      return "Секрет: 5–256 символов (A–Z, a–z, 0–9, _, -)";
+    }
+    return code || "Ошибка сохранения";
+  }
+
   $("#maxTokenSave")?.addEventListener("click", async () => {
     const token = $("#maxBotToken").value.trim();
-    if (!token) return alert("Вставьте токен от @MasterBot");
+    if (!token) return alert("Вставьте токен от @MasterBot в поле «Токен»");
     try {
-      const res = await AdminAPI.maxSaveSettings(token);
-      if (!res.ok) return alert(res.detail || res.error || "Ошибка");
+      const res = await AdminAPI.maxSaveSettings({ token });
+      if (!res.ok) return alert(maxSettingsError({ data: res }));
       $("#maxBotToken").value = "";
       const who = res.bot_username
         ? "@" + res.bot_username
@@ -1736,17 +1872,12 @@
       loadAccounts();
       loadBotsPane();
     } catch (err) {
-      const msg =
-        err.data?.detail ||
-        (err.data?.error === "invalid_token"
-          ? "Неверный токен — проверьте у @MasterBot"
-          : err.data?.error || err.message);
-      alert(msg);
+      alert(maxSettingsError(err));
     }
   });
 
   $("#maxTokenClear")?.addEventListener("click", async () => {
-    if (!confirm("Отключить токен MAX из панели? (значение из .env останется)"))
+    if (!confirm("Убрать токен MAX из панели? (значение из .env останется)"))
       return;
     try {
       await AdminAPI.maxClearSettings();
@@ -1754,8 +1885,122 @@
       loadAccounts();
       loadBotsPane();
     } catch (err) {
+      alert(maxSettingsError(err));
+    }
+  });
+
+  $("#maxWebhookUrl")?.addEventListener("input", () => {
+    $("#maxWebhookUrl").dataset.touched = "1";
+  });
+  $("#maxFloristChatId")?.addEventListener("input", () => {
+    $("#maxFloristChatId").dataset.touched = "1";
+  });
+
+  $("#maxWebhookSuggest")?.addEventListener("click", () => {
+    const url =
+      window.__maxSuggestedWebhook ||
+      $("#maxWebhookHint")?.dataset.suggest ||
+      "https://florist.skypath.fun/api/max/webhook";
+    const input = $("#maxWebhookUrl");
+    if (!input) return;
+    input.value = url;
+    input.dataset.touched = "1";
+    input.focus();
+  });
+
+  $("#maxWebhookSave")?.addEventListener("click", async () => {
+    const url = ($("#maxWebhookUrl")?.value || "").trim();
+    const secret = ($("#maxWebhookSecret")?.value || "").trim();
+    if (!url) return alert("Укажите HTTPS URL webhook");
+    if (!url.startsWith("https://"))
+      return alert("URL должен начинаться с https://");
+    try {
+      const st = await AdminAPI.maxSettings();
+      if (!st.configured) {
+        return alert(
+          "Сначала шаг 1: сохраните токен бота от @MasterBot.\nБез токена Max не примет подписку на webhook."
+        );
+      }
+    } catch (_) {
+      /* проверим на сервере */
+    }
+    const body = {
+      webhook_url: url,
+      register_webhook: true,
+    };
+    if (secret) body.webhook_secret = secret;
+    const btn = $("#maxWebhookSave");
+    if (btn) btn.disabled = true;
+    try {
+      const res = await AdminAPI.maxSaveSettings(body);
+      if (!res.ok) return alert(maxSettingsError({ data: res }));
+      if ($("#maxWebhookSecret")) $("#maxWebhookSecret").value = "";
+      delete $("#maxWebhookUrl")?.dataset.touched;
+      const sub = res.subscribe;
+      if (sub && sub.success === false) {
+        alert(
+          "Сохранено, но Max не принял подписку:\n" +
+            (sub.error || "неизвестная ошибка")
+        );
+      } else {
+        alert("Webhook сохранён и подписан в Max");
+      }
+      loadBotsPane();
+    } catch (err) {
+      alert(maxSettingsError(err));
+    } finally {
+      if (btn) btn.disabled = false;
+    }
+  });
+
+  $("#maxWebhookClear")?.addEventListener("click", async () => {
+    if (
+      !confirm(
+        "Отключить webhook? Вернётся long polling (если запущен max_bot). Значения из .env останутся."
+      )
+    )
+      return;
+    try {
+      await AdminAPI.maxClearWebhook();
+      const urlInput = $("#maxWebhookUrl");
+      if (urlInput) {
+        urlInput.value = "";
+        delete urlInput.dataset.touched;
+      }
+      if ($("#maxWebhookSecret")) $("#maxWebhookSecret").value = "";
+      loadBotsPane();
+    } catch (err) {
       alert(err.data?.error || err.message);
     }
+  });
+
+  $("#maxFloristSave")?.addEventListener("click", async () => {
+    const raw = ($("#maxFloristChatId")?.value || "").trim();
+    try {
+      const res = await AdminAPI.maxSaveSettings({
+        florist_chat_id: raw === "" ? "" : raw,
+      });
+      if (!res.ok) return alert(res.detail || res.error || "Ошибка");
+      delete $("#maxFloristChatId")?.dataset.touched;
+      alert(
+        res.florist_chat_id
+          ? "Chat ID флориста сохранён: " + res.florist_chat_id
+          : "Уведомления флористу в MAX выключены"
+      );
+      loadBotsPane();
+    } catch (err) {
+      alert(err.data?.detail || err.data?.error || err.message);
+    }
+  });
+
+  $("#maxOpenChats")?.addEventListener("click", () => {
+    localStorage.setItem("veresk_chats_channel", "max");
+    try {
+      tgState.channel = "max";
+    } catch (_) {
+      /* tgState ещё не объявлен при раннем клике — loadChats прочитает localStorage */
+    }
+    go("chats");
   });
 
   function setConnectStep(step) {
@@ -2183,43 +2428,215 @@
     } catch (_) {}
   });
 
-  // ── AI chat (scaffold) ───────────────────────────────────────────────────
+  // ── AI chat ──────────────────────────────────────────────────────────────
+
+  const AI_CHAT_KEY = "veresk_ai_chat_v1";
+  const AI_WELCOME =
+    "Здравствуйте! Я помогу с текстами рассылок, сегментами, ближайшими событиями и вопросами по клиентам из CRM. Спросите, например: «кого поздравить на этой неделе?»";
 
   let aiChatReady = false;
+  const aiChat = {
+    configured: false,
+    busy: false,
+    messages: [], // {role: 'user'|'assistant', content}
+  };
+
+  function aiWelcomeHtml() {
+    return `
+      <div class="ai-msg ai-msg-bot">
+        <div class="ai-bubble">
+          <div class="ai-bubble-label">Veresk ИИ</div>
+          <p>${esc(AI_WELCOME)}</p>
+        </div>
+      </div>`;
+  }
+
+  function aiFormatBubble(text) {
+    return esc(text)
+      .replace(/\n\n/g, "</p><p>")
+      .replace(/\n/g, "<br>");
+  }
+
+  function renderAiMessages() {
+    const box = $("#aiMessages");
+    if (!box) return;
+    if (!aiChat.messages.length) {
+      box.innerHTML = aiWelcomeHtml();
+      return;
+    }
+    box.innerHTML = aiChat.messages
+      .map((m) => {
+        if (m.role === "user") {
+          return `<div class="ai-msg ai-msg-user"><div class="ai-bubble"><p>${aiFormatBubble(
+            m.content
+          )}</p></div></div>`;
+        }
+        return `<div class="ai-msg ai-msg-bot"><div class="ai-bubble"><div class="ai-bubble-label">Veresk ИИ</div><p>${aiFormatBubble(
+          m.content
+        )}</p></div></div>`;
+      })
+      .join("");
+    if (aiChat.busy) {
+      box.insertAdjacentHTML(
+        "beforeend",
+        `<div class="ai-msg ai-msg-bot" id="aiTyping"><div class="ai-bubble"><div class="ai-bubble-label">Veresk ИИ</div><p class="ai-typing">Печатает…</p></div></div>`
+      );
+    }
+    box.scrollTop = box.scrollHeight;
+  }
+
+  function persistAiChat() {
+    try {
+      localStorage.setItem(
+        AI_CHAT_KEY,
+        JSON.stringify(aiChat.messages.slice(-24))
+      );
+    } catch (_) {}
+  }
+
+  function loadAiChat() {
+    try {
+      const raw = localStorage.getItem(AI_CHAT_KEY);
+      if (!raw) return;
+      const parsed = JSON.parse(raw);
+      if (Array.isArray(parsed)) {
+        aiChat.messages = parsed
+          .filter(
+            (m) =>
+              m &&
+              (m.role === "user" || m.role === "assistant") &&
+              typeof m.content === "string" &&
+              m.content.trim()
+          )
+          .slice(-24);
+      }
+    } catch (_) {
+      aiChat.messages = [];
+    }
+  }
+
+  function setAiChatEnabled(on) {
+    aiChat.configured = !!on;
+    const input = $("#aiInput");
+    const send = $("#aiSend");
+    const chips = $("#aiQuickChips");
+    const hint = $("#aiChatHint");
+    if (input) {
+      input.disabled = !on || aiChat.busy;
+      input.placeholder = on
+        ? "Спросите про клиента, сегмент или текст рассылки…"
+        : "Сначала подключите ИИ в Настройках…";
+    }
+    if (send) send.disabled = !on || aiChat.busy;
+    if (chips) chips.hidden = !on;
+    if (hint) {
+      hint.innerHTML = on
+        ? "Ответы опираются на клиентов, сегменты и события из CRM. Не выдумывает цены — проверяйте тексты перед отправкой."
+        : 'Подключите ИИ в <button type="button" class="linkish" onclick="go(\'settings\')">Настройки → Сервисы</button>.';
+    }
+  }
+
+  async function refreshAiChatConfig() {
+    try {
+      const s = await AdminAPI.aiSettings();
+      setAiChatEnabled(!!s.configured);
+    } catch (_) {
+      setAiChatEnabled(false);
+    }
+  }
+
+  async function sendAiChat(text) {
+    const content = String(text || "").trim();
+    if (!content || aiChat.busy || !aiChat.configured) return;
+    aiChat.messages.push({ role: "user", content });
+    aiChat.busy = true;
+    setAiChatEnabled(true);
+    renderAiMessages();
+    persistAiChat();
+    const input = $("#aiInput");
+    if (input) {
+      input.value = "";
+      input.style.height = "auto";
+    }
+    try {
+      const history = aiChat.messages.map((m) => ({
+        role: m.role,
+        content: m.content,
+      }));
+      const res = await AdminAPI.aiChat({ messages: history });
+      const reply = String(res.reply || res.message || "").trim();
+      if (!reply) throw new Error("empty");
+      aiChat.messages.push({ role: "assistant", content: reply });
+    } catch (err) {
+      const detail =
+        err?.data?.detail ||
+        err?.message ||
+        "Не удалось получить ответ. Проверьте настройки ИИ.";
+      aiChat.messages.push({
+        role: "assistant",
+        content: "⚠️ " + detail,
+      });
+      if (err?.data?.error === "ai_not_configured" || err?.status === 503) {
+        setAiChatEnabled(false);
+      }
+    } finally {
+      aiChat.busy = false;
+      if (aiChat.configured) setAiChatEnabled(true);
+      renderAiMessages();
+      persistAiChat();
+    }
+  }
 
   function initAiChat() {
-    if (aiChatReady) return;
+    refreshAiChatConfig();
+    if (aiChatReady) {
+      renderAiMessages();
+      return;
+    }
     aiChatReady = true;
+    loadAiChat();
+    renderAiMessages();
+
     const form = $("#aiChatForm");
     const input = $("#aiInput");
     form?.addEventListener("submit", (e) => {
       e.preventDefault();
-      // Backend подключается позже
+      sendAiChat(input?.value || "");
     });
     input?.addEventListener("keydown", (e) => {
-      if (e.key === "Enter" && !e.shiftKey) e.preventDefault();
+      if (e.key === "Enter" && !e.shiftKey) {
+        e.preventDefault();
+        sendAiChat(input.value);
+      }
+    });
+    input?.addEventListener("input", () => {
+      input.style.height = "auto";
+      input.style.height = Math.min(input.scrollHeight, 120) + "px";
     });
     $("#aiClearChat")?.addEventListener("click", () => {
-      const box = $("#aiMessages");
-      if (!box) return;
-      box.innerHTML = `
-        <div class="ai-msg ai-msg-bot">
-          <div class="ai-bubble">
-            <div class="ai-bubble-label">Veresk ИИ</div>
-            <p>Диалог очищен. Чат для аналитики и помощи появится здесь после подключения ИИ.</p>
-          </div>
-        </div>`;
+      aiChat.messages = [];
+      persistAiChat();
+      renderAiMessages();
+    });
+    $("#aiQuickChips")?.addEventListener("click", (e) => {
+      const btn = e.target.closest("[data-prompt]");
+      if (!btn) return;
+      sendAiChat(btn.getAttribute("data-prompt") || "");
     });
   }
 
-  // ── Telegram chats ────────────────────────────────────────────────────────
+  // ── Chats (Telegram + MAX) ────────────────────────────────────────────────
 
   const TG_ACCOUNT_KEY = "veresk_tg_chat_account";
   const TG_ONLY_USERS_KEY = "veresk_tg_only_users";
+  const CHATS_CHANNEL_KEY = "veresk_chats_channel";
   const TG_MAX_ATTACH = 10;
   const TG_MAX_FILE_MB = 50;
   const tgState = {
     ready: false,
+    channel: localStorage.getItem(CHATS_CHANNEL_KEY) === "max" ? "max" : "tg",
+    maxConfigured: false,
+    maxLabel: "MAX-бот",
     accounts: [],
     accountId: null,
     dialogs: [],
@@ -2233,9 +2650,73 @@
     sending: false,
     searchTimer: null,
     pollTimer: null,
+    maxEs: null,
     lastQuery: "",
     onlyUsers: localStorage.getItem(TG_ONLY_USERS_KEY) !== "0",
+    historyHint: "",
   };
+
+  function isMaxChannel() {
+    return tgState.channel === "max";
+  }
+
+  function applyChatsChannelUi() {
+    const root = $("#chats");
+    if (root) root.dataset.channel = tgState.channel;
+    $$(".ch-chan-btn").forEach((btn) => {
+      const on = btn.getAttribute("data-ch-channel") === tgState.channel;
+      btn.classList.toggle("on", on);
+      btn.setAttribute("aria-selected", on ? "true" : "false");
+    });
+    const desc = $("#chatsPageDesc");
+    const emptyHint = $("#tgThreadEmptyHint");
+    const maxLabel = $("#maxAccountLabel");
+    const input = $("#tgInput");
+    if (isMaxChannel()) {
+      if (desc) desc.textContent = "Переписка клиентов с MAX-ботом. Отвечайте прямо отсюда.";
+      if (emptyHint)
+        emptyHint.textContent =
+          "Слева — кто писал боту или заполнил анкету. Ответ уйдёт в личный чат MAX.";
+      if (maxLabel) {
+        maxLabel.hidden = false;
+        maxLabel.textContent = tgState.maxLabel || "MAX-бот";
+      }
+      if (input) {
+        input.placeholder = "Сообщение…";
+        input.maxLength = 4000;
+      }
+    } else {
+      if (desc)
+        desc.textContent =
+          "Переписка с клиентами из Telegram. Группы и каналы можно скрыть фильтром.";
+      if (emptyHint)
+        emptyHint.textContent =
+          "Слева — все диалоги аккаунта. Можно писать клиентам так же, как в Telegram.";
+      if (maxLabel) maxLabel.hidden = true;
+      if (input) {
+        input.placeholder = "Сообщение или подпись…";
+        input.maxLength = 4096;
+      }
+    }
+  }
+
+  async function setChatsChannel(channel) {
+    const next = channel === "max" ? "max" : "tg";
+    if (tgState.channel === next) return;
+    tgState.channel = next;
+    localStorage.setItem(CHATS_CHANNEL_KEY, next);
+    tgState.peerId = null;
+    tgState.peer = null;
+    tgState.messages = [];
+    tgState.dialogs = [];
+    tgState.historyHint = "";
+    clearTgAttachments();
+    resetTgClientUi();
+    showTgThread(false);
+    stopMaxSSE();
+    applyChatsChannelUi();
+    await loadChats();
+  }
 
   function stopTgPoll() {
     if (tgState.pollTimer) {
@@ -2244,14 +2725,76 @@
     }
   }
 
+  function stopMaxSSE() {
+    if (tgState.maxEs) {
+      try {
+        tgState.maxEs.close();
+      } catch (_) {
+        /* ignore */
+      }
+      tgState.maxEs = null;
+    }
+  }
+
+  function applyMaxSseEvent(event) {
+    if (!event || !isMaxChannel()) return;
+    const peerId = event.peer_id;
+    if (event.dialog && peerId) {
+      const idx = tgState.dialogs.findIndex((d) => String(d.peer_id) === String(peerId));
+      const merged = {
+        ...(idx >= 0 ? tgState.dialogs[idx] : {}),
+        ...event.dialog,
+        peer_id: peerId,
+      };
+      if (idx >= 0) tgState.dialogs.splice(idx, 1);
+      tgState.dialogs.unshift(merged);
+      renderTgDialogs();
+    }
+    if (event.message && peerId) {
+      if (String(tgState.peerId) !== String(peerId)) return;
+      const msg = event.message;
+      const realId = String(msg.id || "");
+      if (realId && !realId.startsWith("tmp:")) {
+        const exists = tgState.messages.some((m) => String(m.id) === realId);
+        if (exists) return;
+      }
+      const tmpIdx = tgState.messages.findIndex(
+        (m) => m._pending && m.out && m.text === msg.text
+      );
+      if (tmpIdx >= 0) {
+        tgState.messages[tmpIdx] = msg;
+      } else {
+        tgState.messages = [...tgState.messages, msg];
+      }
+      tgState.historyHint = "";
+      renderTgMessages({ stickBottom: true });
+    }
+  }
+
+  function startMaxSSE() {
+    stopMaxSSE();
+    if (!isMaxChannel() || !tgState.maxConfigured || !AdminAPI.getToken()) return;
+    try {
+      tgState.maxEs = AdminAPI.maxChatEvents(applyMaxSseEvent);
+    } catch (err) {
+      console.warn("MAX SSE unavailable", err);
+    }
+  }
+
   function startTgPoll() {
     stopTgPoll();
+    // MAX: realtime через SSE; лёгкий poll только как запасной refresh списка
     tgState.pollTimer = setInterval(() => {
       if (!$("#chats")?.classList.contains("active")) return;
+      if (isMaxChannel()) {
+        if (!tgState.maxConfigured) return;
+        refreshTgDialogs({ silent: true });
+        return;
+      }
       if (!tgState.accountId) return;
       refreshTgDialogs({ silent: true });
       if (tgState.peerId) openTgPeer(tgState.peerId, { silent: true, keepScroll: true });
-    }, 8000);
+    }, isMaxChannel() ? 20000 : 8000);
   }
 
   function tgInitials(title) {
@@ -2325,7 +2868,7 @@
 
   function filteredTgDialogs() {
     const items = tgState.dialogs || [];
-    if (!tgState.onlyUsers) return items;
+    if (isMaxChannel() || !tgState.onlyUsers) return items;
     return items.filter((d) => (d.kind || "user") === "user");
   }
 
@@ -2333,29 +2876,48 @@
     const box = $("#tgDialogList");
     if (!box) return;
     const items = filteredTgDialogs();
-    if (!tgState.accountId) {
-      box.innerHTML = `<div class="tg-empty"><div class="t">Нет аккаунта</div>Подключите Telegram в Настройках.</div>`;
-      return;
+    const maxMode = isMaxChannel();
+
+    if (maxMode) {
+      if (!tgState.maxConfigured) {
+        box.innerHTML = `<div class="tg-empty"><div class="t">MAX не подключён</div>Укажите токен бота в Настройках → MAX.<div style="margin-top:12px"><button class="btn primary" type="button" onclick="go('settings')">Настройки</button></div></div>`;
+        return;
+      }
+      if (tgState.loadingDialogs && !items.length) {
+        box.innerHTML = `<div class="tg-empty">Загружаем чаты…</div>`;
+        return;
+      }
+      if (!items.length) {
+        box.innerHTML = `<div class="tg-empty"><div class="t">Диалогов пока нет</div>Они появятся, когда клиент напишет боту или заполнит анкету в MAX.</div>`;
+        return;
+      }
+    } else {
+      if (!tgState.accountId) {
+        box.innerHTML = `<div class="tg-empty"><div class="t">Нет аккаунта</div>Подключите Telegram в Настройках.</div>`;
+        return;
+      }
+      if (tgState.loadingDialogs && !items.length && !(tgState.dialogs || []).length) {
+        box.innerHTML = `<div class="tg-empty">Загружаем чаты…</div>`;
+        return;
+      }
+      if (!items.length) {
+        box.innerHTML = `<div class="tg-empty"><div class="t">${
+          tgState.onlyUsers ? "Нет личных чатов" : "Чатов пока нет"
+        }</div>${
+          tgState.onlyUsers
+            ? "Снимите фильтр «Только личные», чтобы увидеть группы и каналы."
+            : "Нажмите «Новый чат», чтобы написать клиенту."
+        }</div>`;
+        return;
+      }
     }
-    if (tgState.loadingDialogs && !items.length && !(tgState.dialogs || []).length) {
-      box.innerHTML = `<div class="tg-empty">Загружаем чаты…</div>`;
-      return;
-    }
-    if (!items.length) {
-      box.innerHTML = `<div class="tg-empty"><div class="t">${
-        tgState.onlyUsers ? "Нет личных чатов" : "Чатов пока нет"
-      }</div>${
-        tgState.onlyUsers
-          ? "Снимите фильтр «Только личные», чтобы увидеть группы и каналы."
-          : "Нажмите «Новый чат», чтобы написать клиенту."
-      }</div>`;
-      return;
-    }
+
     const accountId = tgState.accountId;
     box.innerHTML = items
       .map((d) => {
         const kind = d.kind || "user";
-        const active = String(d.peer_id) === String(tgState.peerId) ? " active" : "";
+        const peerKey = d.peer_id != null ? d.peer_id : d.id;
+        const active = String(peerKey) === String(tgState.peerId) ? " active" : "";
         const preview = d.last_message
           ? (d.last_out ? `<span class="you">Вы: </span>` : "") + esc(d.last_message)
           : "Нет сообщений";
@@ -2363,12 +2925,15 @@
           d.unread > 0
             ? `<span class="tg-unread">${d.unread > 99 ? "99+" : d.unread}</span>`
             : "";
-        const avUrl = AdminAPI.chatAvatarUrl(d.peer_id, accountId);
+        let avInner = `<span class="tg-av-fallback">${esc(tgInitials(d.title))}</span>`;
+        if (!maxMode && accountId) {
+          const avUrl = AdminAPI.chatAvatarUrl(d.peer_id, accountId);
+          avInner = `<img class="tg-av-img" src="${esc(avUrl)}" alt="" loading="lazy" decoding="async" onerror="this.classList.add('broken')">` + avInner;
+        }
         return `
-          <button type="button" class="tg-dialog${active}" data-peer="${esc(d.peer_id)}">
-            <span class="tg-dialog-av ${esc(kind)}">
-              <img class="tg-av-img" src="${esc(avUrl)}" alt="" loading="lazy" decoding="async" onerror="this.classList.add('broken')">
-              <span class="tg-av-fallback">${esc(tgInitials(d.title))}</span>
+          <button type="button" class="tg-dialog${active}" data-peer="${esc(peerKey)}">
+            <span class="tg-dialog-av ${esc(maxMode ? "user" : kind)}">
+              ${avInner}
             </span>
             <span class="tg-dialog-main">
               <span class="tg-dialog-top">
@@ -2415,24 +2980,37 @@
     const nearBottom = prevHeight - prevTop - box.clientHeight < 80;
     const msgs = tgState.messages || [];
     const olderBtn =
-      msgs.length >= 40
+      !isMaxChannel() && msgs.length >= 40
         ? `<button type="button" class="btn tg-load-more" id="tgLoadOlder">Раньше</button>`
+        : "";
+    const hint =
+      isMaxChannel() && tgState.historyHint
+        ? `<div class="tg-empty" style="padding:16px 12px"><div class="t">История пока недоступна</div>${esc(
+            tgState.historyHint
+          )}</div>`
         : "";
     box.innerHTML =
       olderBtn +
+      hint +
       msgs
         .map((m) => {
           const side = m.out ? "out" : "in";
+          const flags = `${m._pending ? " pending" : ""}${m._failed ? " failed" : ""}`;
           const raw = (m.text || "").replace(/\n{3,}/g, "\n\n").trim();
-          const media = tgMediaBlock(m);
+          const media = isMaxChannel() ? "" : tgMediaBlock(m);
           const text = raw
             ? `<div class="tg-bubble-text">${esc(raw)}</div>`
             : media
               ? ""
               : `<div class="tg-bubble-text"><span class="tg-bubble-media">${esc(m.preview || "Медиа")}</span></div>`;
-          return `<div class="tg-msg ${side}" data-id="${m.id}"><div class="tg-bubble">${media}${text}<div class="tg-bubble-meta">${esc(
-            tgMsgTime(m.date)
-          )}</div></div></div>`;
+          const meta = m._failed
+            ? "не отправлено"
+            : m._pending
+              ? "…"
+              : esc(tgMsgTime(m.date));
+          return `<div class="tg-msg ${side}${flags}" data-id="${esc(
+            m.id
+          )}"><div class="tg-bubble">${media}${text}<div class="tg-bubble-meta">${meta}</div></div></div>`;
         })
         .join("");
     if (keepScroll) {
@@ -2465,19 +3043,22 @@
     const bits = [];
     if (peer?.username) bits.push("@" + peer.username);
     if (peer?.phone) bits.push("+" + String(peer.phone).replace(/^\+/, ""));
+    if (peer?.max_user_id && isMaxChannel()) bits.push("id " + peer.max_user_id);
     if (peer?.kind && peer.kind !== "user") bits.push(peer.kind);
-    $("#tgPeerSub").textContent = bits.join(" · ") || "Telegram";
+    $("#tgPeerSub").textContent =
+      bits.join(" · ") || (isMaxChannel() ? "MAX" : "Telegram");
     const av = $("#tgPeerAv");
     if (av) {
       const kind = peer?.kind || "user";
       av.className = "tg-peer-av " + kind;
       const peerId = peer?.peer_id || peer?.id || tgState.peerId;
-      if (peerId && tgState.accountId) {
+      if (!isMaxChannel() && peerId && tgState.accountId) {
         const url = AdminAPI.chatAvatarUrl(peerId, tgState.accountId);
         av.innerHTML = `<img class="tg-av-img" src="${esc(url)}" alt="" onerror="this.classList.add('broken')"><span class="tg-av-fallback">${esc(
           tgInitials(peer?.title)
         )}</span>`;
       } else {
+        av.innerHTML = "";
         av.textContent = tgInitials(peer?.title);
       }
     }
@@ -2537,9 +3118,36 @@
   }
 
   async function refreshTgClientStatus({ silent = false } = {}) {
-    const accountId = currentTgAccountId();
     const peerId = tgState.peerId;
-    if (!accountId || peerId == null) {
+    if (peerId == null) {
+      resetTgClientUi();
+      return;
+    }
+    if (isMaxChannel()) {
+      try {
+        const data = await AdminAPI.maxChatClientStatus(peerId);
+        if (String(tgState.peerId) !== String(peerId)) return;
+        if (data.peer) {
+          const cur = tgState.peer || {};
+          setTgPeerHeader({ ...cur, ...data.peer });
+        }
+        renderTgClientStatus(data);
+      } catch (err) {
+        if (!silent) {
+          resetTgClientUi();
+          const chip = $("#tgClientChip");
+          if (chip) {
+            chip.hidden = false;
+            chip.className = "tg-client-chip muted";
+            chip.textContent = "Не удалось проверить клиента";
+            chip.title = err.data?.error || err.message || "";
+          }
+        }
+      }
+      return;
+    }
+    const accountId = currentTgAccountId();
+    if (!accountId) {
       resetTgClientUi();
       return;
     }
@@ -2547,7 +3155,6 @@
       const data = await AdminAPI.chatClientStatus(peerId, accountId);
       if (String(tgState.peerId) !== String(peerId)) return;
       if (data.peer) {
-        // Обновим подзаголовок, если пришёл телефон из бота/CRM
         const cur = tgState.peer || {};
         setTgPeerHeader({ ...cur, ...data.peer });
       }
@@ -2665,6 +3272,40 @@
   }
 
   async function refreshTgDialogs({ silent = false } = {}) {
+    if (isMaxChannel()) {
+      if (!tgState.maxConfigured) {
+        tgState.dialogs = [];
+        renderTgDialogs();
+        return;
+      }
+      if (!silent) tgState.loadingDialogs = true;
+      if (!silent) renderTgDialogs();
+      try {
+        const params = { limit: 100 };
+        if (tgState.lastQuery) params.q = tgState.lastQuery;
+        const data = await AdminAPI.maxChatDialogs(params);
+        tgState.maxConfigured = data.configured !== false;
+        tgState.dialogs = data.items || [];
+      } catch (err) {
+        if (!silent) {
+          const msg =
+            err.data?.message || err.data?.error || err.message || "Не удалось загрузить чаты";
+          $("#tgDialogList").innerHTML = `<div class="tg-empty"><div class="t">Ошибка</div>${esc(
+            msg
+          )}${
+            err.data?.error === "max_not_configured"
+              ? `<div style="margin-top:12px"><button class="btn primary" type="button" onclick="go('settings')">Открыть настройки</button></div>`
+              : ""
+          }</div>`;
+          return;
+        }
+      } finally {
+        tgState.loadingDialogs = false;
+      }
+      renderTgDialogs();
+      return;
+    }
+
     const accountId = currentTgAccountId();
     if (!accountId) {
       tgState.dialogs = [];
@@ -2700,8 +3341,47 @@
   }
 
   async function openTgPeer(peerId, { silent = false, keepScroll = false } = {}) {
+    if (peerId == null) return;
+    if (isMaxChannel()) {
+      const switched = String(tgState.peerId) !== String(peerId);
+      tgState.peerId = peerId;
+      if (!silent) {
+        if (switched) {
+          clearTgAttachments();
+          resetTgClientUi();
+          tgState.historyHint = "";
+        }
+        tgState.loadingMessages = true;
+        showTgThread(true);
+        renderTgDialogs();
+      }
+      try {
+        const data = await AdminAPI.maxChatMessages(peerId, { limit: 50 });
+        if (data.peer?.peer_id && String(data.peer.peer_id) !== String(peerId)) {
+          tgState.peerId = data.peer.peer_id;
+        }
+        setTgPeerHeader(data.peer);
+        tgState.messages = data.messages || [];
+        tgState.historyHint = data.history_unavailable
+          ? data.hint || "История появится после следующего сообщения клиента"
+          : "";
+        renderTgMessages({ stickBottom: !keepScroll, keepScroll });
+        renderTgDialogs();
+        showTgThread(true);
+        if (!silent) $("#tgInput")?.focus();
+        refreshTgClientStatus({ silent: true });
+      } catch (err) {
+        if (!silent) {
+          alert("Не удалось открыть чат: " + (err.data?.error || err.message));
+        }
+      } finally {
+        tgState.loadingMessages = false;
+      }
+      return;
+    }
+
     const accountId = currentTgAccountId();
-    if (!accountId || peerId == null) return;
+    if (!accountId) return;
     const switched = String(tgState.peerId) !== String(peerId);
     tgState.peerId = peerId;
     if (!silent) {
@@ -2721,8 +3401,8 @@
       });
       setTgPeerHeader(data.peer);
       tgState.messages = data.messages || [];
+      tgState.historyHint = "";
       renderTgMessages({ stickBottom: !keepScroll, keepScroll });
-      // сбросить unread в локальном списке
       tgState.dialogs = (tgState.dialogs || []).map((d) =>
         String(d.peer_id) === String(peerId) ? { ...d, unread: 0 } : d
       );
@@ -2852,12 +3532,64 @@
   }
 
   async function sendTgMessage() {
-    const accountId = currentTgAccountId();
     const input = $("#tgInput");
     const text = (input?.value || "").trim();
+    if (!tgState.peerId || tgState.sending) return;
+
+    if (isMaxChannel()) {
+      if (!text) return;
+      const tmpId = "tmp:" + Date.now();
+      const optimistic = {
+        id: tmpId,
+        text,
+        preview: text.slice(0, 120),
+        out: true,
+        date: new Date().toISOString(),
+        _pending: true,
+      };
+      tgState.messages = [...tgState.messages, optimistic];
+      tgState.historyHint = "";
+      if (input) {
+        input.value = "";
+        input.style.height = "auto";
+      }
+      renderTgMessages({ stickBottom: true });
+      tgState.sending = true;
+      const btn = $("#tgSendBtn");
+      if (btn) btn.disabled = true;
+      try {
+        const data = await AdminAPI.maxChatSend(tgState.peerId, { text });
+        if (data.message?.peer_id && String(data.message.peer_id) !== String(tgState.peerId)) {
+          tgState.peerId = data.message.peer_id;
+        }
+        const idx = tgState.messages.findIndex((m) => m.id === tmpId);
+        if (data.message) {
+          if (idx >= 0) tgState.messages[idx] = data.message;
+          else tgState.messages = [...tgState.messages, data.message];
+        } else if (idx >= 0) {
+          tgState.messages[idx] = { ...optimistic, _pending: false, id: tmpId };
+        }
+        renderTgMessages({ stickBottom: true });
+        await refreshTgDialogs({ silent: true });
+      } catch (err) {
+        const idx = tgState.messages.findIndex((m) => m.id === tmpId);
+        if (idx >= 0) {
+          tgState.messages[idx]._pending = false;
+          tgState.messages[idx]._failed = true;
+          renderTgMessages({ stickBottom: true });
+        }
+        alert("Не отправлено: " + (err.data?.error || err.message));
+      } finally {
+        tgState.sending = false;
+        if (btn) btn.disabled = false;
+        input?.focus();
+      }
+      return;
+    }
+
+    const accountId = currentTgAccountId();
     const files = tgState.attachments.map((a) => a.file);
-    if (!accountId || !tgState.peerId || tgState.sending) return;
-    if (!text && !files.length) return;
+    if (!accountId || (!text && !files.length)) return;
 
     tgState.sending = true;
     const btn = $("#tgSendBtn");
@@ -2960,6 +3692,42 @@
 
   async function loadChats() {
     bindTgChatsOnce();
+    const saved = localStorage.getItem(CHATS_CHANNEL_KEY);
+    if (saved === "max" || saved === "tg") tgState.channel = saved;
+    applyChatsChannelUi();
+
+    if (isMaxChannel()) {
+      try {
+        const status = await AdminAPI.maxChatStatus();
+        tgState.maxConfigured = !!status.configured && status.ok !== false;
+        tgState.maxLabel =
+          status.label ||
+          (status.bot_username ? "@" + status.bot_username : "") ||
+          status.bot_name ||
+          "MAX-бот";
+        applyChatsChannelUi();
+        if (!tgState.maxConfigured) {
+          tgState.dialogs = [];
+          renderTgDialogs();
+          stopTgPoll();
+          stopMaxSSE();
+          return;
+        }
+        await refreshTgDialogs();
+        startMaxSSE();
+        startTgPoll();
+      } catch (err) {
+        tgState.maxConfigured = false;
+        stopMaxSSE();
+        $("#tgDialogList").innerHTML = `<div class="tg-empty"><div class="t">Ошибка</div>${esc(
+          err.data?.error || err.message
+        )}</div>`;
+      }
+      return;
+    }
+
+    stopMaxSSE();
+
     try {
       const data = await AdminAPI.chatAccounts();
       tgState.accounts = data.items || [];
@@ -2982,6 +3750,12 @@
     if (tgState.ready) return;
     tgState.ready = true;
 
+    $$(".ch-chan-btn").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        setChatsChannel(btn.getAttribute("data-ch-channel") || "tg");
+      });
+    });
+
     $("#tgAccountSelect")?.addEventListener("change", async () => {
       tgState.accountId = currentTgAccountId();
       if (tgState.accountId) localStorage.setItem(TG_ACCOUNT_KEY, String(tgState.accountId));
@@ -2992,7 +3766,10 @@
     });
 
     $("#tgRefreshDialogs")?.addEventListener("click", () => refreshTgDialogs());
-    $("#tgNewChatBtn")?.addEventListener("click", () => openTgNewChatModal(true));
+    $("#tgNewChatBtn")?.addEventListener("click", () => {
+      if (isMaxChannel()) return;
+      openTgNewChatModal(true);
+    });
     $("#tgNewChatForm")?.addEventListener("submit", submitTgNewChat);
     $$("[data-tg-close]").forEach((el) =>
       el.addEventListener("click", () => openTgNewChatModal(false))
@@ -3035,7 +3812,10 @@
       sendTgMessage();
     });
 
-    $("#tgAttachBtn")?.addEventListener("click", () => $("#tgFileInput")?.click());
+    $("#tgAttachBtn")?.addEventListener("click", () => {
+      if (isMaxChannel()) return;
+      $("#tgFileInput")?.click();
+    });
     $("#tgFileInput")?.addEventListener("change", (e) => {
       addTgAttachments(e.target.files);
       e.target.value = "";
@@ -3058,6 +3838,7 @@
       input.style.height = Math.min(input.scrollHeight, 140) + "px";
     });
     input?.addEventListener("paste", (e) => {
+      if (isMaxChannel()) return;
       const items = [...(e.clipboardData?.items || [])];
       const files = items
         .filter((it) => it.kind === "file")
@@ -3070,6 +3851,7 @@
 
     const dropZone = $("#tgThread") || $("#tgComposerWrap");
     dropZone?.addEventListener("dragover", (e) => {
+      if (isMaxChannel()) return;
       if (![...e.dataTransfer.types].includes("Files")) return;
       e.preventDefault();
       $("#tgComposerWrap")?.classList.add("dragover");
@@ -3081,6 +3863,7 @@
     });
     dropZone?.addEventListener("drop", (e) => {
       $("#tgComposerWrap")?.classList.remove("dragover");
+      if (isMaxChannel()) return;
       if (!e.dataTransfer?.files?.length) return;
       e.preventDefault();
       if (!tgState.peerId) return;
@@ -3104,7 +3887,8 @@
       return;
     }
     go("chats");
-    await loadChats();
+    if (isMaxChannel()) await setChatsChannel("tg");
+    else await loadChats();
     const accountId = currentTgAccountId();
     if (!accountId) {
       alert("Подключите Telegram-аккаунт в Настройках");
