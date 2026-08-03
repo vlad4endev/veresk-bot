@@ -184,6 +184,9 @@
       stopTgPoll();
       stopMaxSSE();
     }
+    if (tab !== "settings" && typeof openStaffCreateModal === "function") {
+      openStaffCreateModal(false);
+    }
     window.scrollTo({ top: 0, behavior: "smooth" });
     if (tab === "compose") setStep(0);
     if (tab === "home") loadHome();
