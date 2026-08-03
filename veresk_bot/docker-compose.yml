@@ -14,6 +14,18 @@ services:
       - ./certs:/app/certs:ro
     depends_on:
       - redis
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://127.0.0.1:3005/api/health', timeout=2)",
+        ]
+      interval: 10s
+      timeout: 3s
+      retries: 12
+      start_period: 20s
 
   # MAX-бот (анкета как в Telegram, без Mini App).
   # Токен: Настройки → MAX в админке (runtime_settings) или MAX_BOT_TOKEN в .env.

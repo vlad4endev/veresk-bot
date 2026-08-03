@@ -50,26 +50,48 @@ docker compose exec -T nginx nginx -s reload 2>/dev/null || docker compose resta
 echo "==> статус контейнеров"
 docker compose ps
 
+echo "==> ждём API (/api/health)"
+ready=0
+for i in $(seq 1 40); do
+  if curl -fsS --max-time 2 http://127.0.0.1:3005/api/health >/dev/null 2>&1; then
+    echo "health_ok after ${i}s"
+    ready=1
+    break
+  fi
+  # прямой health внутри bot — отделяет «бот мёртв» от «nginx DNS»
+  if docker compose exec -T bot python -c "
+import urllib.request
+urllib.request.urlopen('http://127.0.0.1:3005/api/health', timeout=2)
+print('bot_direct_health=ok')
+" 2>/dev/null; then
+    echo "bot API жив, но nginx ещё не проксирует — reload nginx"
+    docker compose exec -T nginx nginx -s reload 2>/dev/null || docker compose restart nginx
+  fi
+  sleep 1
+done
+if [[ "$ready" -ne 1 ]]; then
+  echo "WARN: /api/health не ответил за 40с — смотрите логи ниже"
+fi
+
 echo "==> проверка UI/API"
-sleep 3
 curl -fsS http://127.0.0.1:3005/ | grep -oE 'api\.js\?v=[0-9]+' | head -1 || true
-# прямой запрос в bot (минуя nginx) — если тут 401, а с :3005 502, виноват nginx DNS
 docker compose exec -T bot python -c "
 import urllib.request
 req=urllib.request.Request('http://127.0.0.1:3005/api/admin/login', data=b'{\"username\":\"x\",\"password\":\"y\"}', headers={'Content-Type':'application/json'}, method='POST')
 try:
     urllib.request.urlopen(req, timeout=5)
 except Exception as e:
-    code=getattr(getattr(e,'code',None), '__int__', lambda: None)()
-    print('bot_direct=', getattr(e, 'code', e))
+    print('bot_direct_login=', getattr(e, 'code', e))
 " 2>/dev/null || true
 curl -sS -o /dev/null -w "login_via_nginx=%{http_code}\n" \
   -X POST http://127.0.0.1:3005/api/admin/login \
   -H "Content-Type: application/json" \
   -d '{"username":"x","password":"y"}' || true
-docker compose logs --tail=40 bot || true
+docker compose logs --tail=60 bot || true
+docker compose logs --tail=20 nginx || true
 
 echo "Готово. Снаружи:"
 echo "  curl -s https://admin.veresk-flowers.ru/ | grep -oE 'api.js\\?v=[0-9]+'"
+echo "  curl -s -o /dev/null -w '%{http_code}\\n' https://admin.veresk-flowers.ru/api/health"
 echo "  curl -s -o /dev/null -w '%{http_code}\\n' -X POST https://admin.veresk-flowers.ru/api/admin/login -H 'Content-Type: application/json' -d '{\"username\":\"x\",\"password\":\"y\"}'"
 echo "В браузере: Ctrl+Shift+R"

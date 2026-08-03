@@ -1268,6 +1268,13 @@ async def validate_bot_token() -> bool:
             exc,
         )
         return False
+    except Exception as exc:
+        logger.error(
+            "Проверка BOT_TOKEN упала (%s). Админ-API продолжит работу без polling.",
+            exc,
+            exc_info=True,
+        )
+        return False
 
     logger.info("Бот авторизован: @%s (id=%s)", me.username, me.id)
     return True
@@ -1282,6 +1289,7 @@ async def setup_menu_commands() -> None:
             logger.info("Меню команд бота обновлено")
             return
         except TelegramUnauthorizedError:
+            logger.error("BOT_TOKEN отозван при обновлении меню — polling не запускаем")
             raise
         except TelegramNetworkError as exc:
             logger.warning(
@@ -1291,6 +1299,9 @@ async def setup_menu_commands() -> None:
             )
             if attempt < 3:
                 await asyncio.sleep(3 * attempt)
+        except Exception as exc:
+            logger.warning("Не удалось обновить меню команд: %s", exc, exc_info=True)
+            return
     logger.warning(
         "Меню команд не обновлено — бот продолжит работу; проверьте доступ к api.telegram.org"
     )
@@ -1337,47 +1348,77 @@ async def main() -> None:
         )
     logger.info("🛠 Админ-панель: /admin/ (API /api/admin/)")
 
-    tg_ok = await validate_bot_token()
-
     async def _tg_heartbeat_loop() -> None:
         while True:
             await touch_bot_heartbeat(PLATFORM_TELEGRAM)
             await asyncio.sleep(30)
 
-    if tg_ok:
-        asyncio.create_task(_tg_heartbeat_loop())
+    async def _keep_api_alive(reason: str) -> None:
+        logger.warning("%s — процесс остаётся живым ради HTTP API.", reason)
+        await asyncio.Event().wait()
 
-    from posiflora import start_token_refresher, warmup_token
+    try:
+        from posiflora import start_token_refresher, warmup_token
 
-    await warmup_token()
-    start_token_refresher()
+        await warmup_token()
+        start_token_refresher()
+    except Exception:
+        logger.exception("Posiflora warmup/refresher failed — продолжаем без неё")
 
-    from posiflora_sync import start_posiflora_sync
+    try:
+        from posiflora_sync import start_posiflora_sync
 
-    start_posiflora_sync()
+        start_posiflora_sync()
+    except Exception:
+        logger.exception("Posiflora sync failed to start")
 
-    from senders.dispatcher import start_mailing_dispatcher
+    try:
+        from senders.dispatcher import start_mailing_dispatcher
 
-    start_mailing_dispatcher()
+        start_mailing_dispatcher()
+    except Exception:
+        logger.exception("Mailing dispatcher failed to start")
 
-    from senders.session_keepalive import start_telegram_session_keepalive
+    try:
+        from senders.session_keepalive import start_telegram_session_keepalive
 
-    start_telegram_session_keepalive()
+        start_telegram_session_keepalive()
+    except Exception:
+        logger.exception("Telegram session keepalive failed to start")
 
     if redis:
-        asyncio.create_task(start_polling(bot, redis))
-        logger.info("🔄 Polling задача запущена")
+        try:
+            asyncio.create_task(start_polling(bot, redis))
+            logger.info("🔄 Polling задача запущена")
+        except Exception:
+            logger.exception("Order status poller failed to start")
+
+    tg_ok = False
+    try:
+        tg_ok = await validate_bot_token()
+    except Exception:
+        logger.exception("validate_bot_token crashed")
+        tg_ok = False
 
     if tg_ok:
-        await setup_menu_commands()
-        await dp.start_polling(bot)
+        asyncio.create_task(_tg_heartbeat_loop())
+        try:
+            await setup_menu_commands()
+        except TelegramUnauthorizedError:
+            await _keep_api_alive("BOT_TOKEN отозван")
+            return
+        except Exception:
+            logger.exception("setup_menu_commands failed — пробуем polling без меню")
+        try:
+            await dp.start_polling(bot)
+        except Exception:
+            logger.exception("Telegram polling crashed")
+            await _keep_api_alive("Telegram polling упал")
     else:
-        logger.warning(
+        await _keep_api_alive(
             "Telegram polling не запущен (токен/сеть). "
-            "Админ-API работает; исправьте BOT_TOKEN или сеть и перезапустите контейнер."
+            "Исправьте BOT_TOKEN или сеть и перезапустите контейнер"
         )
-        # Держим процесс живым ради HTTP API / фоновых задач.
-        await asyncio.Event().wait()
 
 
 if __name__ == "__main__":
