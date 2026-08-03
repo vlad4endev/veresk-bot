@@ -19,11 +19,20 @@ const AdminAPI = (() => {
     const token = getToken();
     if (token) headers["Authorization"] = "Bearer " + token;
     const res = await fetch(path, { ...options, headers });
+    const raw = await res.text();
     let data = null;
     try {
-      data = await res.json();
+      data = raw ? JSON.parse(raw) : {};
     } catch (_) {
-      data = {};
+      data = {
+        error: "bad_response",
+        detail:
+          "Сервер вернул не JSON (HTTP " +
+          res.status +
+          "). Часто это старый контейнер bot — пересоберите: docker compose build bot && docker compose up -d bot",
+        status: res.status,
+        raw: String(raw || "").slice(0, 200),
+      };
     }
     if (res.status === 401) {
       setToken("");
@@ -33,9 +42,9 @@ const AdminAPI = (() => {
       throw err;
     }
     if (!res.ok) {
-      const err = new Error(data.error || "request_failed");
+      const err = new Error(data.error || data.detail || "request_failed");
       err.status = res.status;
-      err.data = data;
+      err.data = Object.assign({ status: res.status }, data);
       throw err;
     }
     return data;
@@ -84,6 +93,30 @@ const AdminAPI = (() => {
       }),
     logout: () => request("/api/admin/logout", { method: "POST" }),
     me: () => request("/api/admin/me"),
+    users: () => request("/api/admin/users"),
+    user: (id) => request("/api/admin/users/" + id),
+    createUser: (body) =>
+      request("/api/admin/users", {
+        method: "POST",
+        body: JSON.stringify(body || {}),
+      }),
+    updateUser: (id, body) =>
+      request("/api/admin/users/" + id, {
+        method: "PATCH",
+        body: JSON.stringify(body || {}),
+      }),
+    deleteUser: (id) =>
+      request("/api/admin/users/" + id, { method: "DELETE" }),
+    resetUserPassword: (id, body) =>
+      request("/api/admin/users/" + id + "/password", {
+        method: "POST",
+        body: JSON.stringify(body || {}),
+      }),
+    generatePassword: (length = 10) =>
+      request("/api/admin/users/generate-password", {
+        method: "POST",
+        body: JSON.stringify({ length }),
+      }),
     stats: () => request("/api/admin/stats"),
     botsStatus: () => request("/api/admin/bots/status"),
     sync: () => request("/api/admin/sync", { method: "POST" }),
@@ -163,10 +196,13 @@ const AdminAPI = (() => {
         method: "POST",
         body: JSON.stringify({ phone, code, password }),
       }),
-    maxUserbotStart: (phone) =>
+    maxUserbotStart: (phone, opts = {}) =>
       request("/api/admin/accounts/max/userbot/start", {
         method: "POST",
-        body: JSON.stringify({ phone }),
+        body: JSON.stringify({
+          phone,
+          reset: opts.reset !== false,
+        }),
       }),
     maxUserbotConfirm: (phone, code, password) =>
       request("/api/admin/accounts/max/userbot/confirm", {

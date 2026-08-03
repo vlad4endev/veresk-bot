@@ -69,12 +69,21 @@ def session_file_for_phone(phone: str) -> str:
 class _QueueSmsCodeProvider:
     def __init__(self) -> None:
         self._queue: asyncio.Queue[str] = asyncio.Queue()
+        self.submitted = False
 
     async def set_code(self, code: str) -> None:
+        self.submitted = True
         await self._queue.put((code or "").strip())
 
     async def get_code(self, phone: str) -> str:
         return await self._queue.get()
+
+
+class _RejectSmsCodeProvider:
+    """Для check_session: не ждать SMS в консоли сервера."""
+
+    async def get_code(self, phone: str) -> str:
+        raise RuntimeError("session_needs_reauth")
 
 
 class _QueuePasswordProvider:
@@ -82,14 +91,26 @@ class _QueuePasswordProvider:
         self._queue: asyncio.Queue[str] = asyncio.Queue()
         self.need_2fa = asyncio.Event()
         self.hint: str | None = None
+        self.requests = 0
+        self.waiting = False
 
     async def set_password(self, password: str) -> None:
         await self._queue.put((password or "").strip())
 
     async def get_password(self, hint: str | None = None) -> str:
         self.hint = hint
+        self.requests += 1
         self.need_2fa.set()
-        return await self._queue.get()
+        self.waiting = True
+        try:
+            return await self._queue.get()
+        finally:
+            self.waiting = False
+
+
+class _RejectPasswordProvider:
+    async def get_password(self, hint: str | None = None) -> str:
+        raise RuntimeError("session_needs_2fa")
 
 
 def _user_label(me: Any) -> str | None:
@@ -199,15 +220,38 @@ async def _run_client_once(
     }
 
 
-async def start_max_login(phone: str) -> dict[str, Any]:
-    """Шаг 1: начать логин. Если сессия уже есть — сразу ок."""
+async def start_max_login(phone: str, *, reset_session: bool = True) -> dict[str, Any]:
+    """Шаг 1: начать логин. Если сессия уже есть и валидна — сразу ок.
+
+    reset_session=True (по умолчанию): снести незавершённый файл сессии
+    перед новой попыткой — иначе повтор на том же номере зависает.
+    """
     if not is_pymax_installed():
         return {"ok": False, "error": "pymax_missing", "detail": PYMAX_MISSING_DETAIL}
 
     phone_norm, session_name, work_dir = session_paths_for_phone(phone)
     session_file = str(work_dir / session_name)
 
-    # Уже есть сессия — проверим без SMS
+    # Отменить предыдущую попытку (тот же номер)
+    old = _pending_logins.pop(phone_norm, None)
+    if old:
+        # Пометить как тихую отмену до cancel(), иначе job пишет error=cancelled
+        flag = old.get("cancel_flag")
+        if isinstance(flag, dict):
+            flag["quiet"] = True
+        task = old.get("task")
+        if task and not task.done():
+            task.cancel()
+            try:
+                await task
+            except (asyncio.CancelledError, Exception):
+                pass
+
+    if reset_session and Path(session_file).exists():
+        logger.info("Force-reset MAX session for %s", phone_norm)
+        remove_max_session_file(session_file)
+
+    # Уже есть сессия — проверим без SMS (быстрый fail, без консоли)
     if Path(session_file).exists():
         live = await check_max_session(session_file, phone=phone_norm)
         if live.get("ok") and live.get("authorized"):
@@ -219,21 +263,18 @@ async def start_max_login(phone: str) -> dict[str, Any]:
                 "label": live.get("label") or phone_norm,
                 "max_user_id": live.get("max_user_id"),
             }
-
-    # Отменить предыдущую попытку
-    old = _pending_logins.pop(phone_norm, None)
-    if old:
-        task = old.get("task")
-        if task and not task.done():
-            task.cancel()
-            try:
-                await task
-            except (asyncio.CancelledError, Exception):
-                pass
+        # Битая / незавершённая сессия после прошлой попытки — иначе повтор зависает
+        logger.warning(
+            "Incomplete MAX session for %s (%s) — removing before re-login",
+            phone_norm,
+            live.get("error"),
+        )
+        remove_max_session_file(session_file)
 
     sms_provider = _QueueSmsCodeProvider()
     password_provider = _QueuePasswordProvider()
     done: asyncio.Future[dict[str, Any]] = asyncio.get_running_loop().create_future()
+    cancel_flag = {"quiet": False}
 
     async def _login_job() -> None:
         try:
@@ -257,13 +298,32 @@ async def start_max_login(phone: str) -> dict[str, Any]:
                         }
                     )
                 else:
+                    remove_max_session_file(session_file)
                     done.set_result(result)
         except asyncio.CancelledError:
+            succeeded = (
+                done.done()
+                and isinstance(done.result(), dict)
+                and bool(done.result().get("ok"))
+            )
             if not done.done():
-                done.set_result({"ok": False, "error": "cancelled"})
+                done.set_result(
+                    {
+                        "ok": False,
+                        "error": "cancelled",
+                        "detail": (
+                            "Вход прерван. Нажмите «Получить код» ещё раз "
+                            "и не закрывайте форму, пока вводите пароль."
+                        ),
+                        "need_new_code": True,
+                    }
+                )
+            if not cancel_flag.get("quiet") and not succeeded:
+                remove_max_session_file(session_file)
             raise
         except Exception as exc:
             logger.exception("MAX login job failed")
+            remove_max_session_file(session_file)
             if not done.done():
                 done.set_result({"ok": False, "error": str(exc)})
 
@@ -274,11 +334,13 @@ async def start_max_login(phone: str) -> dict[str, Any]:
         "task": task,
         "done": done,
         "session_file": session_file,
+        "code_accepted": False,
+        "cancel_flag": cancel_flag,
         "started_at": datetime.now().isoformat(timespec="seconds"),
     }
 
     # Дать Client запросить SMS (короткая пауза)
-    await asyncio.sleep(1.5)
+    await asyncio.sleep(2.0)
     if done.done():
         # Уже завершилось (сессия / ошибка)
         result = done.result()
@@ -305,6 +367,7 @@ async def confirm_max_login(
         return {
             "ok": False,
             "error": "Сначала запросите код для этого номера",
+            "detail": "Нажмите «Получить код» и дождитесь SMS, затем введите код.",
             "need_new_code": True,
         }
 
@@ -313,38 +376,62 @@ async def confirm_max_login(
     done: asyncio.Future = pending["done"]
 
     code_clean = re.sub(r"\D", "", (code or "").strip())
-    if code_clean:
+    password_clean = (password or "").strip() or None
+
+    # Код передаём только один раз — повторная отправка при 2FA ломает поток
+    if code_clean and not pending.get("code_accepted"):
         await sms.set_code(code_clean)
-    if password:
-        await pwd.set_password(password)
-    if not code_clean and not password:
+        pending["code_accepted"] = True
+    elif not pending.get("code_accepted") and not password_clean:
         return {"ok": False, "error": "Введите код из SMS / MAX"}
 
-    # Ждём либо 2FA, либо завершения логина
-    for _ in range(90):  # до ~90 сек
+    reqs_before = pwd.requests
+    if password_clean:
+        await pwd.set_password(password_clean)
+
+    # Ждём 2FA / успех / неверный пароль
+    for _ in range(120):  # до ~60 сек (0.5s шаг)
         if done.done():
             break
-        if pwd.need_2fa.is_set() and not password:
+
+        # Код принят, Max запросил облачный пароль
+        if pwd.need_2fa.is_set() and not password_clean and pwd.waiting:
             return {
                 "ok": False,
                 "need_2fa": True,
-                "error": "Нужен пароль 2FA",
+                "error": "need_2fa",
+                "detail": "Введите пароль двухфакторной защиты MAX (не SMS-код)",
                 "hint": pwd.hint,
             }
-        await asyncio.sleep(1.0)
+
+        # Пароль уже отправляли, но провайдер снова ждёт — значит пароль неверный
+        if (
+            password_clean
+            and pwd.waiting
+            and pwd.requests > max(reqs_before, 0)
+        ):
+            return {
+                "ok": False,
+                "need_2fa": True,
+                "error": "bad_2fa",
+                "detail": "Неверный пароль 2FA. Проверьте и введите снова.",
+                "hint": pwd.hint,
+            }
+
+        await asyncio.sleep(0.5)
 
     if not done.done():
         return {
             "ok": False,
-            "error": "Таймаут подтверждения. Запросите код снова.",
+            "error": "confirm_timeout",
+            "detail": "Таймаут подтверждения. Нажмите «Получить код» снова.",
             "need_new_code": True,
         }
 
     result = done.result()
     _pending_logins.pop(phone_norm, None)
-    task = pending.get("task")
-    if task and not task.done():
-        task.cancel()
+    # Не cancel()-им задачу: она сама завершается после done.set_result.
+    # Cancel здесь давал ложный error=cancelled и мог стереть свежую сессию.
     return result
 
 
@@ -395,7 +482,9 @@ async def check_max_session(
         phone=phone_norm,
         session_name=session_name,
         work_dir=work_dir,
-        timeout=45.0,
+        sms_provider=_RejectSmsCodeProvider(),
+        password_provider=_RejectPasswordProvider(),
+        timeout=20.0,
     )
     if result.get("ok"):
         return {
@@ -405,10 +494,13 @@ async def check_max_session(
             "label": result.get("label"),
             "phone": phone_norm,
         }
+    err = str(result.get("error") or "")
+    if "session_needs_reauth" in err or "session_needs_2fa" in err:
+        err = "Сессия не авторизована — нужен повторный вход"
     return {
         "ok": False,
         "authorized": False,
-        "error": result.get("error") or "Сессия не авторизована",
+        "error": err or "Сессия не авторизована",
     }
 
 
