@@ -3826,10 +3826,20 @@
   }
 
   function tgInitials(title) {
-    const parts = String(title || "?").trim().split(/\s+/).filter(Boolean);
+    const raw = String(title || "?").trim();
+    const maxId = raw.match(/^MAX\s+(\d+)$/i);
+    if (maxId) return maxId[1].slice(-2);
+    const parts = raw.split(/\s+/).filter(Boolean);
     if (!parts.length) return "?";
     if (parts.length === 1) return parts[0].slice(0, 2).toUpperCase();
     return (parts[0][0] + parts[1][0]).toUpperCase();
+  }
+
+  function tgAvatarInner(title, avatarUrl, fallbackUrl) {
+    const initials = `<span class="tg-av-fallback">${esc(tgInitials(title))}</span>`;
+    const url = avatarUrl || fallbackUrl || "";
+    if (!url) return initials;
+    return `<img class="tg-av-img" src="${esc(url)}" alt="" loading="lazy" decoding="async" referrerpolicy="no-referrer" onerror="this.classList.add('broken')">${initials}`;
   }
 
   function tgTimeLabel(iso) {
@@ -3976,11 +3986,11 @@
           d.unread > 0
             ? `<span class="tg-unread">${d.unread > 99 ? "99+" : d.unread}</span>`
             : "";
-        let avInner = `<span class="tg-av-fallback">${esc(tgInitials(d.title))}</span>`;
-        if (!maxMode && accountId) {
-          const avUrl = AdminAPI.chatAvatarUrl(d.peer_id, accountId);
-          avInner = `<img class="tg-av-img" src="${esc(avUrl)}" alt="" loading="lazy" decoding="async" onerror="this.classList.add('broken')">` + avInner;
-        }
+        let avInner = tgAvatarInner(
+          d.title,
+          d.avatar_url,
+          !maxMode && accountId ? AdminAPI.chatAvatarUrl(d.peer_id, accountId) : ""
+        );
         return `
           <button type="button" class="tg-dialog${active}" data-peer="${esc(peerKey)}">
             <span class="tg-dialog-av ${esc(maxMode && !maxUserbot ? "user" : kind)}">
@@ -4092,7 +4102,7 @@
     tgState.peer = peer || null;
     $("#tgPeerName").textContent = peer?.title || "Чат";
     const bits = [];
-    if (peer?.username) bits.push("@" + peer.username);
+    if (peer?.username) bits.push("@" + String(peer.username).replace(/^@/, ""));
     if (peer?.phone) bits.push("+" + String(peer.phone).replace(/^\+/, ""));
     if (peer?.max_user_id && isMaxChannel()) bits.push("id " + peer.max_user_id);
     if (peer?.kind && peer.kind !== "user") bits.push(peer.kind);
@@ -4103,16 +4113,32 @@
       const kind = peer?.kind || "user";
       av.className = "tg-peer-av " + kind;
       const peerId = peer?.peer_id || peer?.id || tgState.peerId;
-      if (!isMaxChannel() && peerId && tgState.accountId) {
-        const url = AdminAPI.chatAvatarUrl(peerId, tgState.accountId);
-        av.innerHTML = `<img class="tg-av-img" src="${esc(url)}" alt="" onerror="this.classList.add('broken')"><span class="tg-av-fallback">${esc(
-          tgInitials(peer?.title)
-        )}</span>`;
-      } else {
-        av.innerHTML = "";
-        av.textContent = tgInitials(peer?.title);
-      }
+      const tgFallback =
+        !isMaxChannel() && peerId && tgState.accountId
+          ? AdminAPI.chatAvatarUrl(peerId, tgState.accountId)
+          : "";
+      av.innerHTML = tgAvatarInner(peer?.title, peer?.avatar_url, tgFallback);
     }
+  }
+
+  function mergePeerIntoDialogs(peer) {
+    if (!peer) return;
+    const peerKey = peer.peer_id != null ? peer.peer_id : peer.id;
+    if (peerKey == null) return;
+    tgState.dialogs = (tgState.dialogs || []).map((d) => {
+      if (String(d.peer_id) !== String(peerKey) && String(d.id) !== String(peerKey)) {
+        return d;
+      }
+      return {
+        ...d,
+        title: peer.title || d.title,
+        phone: peer.phone || d.phone,
+        username: peer.username || d.username,
+        avatar_url: peer.avatar_url || d.avatar_url,
+        max_user_id: peer.max_user_id != null ? peer.max_user_id : d.max_user_id,
+        unread: 0,
+      };
+    });
   }
 
   function resetTgClientUi() {
@@ -4473,11 +4499,7 @@
           ? data.hint || "История появится после следующего сообщения клиента"
           : "";
         renderTgMessages({ stickBottom: !keepScroll, keepScroll });
-        if (isMaxUserbot()) {
-          tgState.dialogs = (tgState.dialogs || []).map((d) =>
-            String(d.peer_id) === String(tgState.peerId) ? { ...d, unread: 0 } : d
-          );
-        }
+        mergePeerIntoDialogs(data.peer);
         renderTgDialogs();
         showTgThread(true);
         if (!silent) $("#tgInput")?.focus();
@@ -4515,9 +4537,7 @@
       tgState.messages = data.messages || [];
       tgState.historyHint = "";
       renderTgMessages({ stickBottom: !keepScroll, keepScroll });
-      tgState.dialogs = (tgState.dialogs || []).map((d) =>
-        String(d.peer_id) === String(peerId) ? { ...d, unread: 0 } : d
-      );
+      mergePeerIntoDialogs(data.peer);
       renderTgDialogs();
       showTgThread(true);
       if (!silent) $("#tgInput")?.focus();

@@ -135,11 +135,27 @@ async def index_update_for_inbox(update: dict[str, Any]) -> dict[str, Any] | Non
     except ValueError:
         return None
 
+    from max_bot.storage import get_dialog
+
+    stored = None
+    try:
+        stored = await get_dialog(chat_id=chat_id, max_user_id=user_id)
+    except Exception:
+        stored = None
+
+    title = (
+        (stored or {}).get("name")
+        or name
+        or (f"MAX {user_id}" if user_id is not None else f"Чат {chat_id}")
+    )
     return {
         "peer_id": peer,
         "chat_id": chat_id,
         "max_user_id": user_id,
-        "title": name or (f"MAX {user_id}" if user_id is not None else f"Чат {chat_id}"),
+        "title": title,
+        "username": (stored or {}).get("username"),
+        "phone": (stored or {}).get("phone"),
+        "avatar_url": (stored or {}).get("avatar_url"),
         "last_message": preview or "",
         "last_out": last_out,
         "date": datetime.now().isoformat(timespec="seconds"),

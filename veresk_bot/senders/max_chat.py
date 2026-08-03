@@ -90,6 +90,63 @@ def _user_title(user: dict[str, Any] | None) -> str:
     return f"MAX {uid}" if uid is not None else "Без имени"
 
 
+def _user_avatar_url(user: dict[str, Any] | None) -> str | None:
+    if not user:
+        return None
+    for key in ("full_avatar_url", "avatar_url"):
+        val = user.get(key)
+        if val:
+            return str(val).strip() or None
+    return None
+
+
+def _user_username(user: dict[str, Any] | None) -> str | None:
+    if not user:
+        return None
+    raw = user.get("username")
+    if not raw:
+        return None
+    return str(raw).strip().lstrip("@") or None
+
+
+def _apply_dialog_user(peer_info: dict[str, Any], dialog_user: dict[str, Any]) -> None:
+    title = _user_title(dialog_user)
+    if title and not re.fullmatch(r"MAX\s+\d+", title, flags=re.I):
+        peer_info["title"] = title
+    elif not peer_info.get("title"):
+        peer_info["title"] = title
+    if dialog_user.get("user_id") is not None:
+        try:
+            peer_info["max_user_id"] = int(dialog_user["user_id"])
+        except (TypeError, ValueError):
+            pass
+    avatar = _user_avatar_url(dialog_user)
+    if avatar:
+        peer_info["avatar_url"] = avatar
+    username = _user_username(dialog_user)
+    if username:
+        peer_info["username"] = username
+
+
+async def _persist_peer_profile(peer_info: dict[str, Any]) -> None:
+    chat_id = peer_info.get("chat_id")
+    max_user_id = peer_info.get("max_user_id")
+    if chat_id is None and max_user_id is None:
+        return
+    title = (peer_info.get("title") or "").strip() or None
+    try:
+        await upsert_dialog(
+            chat_id=int(chat_id) if chat_id is not None else None,
+            max_user_id=int(max_user_id) if max_user_id is not None else None,
+            name=title,
+            phone=peer_info.get("phone"),
+            avatar_url=peer_info.get("avatar_url"),
+            username=peer_info.get("username"),
+        )
+    except Exception:
+        logger.debug("persist peer profile failed", exc_info=True)
+
+
 def _message_text(msg: dict[str, Any]) -> str:
     body = msg.get("body") or {}
     text = (body.get("text") or "").strip()
@@ -187,6 +244,8 @@ async def resolve_peer_info(peer: str) -> dict[str, Any]:
         or (f"MAX {max_user_id}" if max_user_id is not None else f"Чат {chat_id}")
     )
     phone = (dialog or {}).get("phone") or (profile or {}).get("phone")
+    avatar_url = (dialog or {}).get("avatar_url") or None
+    username = (dialog or {}).get("username") or None
 
     return {
         "id": peer_key(chat_id=chat_id, max_user_id=max_user_id),
@@ -195,8 +254,9 @@ async def resolve_peer_info(peer: str) -> dict[str, Any]:
         "max_user_id": max_user_id,
         "title": title,
         "kind": "user",
-        "username": None,
+        "username": username,
         "phone": phone,
+        "avatar_url": avatar_url,
         "tg_user_id": None,
     }
 
@@ -247,9 +307,14 @@ async def get_dialog_messages(
             chat = await api2.get_chat(int(chat_id))
             dialog_user = chat.get("dialog_with_user") or {}
             if dialog_user:
-                peer_info["title"] = _user_title(dialog_user) or peer_info["title"]
-                if dialog_user.get("user_id") is not None:
-                    peer_info["max_user_id"] = int(dialog_user["user_id"])
+                _apply_dialog_user(peer_info, dialog_user)
+                await _persist_peer_profile(peer_info)
+            icon = chat.get("icon") or {}
+            if not peer_info.get("avatar_url"):
+                icon_url = icon.get("url") if isinstance(icon, dict) else None
+                if icon_url:
+                    peer_info["avatar_url"] = str(icon_url).strip() or None
+                    await _persist_peer_profile(peer_info)
         except Exception:
             logger.debug("get_chat failed for %s", chat_id, exc_info=True)
         finally:

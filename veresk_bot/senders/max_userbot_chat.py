@@ -308,7 +308,7 @@ def _contact_name(user: Any) -> str | None:
         first = names[0]
         name = getattr(first, "name", None) or getattr(first, "first_name", None)
         if name:
-            return str(name)
+            return str(name).strip() or None
         first_n = getattr(first, "first_name", None) or ""
         last_n = getattr(first, "last_name", None) or ""
         joined = " ".join(x for x in [first_n, last_n] if x).strip()
@@ -317,12 +317,43 @@ def _contact_name(user: Any) -> str | None:
     for attr in ("name", "first_name"):
         val = getattr(user, attr, None)
         if val:
-            return str(val)
+            return str(val).strip() or None
+    return None
+
+
+def _user_avatar_url(user: Any) -> str | None:
+    if user is None:
+        return None
+    for attr in ("base_url", "base_raw_url"):
+        val = getattr(user, attr, None)
+        if val:
+            return str(val).strip() or None
+    return None
+
+
+def _chat_avatar_url(chat: Any, contact: Any = None) -> str | None:
+    url = _user_avatar_url(contact)
+    if url:
+        return url
+    for attr in ("base_icon_url", "base_raw_icon_url"):
+        val = getattr(chat, attr, None)
+        if val:
+            return str(val).strip() or None
     return None
 
 
 def _contact_map(client: Any) -> dict[int, Any]:
+    """Контакты + кэш users клиента (после sync / get_users)."""
     out: dict[int, Any] = {}
+    cached = getattr(client, "users", None)
+    if isinstance(cached, dict):
+        for uid, item in cached.items():
+            if item is None:
+                continue
+            try:
+                out[int(uid)] = item
+            except (TypeError, ValueError):
+                pass
     for item in client.contacts or []:
         if item is None:
             continue
@@ -333,6 +364,37 @@ def _contact_map(client: Any) -> dict[int, Any]:
             except (TypeError, ValueError):
                 pass
     return out
+
+
+async def _enrich_users(client: Any, user_ids: list[int], contacts: dict[int, Any]) -> None:
+    """Подтянуть имена и аватарки собеседников (не только из телефонной книги)."""
+    ids = sorted({int(uid) for uid in user_ids if uid is not None})
+    if not ids:
+        return
+    missing = [
+        uid
+        for uid in ids
+        if uid not in contacts
+        or not _contact_name(contacts.get(uid))
+        or not _user_avatar_url(contacts.get(uid))
+    ]
+    if not missing:
+        return
+    try:
+        users = await client.get_users(missing)
+    except Exception:
+        logger.debug("get_users failed for %s ids", len(missing), exc_info=True)
+        return
+    for user in users or []:
+        if user is None:
+            continue
+        uid = getattr(user, "id", None)
+        if uid is None:
+            continue
+        try:
+            contacts[int(uid)] = user
+        except (TypeError, ValueError):
+            continue
 
 
 def _peer_user_id(chat: Any, me_id: int | None) -> int | None:
@@ -362,7 +424,12 @@ def _message_text(msg: Any) -> str:
     return ""
 
 
-def _serialize_message(msg: Any, *, me_id: int | None) -> dict[str, Any]:
+def _serialize_message(
+    msg: Any,
+    *,
+    me_id: int | None,
+    contacts: dict[int, Any] | None = None,
+) -> dict[str, Any]:
     sender = getattr(msg, "sender", None)
     try:
         sender_id = int(sender) if sender is not None else None
@@ -372,6 +439,11 @@ def _serialize_message(msg: Any, *, me_id: int | None) -> dict[str, Any]:
     text = _message_text(msg)
     attaches = getattr(msg, "attaches", None) or []
     mid = getattr(msg, "id", None)
+    from_name = "Вы" if out else None
+    if not from_name and sender_id is not None and contacts:
+        from_name = _contact_name(contacts.get(sender_id))
+    if not from_name:
+        from_name = f"MAX {sender_id}" if sender_id is not None else None
     return {
         "id": str(mid) if mid is not None else str(getattr(msg, "time", "") or ""),
         "date": _ts_iso(getattr(msg, "time", None)),
@@ -386,7 +458,7 @@ def _serialize_message(msg: Any, *, me_id: int | None) -> dict[str, Any]:
         ),
         "file_name": None,
         "from_id": sender_id,
-        "from_name": "Вы" if out else (f"MAX {sender_id}" if sender_id else None),
+        "from_name": from_name,
         "reply_to": None,
     }
 
@@ -400,12 +472,23 @@ def _serialize_chat(
     kind = _chat_kind(chat)
     peer_uid = _peer_user_id(chat, me_id) if kind == "user" else None
     contact = contacts.get(peer_uid) if peer_uid is not None else None
-    title = (
-        (getattr(chat, "title", None) or "").strip()
-        or _contact_name(contact)
-        or (f"MAX {peer_uid}" if peer_uid is not None else None)
-        or f"Чат {getattr(chat, 'id', '?')}"
-    )
+    contact_name = _contact_name(contact)
+    chat_title = (getattr(chat, "title", None) or "").strip()
+    # В личных диалогах имя из профиля MAX важнее пустого/служебного title
+    if kind == "user":
+        title = (
+            contact_name
+            or chat_title
+            or (f"MAX {peer_uid}" if peer_uid is not None else None)
+            or f"Чат {getattr(chat, 'id', '?')}"
+        )
+    else:
+        title = (
+            chat_title
+            or contact_name
+            or (f"MAX {peer_uid}" if peer_uid is not None else None)
+            or f"Чат {getattr(chat, 'id', '?')}"
+        )
     phone = None
     if contact is not None:
         raw_phone = getattr(contact, "phone", None)
@@ -424,6 +507,17 @@ def _serialize_chat(
             last_out = False
 
     chat_id = int(getattr(chat, "id"))
+    avatar_url = _chat_avatar_url(chat, contact)
+    description = None
+    if contact is not None:
+        raw_desc = getattr(contact, "description", None)
+        if raw_desc:
+            description = str(raw_desc).strip() or None
+    if not description:
+        raw_desc = getattr(chat, "description", None)
+        if raw_desc:
+            description = str(raw_desc).strip() or None
+
     return {
         "id": str(chat_id),
         "peer_id": chat_id,
@@ -431,6 +525,8 @@ def _serialize_chat(
         "kind": kind,
         "username": None,
         "phone": phone,
+        "avatar_url": avatar_url,
+        "description": description,
         "tg_user_id": None,
         "max_user_id": peer_uid,
         "unread": int(getattr(chat, "new_messages", 0) or 0),
@@ -509,6 +605,14 @@ async def list_dialogs(
         me_id = _user_id(client.me)
         contacts = _contact_map(client)
         chats = await _load_all_chats(client)
+        peer_uids: list[int] = []
+        for chat in chats:
+            if _chat_kind(chat) != "user":
+                continue
+            uid = _peer_user_id(chat, me_id)
+            if uid is not None:
+                peer_uids.append(uid)
+        await _enrich_users(client, peer_uids, contacts)
         rows = [
             _serialize_chat(c, me_id=me_id, contacts=contacts)
             for c in chats
@@ -562,6 +666,9 @@ async def resolve_peer_profile(
                     continue
         if chat is None:
             raise RuntimeError("Чат не найден")
+        uid = _peer_user_id(chat, me_id) if _chat_kind(chat) == "user" else None
+        if uid is not None:
+            await _enrich_users(client, [uid], contacts)
         return _serialize_chat(chat, me_id=me_id, contacts=contacts)
 
 
@@ -580,6 +687,9 @@ async def get_dialog_messages(
         me_id = _user_id(client.me)
         contacts = _contact_map(client)
         chat = await client.get_chat(int(peer_id))
+        uid = _peer_user_id(chat, me_id) if _chat_kind(chat) == "user" else None
+        if uid is not None:
+            await _enrich_users(client, [uid], contacts)
         peer = _serialize_chat(chat, me_id=me_id, contacts=contacts)
 
         from_time = before_ts
@@ -595,7 +705,7 @@ async def get_dialog_messages(
         msg_list = list(history or [])
         # Обычно от новых к старым — для UI старые сверху
         msg_list.sort(key=lambda m: int(getattr(m, "time", 0) or 0))
-        rows = [_serialize_message(m, me_id=me_id) for m in msg_list]
+        rows = [_serialize_message(m, me_id=me_id, contacts=contacts) for m in msg_list]
 
         if mark_read and msg_list and not before_ts:
             try:
@@ -612,8 +722,10 @@ async def get_dialog_messages(
                 "peer_id": int(peer_id),
                 "title": peer.get("title"),
                 "kind": peer.get("kind"),
-                "username": None,
+                "username": peer.get("username"),
                 "phone": peer.get("phone"),
+                "avatar_url": peer.get("avatar_url"),
+                "description": peer.get("description"),
                 "max_user_id": peer.get("max_user_id"),
                 "tg_user_id": None,
             },

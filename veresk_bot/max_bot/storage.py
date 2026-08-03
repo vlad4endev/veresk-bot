@@ -40,6 +40,8 @@ CREATE TABLE IF NOT EXISTS max_dialogs (
     max_user_id INTEGER,
     name TEXT,
     phone TEXT,
+    avatar_url TEXT,
+    username TEXT,
     last_text TEXT,
     last_at TEXT,
     last_out INTEGER NOT NULL DEFAULT 0,
@@ -49,6 +51,14 @@ CREATE TABLE IF NOT EXISTS max_dialogs (
 CREATE INDEX IF NOT EXISTS idx_max_dialogs_user ON max_dialogs(max_user_id);
 CREATE INDEX IF NOT EXISTS idx_max_dialogs_last ON max_dialogs(last_at);
 """
+
+
+def _migrate_max_dialogs(db: sqlite3.Connection) -> None:
+    cols = {str(r[1]) for r in db.execute("PRAGMA table_info(max_dialogs)").fetchall()}
+    if "avatar_url" not in cols:
+        db.execute("ALTER TABLE max_dialogs ADD COLUMN avatar_url TEXT")
+    if "username" not in cols:
+        db.execute("ALTER TABLE max_dialogs ADD COLUMN username TEXT")
 
 
 def _now() -> str:
@@ -70,6 +80,7 @@ async def init_max_db() -> None:
         Path(DATABASE_PATH).parent.mkdir(parents=True, exist_ok=True)
         with _connect() as db:
             db.executescript(_SCHEMA)
+            _migrate_max_dialogs(db)
             db.commit()
 
     await _run_db(_init)
@@ -141,6 +152,8 @@ async def upsert_dialog(
     max_user_id: int | None = None,
     name: str | None = None,
     phone: str | None = None,
+    avatar_url: str | None = None,
+    username: str | None = None,
     last_text: str | None = None,
     last_at: str | None = None,
     last_out: bool | None = None,
@@ -168,7 +181,22 @@ async def upsert_dialog(
                 db, max_user_id if max_user_id is not None else (existing["max_user_id"] if existing else None)
             )
             resolved_name = (name or "").strip() or (existing["name"] if existing else None) or profile.get("name") or ""
+            # Не затираем нормальное имя MAX-аккаунта fallback'ом вида "MAX 123"
+            if resolved_name and re.fullmatch(r"MAX\s+\d+", resolved_name, flags=re.I):
+                prev = (existing["name"] if existing else None) or ""
+                if prev and not re.fullmatch(r"MAX\s+\d+", prev, flags=re.I):
+                    resolved_name = prev
             resolved_phone = (phone or "").strip() or (existing["phone"] if existing else None) or profile.get("phone") or ""
+            resolved_avatar = (
+                (avatar_url or "").strip()
+                or (existing["avatar_url"] if existing and "avatar_url" in existing.keys() else None)
+                or ""
+            )
+            resolved_username = (
+                (username or "").strip().lstrip("@")
+                or (existing["username"] if existing and "username" in existing.keys() else None)
+                or ""
+            )
             resolved_user = (
                 int(max_user_id)
                 if max_user_id is not None
@@ -202,18 +230,34 @@ async def upsert_dialog(
             db.execute(
                 """
                 INSERT INTO max_dialogs (
-                    chat_id, max_user_id, name, phone,
+                    chat_id, max_user_id, name, phone, avatar_url, username,
                     last_text, last_at, last_out, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(chat_id) DO UPDATE SET
                     max_user_id = COALESCE(excluded.max_user_id, max_dialogs.max_user_id),
                     name = CASE
-                        WHEN excluded.name IS NOT NULL AND excluded.name != '' THEN excluded.name
+                        WHEN excluded.name IS NOT NULL AND excluded.name != ''
+                             AND excluded.name NOT GLOB 'MAX [0-9]*'
+                            THEN excluded.name
+                        WHEN excluded.name IS NOT NULL AND excluded.name != ''
+                             AND (max_dialogs.name IS NULL OR max_dialogs.name = ''
+                                  OR max_dialogs.name GLOB 'MAX [0-9]*')
+                            THEN excluded.name
                         ELSE max_dialogs.name
                     END,
                     phone = CASE
                         WHEN excluded.phone IS NOT NULL AND excluded.phone != '' THEN excluded.phone
                         ELSE max_dialogs.phone
+                    END,
+                    avatar_url = CASE
+                        WHEN excluded.avatar_url IS NOT NULL AND excluded.avatar_url != ''
+                            THEN excluded.avatar_url
+                        ELSE max_dialogs.avatar_url
+                    END,
+                    username = CASE
+                        WHEN excluded.username IS NOT NULL AND excluded.username != ''
+                            THEN excluded.username
+                        ELSE max_dialogs.username
                     END,
                     last_text = COALESCE(excluded.last_text, max_dialogs.last_text),
                     last_at = COALESCE(excluded.last_at, max_dialogs.last_at),
@@ -225,6 +269,8 @@ async def upsert_dialog(
                     resolved_user,
                     resolved_name or None,
                     resolved_phone or None,
+                    resolved_avatar or None,
+                    resolved_username or None,
                     new_last_text,
                     new_last_at,
                     new_last_out,
@@ -323,6 +369,8 @@ async def list_dialogs_for_inbox(
                 f"MAX {uid}" if uid is not None else f"Чат {d['chat_id']}"
             )
             phone = (d.get("phone") or "").strip() or None
+            avatar_url = (d.get("avatar_url") or "").strip() or None
+            username = (d.get("username") or "").strip().lstrip("@") or None
             row = {
                 "id": str(d["chat_id"]),
                 "peer_id": f"chat:{d['chat_id']}",
@@ -330,8 +378,9 @@ async def list_dialogs_for_inbox(
                 "max_user_id": int(uid) if uid is not None else None,
                 "title": title,
                 "kind": "user",
-                "username": None,
+                "username": username,
                 "phone": phone,
+                "avatar_url": avatar_url,
                 "unread": 0,
                 "pinned": False,
                 "is_user": True,
@@ -343,7 +392,10 @@ async def list_dialogs_for_inbox(
             }
             if q or q_digits:
                 hay = " ".join(
-                    filter(None, [title, phone, row["last_message"], str(uid or "")])
+                    filter(
+                        None,
+                        [title, phone, username, row["last_message"], str(uid or "")],
+                    )
                 ).lower()
                 hay_digits = re.sub(r"\D", "", phone or "")
                 if q and q not in hay and not (q_digits and q_digits in hay_digits):
@@ -365,6 +417,7 @@ async def list_dialogs_for_inbox(
                 "kind": "user",
                 "username": None,
                 "phone": phone,
+                "avatar_url": None,
                 "unread": 0,
                 "pinned": False,
                 "is_user": True,
