@@ -43,6 +43,9 @@ fi
 
 echo "==> docker compose up -d --build (cwd=$(pwd))"
 docker compose up -d --build
+# nginx кеширует IP upstream при старте — после recreate bot нужен reload
+docker compose up -d nginx
+docker compose exec -T nginx nginx -s reload 2>/dev/null || docker compose restart nginx
 
 echo "==> статус контейнеров"
 docker compose ps
@@ -50,7 +53,17 @@ docker compose ps
 echo "==> проверка UI/API"
 sleep 3
 curl -fsS http://127.0.0.1:3005/ | grep -oE 'api\.js\?v=[0-9]+' | head -1 || true
-curl -sS -o /dev/null -w "login_http=%{http_code}\n" \
+# прямой запрос в bot (минуя nginx) — если тут 401, а с :3005 502, виноват nginx DNS
+docker compose exec -T bot python -c "
+import urllib.request
+req=urllib.request.Request('http://127.0.0.1:3005/api/admin/login', data=b'{\"username\":\"x\",\"password\":\"y\"}', headers={'Content-Type':'application/json'}, method='POST')
+try:
+    urllib.request.urlopen(req, timeout=5)
+except Exception as e:
+    code=getattr(getattr(e,'code',None), '__int__', lambda: None)()
+    print('bot_direct=', getattr(e, 'code', e))
+" 2>/dev/null || true
+curl -sS -o /dev/null -w "login_via_nginx=%{http_code}\n" \
   -X POST http://127.0.0.1:3005/api/admin/login \
   -H "Content-Type: application/json" \
   -d '{"username":"x","password":"y"}' || true

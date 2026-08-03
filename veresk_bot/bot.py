@@ -1250,23 +1250,27 @@ dp.include_router(notifications_router)
 register_handlers(dp)
 
 
-async def validate_bot_token() -> None:
-    """Проверка BOT_TOKEN до запуска polling."""
+async def validate_bot_token() -> bool:
+    """Проверка BOT_TOKEN. False = polling не запускать, API админки уже может работать."""
     try:
         me = await bot.get_me(request_timeout=90)
     except TelegramUnauthorizedError:
         logger.error(
             "BOT_TOKEN неверный или отозван. Откройте @BotFather → /mybots → ваш бот → "
-            "API Token, скопируйте токен в .env на сервере (без кавычек и пробелов)."
+            "API Token, скопируйте токен в .env на сервере (без кавычек и пробелов). "
+            "Админ-API продолжит работу без Telegram polling."
         )
-        await bot.session.close()
-        raise SystemExit(1) from None
+        return False
     except TelegramNetworkError as exc:
-        logger.error("Не удалось связаться с Telegram API: %s", exc)
-        await bot.session.close()
-        raise SystemExit(1) from None
+        logger.error(
+            "Не удалось связаться с Telegram API: %s. "
+            "Админ-API продолжит работу; polling отложен.",
+            exc,
+        )
+        return False
 
     logger.info("Бот авторизован: @%s (id=%s)", me.username, me.id)
+    return True
 
 
 async def setup_menu_commands() -> None:
@@ -1307,7 +1311,6 @@ async def main() -> None:
             ),
         ],
     )
-    await validate_bot_token()
 
     from bot_metrics import PLATFORM_TELEGRAM, init_bot_metrics, touch_bot_heartbeat
     from client_db import init_db
@@ -1317,12 +1320,32 @@ async def main() -> None:
     await init_mailing_db()
     await init_bot_metrics()
 
+    redis = getattr(dp.storage, "redis", None)
+    if redis:
+        dp.redis = redis
+        set_redis(redis)
+    else:
+        logger.warning("⚠️ Redis недоступен — polling статусов отключён")
+
+    # Админ-API поднимаем сразу: иначе при сбое Telegram/Posiflora весь сайт даёт 502.
+    await start_webapp_server(redis, WEBAPP_HOST, WEBAPP_PORT, bot=bot)
+    if MINIAPP_URL:
+        logger.info("🌐 Mini App URL: %s (доступен всем клиентам)", MINIAPP_URL)
+    else:
+        logger.warning(
+            "⚠️ MINIAPP_URL не задан — Web App не откроется (задайте HTTPS в .env)"
+        )
+    logger.info("🛠 Админ-панель: /admin/ (API /api/admin/)")
+
+    tg_ok = await validate_bot_token()
+
     async def _tg_heartbeat_loop() -> None:
         while True:
             await touch_bot_heartbeat(PLATFORM_TELEGRAM)
             await asyncio.sleep(30)
 
-    asyncio.create_task(_tg_heartbeat_loop())
+    if tg_ok:
+        asyncio.create_task(_tg_heartbeat_loop())
 
     from posiflora import start_token_refresher, warmup_token
 
@@ -1341,27 +1364,20 @@ async def main() -> None:
 
     start_telegram_session_keepalive()
 
-    redis = getattr(dp.storage, "redis", None)
     if redis:
-        dp.redis = redis
-        set_redis(redis)
         asyncio.create_task(start_polling(bot, redis))
         logger.info("🔄 Polling задача запущена")
-    else:
-        logger.warning("⚠️ Redis недоступен — polling статусов отключён")
 
-    # API (Mini App + админка) всегда поднимаем — админка не зависит от MINIAPP_URL
-    await start_webapp_server(redis, WEBAPP_HOST, WEBAPP_PORT, bot=bot)
-    if MINIAPP_URL:
-        logger.info("🌐 Mini App URL: %s (доступен всем клиентам)", MINIAPP_URL)
+    if tg_ok:
+        await setup_menu_commands()
+        await dp.start_polling(bot)
     else:
         logger.warning(
-            "⚠️ MINIAPP_URL не задан — Web App не откроется (задайте HTTPS в .env)"
+            "Telegram polling не запущен (токен/сеть). "
+            "Админ-API работает; исправьте BOT_TOKEN или сеть и перезапустите контейнер."
         )
-    logger.info("🛠 Админ-панель: /admin/ (API /api/admin/)")
-
-    await setup_menu_commands()
-    await dp.start_polling(bot)
+        # Держим процесс живым ради HTTP API / фоновых задач.
+        await asyncio.Event().wait()
 
 
 if __name__ == "__main__":

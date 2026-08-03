@@ -263,11 +263,17 @@ async def handle_api_order_legacy(request: web.Request) -> web.Response:
     return await _respond_order_status(redis, tg_id, order_id)
 
 
+async def handle_health(_request: web.Request) -> web.Response:
+    """Лёгкий probe для nginx/deploy — без auth и без Telegram."""
+    return web.json_response({"ok": True, "service": "veresk-api"})
+
+
 def create_api_app(redis, bot=None) -> web.Application:
     app = web.Application()
     app["redis"] = redis
     app["bot"] = bot
 
+    app.router.add_get("/api/health", handle_health)
     app.router.add_route("OPTIONS", "/api/order-status/{order_id}", handle_options)
     app.router.add_route("OPTIONS", "/api/order/active", handle_options)
     app.router.add_route("OPTIONS", "/api/order", handle_options)
