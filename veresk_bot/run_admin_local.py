@@ -63,9 +63,16 @@ async def main() -> None:
     await init_bot_metrics()
     await _seed_demo()
 
+    from senders.telegram_userbot import is_telethon_installed
     from senders.session_keepalive import start_telegram_session_keepalive
 
-    start_telegram_session_keepalive()
+    if not is_telethon_installed():
+        logger.warning(
+            "Telethon не установлен — подключение Telegram-номеров недоступно. "
+            "Выполните: .venv/bin/pip install telethon==1.36.0 и перезапустите админку."
+        )
+    else:
+        start_telegram_session_keepalive()
 
     app = web.Application()
     app["redis"] = None

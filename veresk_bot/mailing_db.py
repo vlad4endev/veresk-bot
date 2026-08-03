@@ -36,6 +36,7 @@ CREATE TABLE IF NOT EXISTS customers (
 CREATE INDEX IF NOT EXISTS idx_customers_phone ON customers (phone);
 CREATE INDEX IF NOT EXISTS idx_customers_segment ON customers (segment);
 CREATE INDEX IF NOT EXISTS idx_customers_name ON customers (name);
+CREATE INDEX IF NOT EXISTS idx_customers_tg ON customers (tg_user_id);
 
 CREATE TABLE IF NOT EXISTS customer_events (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -305,6 +306,66 @@ async def get_customer_by_posiflora_id(posiflora_id: str) -> dict[str, Any] | No
                 "SELECT * FROM customers WHERE posiflora_id = ?", (posiflora_id,)
             ).fetchone()
         return dict(row) if row else None
+
+    return await _run_db(_get)
+
+
+async def get_customer_by_tg_user_id(tg_user_id: int) -> dict[str, Any] | None:
+    """Найти клиента CRM по Telegram user id."""
+    try:
+        tid = int(tg_user_id)
+    except (TypeError, ValueError):
+        return None
+
+    def _get() -> dict[str, Any] | None:
+        with _connect() as db:
+            row = db.execute(
+                "SELECT * FROM customers WHERE tg_user_id = ? LIMIT 1",
+                (tid,),
+            ).fetchone()
+        return dict(row) if row else None
+
+    return await _run_db(_get)
+
+
+async def customer_contact_sets() -> tuple[set[int], set[str]]:
+    """Наборы tg_user_id и телефонов (последние 10 цифр) для быстрой фильтрации чатов."""
+
+    def _sets() -> tuple[set[int], set[str]]:
+        with _connect() as db:
+            rows = db.execute(
+                "SELECT tg_user_id, phone FROM customers"
+            ).fetchall()
+        tg_ids: set[int] = set()
+        phones: set[str] = set()
+        for row in rows:
+            tid = row["tg_user_id"]
+            if tid is not None:
+                try:
+                    tg_ids.add(int(tid))
+                except (TypeError, ValueError):
+                    pass
+            digits = _phone_digits(row["phone"] or "")
+            if digits:
+                phones.add(digits)
+        return tg_ids, phones
+
+    return await _run_db(_sets)
+
+
+async def get_customer_by_phone(phone: str) -> dict[str, Any] | None:
+    """Найти клиента CRM по телефону (сравнение по 10 цифрам)."""
+    target = _phone_digits(phone)
+    if not target:
+        return None
+
+    def _get() -> dict[str, Any] | None:
+        with _connect() as db:
+            rows = db.execute("SELECT * FROM customers").fetchall()
+        for row in rows:
+            if _phone_digits(row["phone"]) == target:
+                return dict(row)
+        return None
 
     return await _run_db(_get)
 

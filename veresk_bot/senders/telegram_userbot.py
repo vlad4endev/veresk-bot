@@ -17,6 +17,29 @@ logger = logging.getLogger(__name__)
 # phone → pending Telethon client during login flow
 _pending_logins: dict[str, Any] = {}
 
+TELETHON_MISSING_DETAIL = (
+    "Библиотека Telethon не установлена в окружении сервера. "
+    "Выполните: pip install telethon==1.36.0 и перезапустите админку."
+)
+
+
+def _telethon_missing_error(**extra: Any) -> dict[str, Any]:
+    return {
+        "ok": False,
+        "error": "telethon_missing",
+        "detail": TELETHON_MISSING_DETAIL,
+        **extra,
+    }
+
+
+def is_telethon_installed() -> bool:
+    try:
+        import telethon  # noqa: F401
+
+        return True
+    except ImportError:
+        return False
+
 
 def get_api_credentials() -> tuple[int, str]:
     """API ID/Hash: сначала значения из админ-панели, затем fallback на .env."""
@@ -65,23 +88,88 @@ async def start_telegram_login(phone: str) -> dict[str, Any]:
     try:
         from telethon import TelegramClient
     except ImportError:
-        return {"ok": False, "error": "telethon не установлен"}
+        return _telethon_missing_error()
 
     api_id, api_hash = get_api_credentials()
     phone_norm = _normalize_phone(phone)
     digits_only = re.sub(r"\D", "", phone_norm)
     session_name = sessions_path() / f"acc_{digits_only}"
+
+    # Закрыть предыдущую незавершённую попытку для этого номера
+    old = _pending_logins.pop(phone_norm, None)
+    if old:
+        try:
+            await old["client"].disconnect()
+        except Exception:
+            pass
+
     client = TelegramClient(str(session_name), api_id, api_hash)
     await client.connect()
+    if await client.is_user_authorized():
+        me = await client.get_me()
+        session_file = str(sessions_path() / f"acc_{digits_only}.session")
+        label = ""
+        if me:
+            label = " ".join(
+                filter(
+                    None,
+                    [getattr(me, "first_name", None), getattr(me, "last_name", None)],
+                )
+            ) or phone_norm
+        await client.disconnect()
+        return {
+            "ok": True,
+            "phone": phone_norm,
+            "already_authorized": True,
+            "session_file": session_file,
+            "label": label or phone_norm,
+            "tg_id": getattr(me, "id", None) if me else None,
+        }
+
     try:
-        await client.send_code_request(phone_norm)
+        sent = await client.send_code_request(phone_norm)
     except Exception as exc:
         await client.disconnect()
         logger.exception("Telethon send_code_request failed")
-        return {"ok": False, "error": str(exc)}
+        return {"ok": False, "error": _friendly_telethon_error(exc)}
 
-    _pending_logins[phone_norm] = client
-    return {"ok": True, "phone": phone_norm, "need_code": True}
+    phone_code_hash = getattr(sent, "phone_code_hash", None) or ""
+    _pending_logins[phone_norm] = {
+        "client": client,
+        "phone_code_hash": phone_code_hash,
+    }
+    return {
+        "ok": True,
+        "phone": phone_norm,
+        "need_code": True,
+        "code_type": type(getattr(sent, "type", None)).__name__ if sent else None,
+    }
+
+
+def _friendly_telethon_error(exc: BaseException) -> str:
+    name = type(exc).__name__
+    msg = str(exc)
+    if "PhoneCodeInvalid" in name or "phone code entered was invalid" in msg.lower():
+        return (
+            "Неверный код. Запросите новый код кнопкой «Получить код» "
+            "и введите свежий код из Telegram (не из SMS, если пришло в приложение)."
+        )
+    if "PhoneCodeExpired" in name or "expired" in msg.lower():
+        return "Код устарел. Нажмите «Получить код» ещё раз и введите новый."
+    if "FloodWait" in name:
+        wait = getattr(exc, "seconds", None)
+        return (
+            f"Слишком много попыток. Подождите {wait} сек. и попробуйте снова."
+            if wait
+            else "Слишком много попыток. Подождите немного и попробуйте снова."
+        )
+    if "PhoneNumberInvalid" in name:
+        return "Неверный номер телефона. Укажите в формате +79001234567."
+    if "PhoneNumberBanned" in name:
+        return "Этот номер заблокирован в Telegram."
+    if "SessionPasswordNeeded" in name:
+        return "Нужен пароль 2FA"
+    return msg
 
 
 async def confirm_telegram_login(
@@ -92,27 +180,63 @@ async def confirm_telegram_login(
 ) -> dict[str, Any]:
     """Шаг 2: подтвердить код (и 2FA пароль при необходимости)."""
     phone_norm = _normalize_phone(phone)
-    client = _pending_logins.get(phone_norm)
-    if client is None:
-        return {"ok": False, "error": "Сначала запросите код для этого номера"}
+    pending = _pending_logins.get(phone_norm)
+    if pending is None:
+        return {
+            "ok": False,
+            "error": "Сначала запросите код для этого номера (кнопка «Получить код»)",
+            "need_new_code": True,
+        }
+
+    # Совместимость: раньше хранили сам client
+    if isinstance(pending, dict):
+        client = pending["client"]
+        phone_code_hash = pending.get("phone_code_hash") or None
+    else:
+        client = pending
+        phone_code_hash = None
 
     try:
-        from telethon.errors import SessionPasswordNeededError
+        from telethon.errors import (
+            PhoneCodeExpiredError,
+            PhoneCodeInvalidError,
+            SessionPasswordNeededError,
+        )
     except ImportError:
-        return {"ok": False, "error": "telethon не установлен"}
+        return _telethon_missing_error()
+
+    code_clean = re.sub(r"\D", "", (code or "").strip())
+    if not code_clean and not password:
+        return {"ok": False, "error": "Введите код из Telegram"}
 
     try:
-        await client.sign_in(phone_norm, code.strip())
+        if password and not code_clean:
+            await client.sign_in(password=password)
+        else:
+            kwargs: dict[str, Any] = {}
+            if phone_code_hash:
+                kwargs["phone_code_hash"] = phone_code_hash
+            await client.sign_in(phone_norm, code_clean, **kwargs)
     except SessionPasswordNeededError:
         if not password:
             return {"ok": False, "need_2fa": True, "error": "Нужен пароль 2FA"}
         try:
             await client.sign_in(password=password)
         except Exception as exc:
-            return {"ok": False, "error": f"2FA: {exc}"}
+            return {"ok": False, "error": f"2FA: {_friendly_telethon_error(exc)}"}
+    except (PhoneCodeInvalidError, PhoneCodeExpiredError) as exc:
+        return {
+            "ok": False,
+            "error": _friendly_telethon_error(exc),
+            "need_new_code": True,
+        }
     except Exception as exc:
         logger.exception("Telethon sign_in failed")
-        return {"ok": False, "error": str(exc)}
+        return {
+            "ok": False,
+            "error": _friendly_telethon_error(exc),
+            "need_new_code": "invalid" in str(exc).lower() or "expired" in str(exc).lower(),
+        }
 
     me = await client.get_me()
     digits_only = re.sub(r"\D", "", phone_norm)
@@ -136,12 +260,14 @@ async def confirm_telegram_login(
 
 async def cancel_telegram_login(phone: str) -> None:
     phone_norm = _normalize_phone(phone)
-    client = _pending_logins.pop(phone_norm, None)
-    if client:
-        try:
-            await client.disconnect()
-        except Exception:
-            pass
+    pending = _pending_logins.pop(phone_norm, None)
+    if not pending:
+        return
+    client = pending["client"] if isinstance(pending, dict) else pending
+    try:
+        await client.disconnect()
+    except Exception:
+        pass
 
 
 async def check_telegram_session(session_file: str) -> dict[str, Any]:
@@ -168,9 +294,35 @@ async def check_telegram_session(session_file: str) -> dict[str, Any]:
         }
 
     try:
+        from senders.telegram_chat import telegram_session
+    except ImportError:
+        pass
+    else:
+        try:
+            async with telegram_session(session_file) as client:
+                me = await client.get_me()
+                username = getattr(me, "username", None) if me else None
+                first = getattr(me, "first_name", None) if me else None
+                last = getattr(me, "last_name", None) if me else None
+                label = " ".join(filter(None, [first, last])) or None
+                return {
+                    "ok": True,
+                    "authorized": True,
+                    "tg_id": getattr(me, "id", None) if me else None,
+                    "username": username,
+                    "label": label,
+                    "phone": getattr(me, "phone", None) if me else None,
+                }
+        except asyncio.TimeoutError:
+            return {"ok": False, "authorized": False, "error": "Таймаут подключения к Telegram"}
+        except Exception as exc:
+            logger.exception("check_telegram_session failed")
+            return {"ok": False, "authorized": False, "error": str(exc)}
+
+    try:
         from telethon import TelegramClient
     except ImportError:
-        return {"ok": False, "authorized": False, "error": "telethon не установлен"}
+        return {"ok": False, "authorized": False, "error": "telethon_missing", "detail": TELETHON_MISSING_DETAIL}
 
     api_id, api_hash = get_api_credentials()
     client = TelegramClient(base, api_id, api_hash)
@@ -239,24 +391,6 @@ class TelegramUserbotSender:
     def available(self) -> bool:
         return is_telethon_configured() and bool(self.session_file)
 
-    async def _get_client(self):
-        if self._client and self._client.is_connected():
-            return self._client
-        from telethon import TelegramClient
-
-        # session_file может быть с .session или без
-        base = self.session_file
-        if base.endswith(".session"):
-            base = base[:-8]
-        api_id, api_hash = get_api_credentials()
-        client = TelegramClient(base, api_id, api_hash)
-        await client.connect()
-        if not await client.is_user_authorized():
-            await client.disconnect()
-            raise RuntimeError("Сессия не авторизована — переподключите аккаунт")
-        self._client = client
-        return client
-
     async def send(self, *, phone: str, name: str, text: str) -> SendResult:
         if not self.available:
             return SendResult(ok=False, status="failed", error="Telethon не настроен")
@@ -264,33 +398,33 @@ class TelegramUserbotSender:
             from telethon.tl.functions.contacts import ImportContactsRequest
             from telethon.tl.types import InputPhoneContact
             from telethon.errors import FloodWaitError
+            from senders.telegram_chat import telegram_session
         except ImportError:
-            return SendResult(ok=False, status="failed", error="telethon не установлен")
+            return SendResult(ok=False, status="failed", error=TELETHON_MISSING_DETAIL)
 
         phone_norm = _normalize_phone(phone)
         try:
-            client = await self._get_client()
-            contact = InputPhoneContact(
-                client_id=0,
-                phone=phone_norm,
-                first_name=name.split()[0] if name else "Клиент",
-                last_name=" ".join(name.split()[1:]) if name and len(name.split()) > 1 else "",
-            )
-            result = await client(ImportContactsRequest([contact]))
-            user = None
-            if result.users:
-                user = result.users[0]
-            if not user:
-                # Попробуем напрямую по телефону
-                try:
-                    user = await client.get_entity(phone_norm)
-                except Exception:
-                    return SendResult(
-                        ok=False,
-                        status="failed",
-                        error="Не удалось найти пользователя по телефону",
-                    )
-            await client.send_message(user, text)
+            async with telegram_session(self.session_file, self.account_id) as client:
+                contact = InputPhoneContact(
+                    client_id=0,
+                    phone=phone_norm,
+                    first_name=name.split()[0] if name else "Клиент",
+                    last_name=" ".join(name.split()[1:]) if name and len(name.split()) > 1 else "",
+                )
+                result = await client(ImportContactsRequest([contact]))
+                user = None
+                if result.users:
+                    user = result.users[0]
+                if not user:
+                    try:
+                        user = await client.get_entity(phone_norm)
+                    except Exception:
+                        return SendResult(
+                            ok=False,
+                            status="failed",
+                            error="Не удалось найти пользователя по телефону",
+                        )
+                await client.send_message(user, text)
             return SendResult(ok=True, status="sent")
         except FloodWaitError as exc:
             wait = int(getattr(exc, "seconds", 60))
@@ -302,9 +436,10 @@ class TelegramUserbotSender:
             return SendResult(ok=False, status="failed", error=str(exc))
 
     async def disconnect(self) -> None:
-        if self._client:
-            try:
-                await self._client.disconnect()
-            except Exception:
-                pass
-            self._client = None
+        from senders.telegram_chat import release_session
+
+        await release_session(
+            session_file=self.session_file,
+            account_id=self.account_id,
+        )
+        self._client = None

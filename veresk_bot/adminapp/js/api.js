@@ -41,6 +41,39 @@ const AdminAPI = (() => {
     return data;
   }
 
+  async function requestForm(path, formData, options = {}) {
+    const headers = Object.assign({}, options.headers || {});
+    const token = getToken();
+    if (token) headers["Authorization"] = "Bearer " + token;
+    // Не ставим Content-Type — boundary выставит браузер
+    const res = await fetch(path, {
+      ...options,
+      method: options.method || "POST",
+      headers,
+      body: formData,
+    });
+    let data = null;
+    try {
+      data = await res.json();
+    } catch (_) {
+      data = {};
+    }
+    if (res.status === 401) {
+      setToken("");
+      const err = new Error("unauthorized");
+      err.status = 401;
+      err.data = data;
+      throw err;
+    }
+    if (!res.ok) {
+      const err = new Error(data.error || "request_failed");
+      err.status = res.status;
+      err.data = data;
+      throw err;
+    }
+    return data;
+  }
+
   return {
     getToken,
     setToken,
@@ -137,5 +170,75 @@ const AdminAPI = (() => {
         method: "POST",
         body: JSON.stringify(body),
       }),
+    chatAccounts: () => request("/api/admin/chats/accounts"),
+    chatDialogs: (params = {}) => {
+      const q = new URLSearchParams(params).toString();
+      return request("/api/admin/chats/dialogs" + (q ? "?" + q : ""));
+    },
+    chatMessages: (peerId, params = {}) => {
+      const q = new URLSearchParams(params).toString();
+      return request(
+        "/api/admin/chats/dialogs/" +
+          encodeURIComponent(peerId) +
+          "/messages" +
+          (q ? "?" + q : "")
+      );
+    },
+    chatSend: (peerId, body) =>
+      request("/api/admin/chats/dialogs/" + encodeURIComponent(peerId) + "/send", {
+        method: "POST",
+        body: JSON.stringify(body),
+      }),
+    chatSendMedia: (peerId, formData) =>
+      requestForm(
+        "/api/admin/chats/dialogs/" + encodeURIComponent(peerId) + "/send-media",
+        formData
+      ),
+    chatClientStatus: (peerId, accountId) => {
+      const q = new URLSearchParams({ account_id: String(accountId || "") });
+      return request(
+        "/api/admin/chats/dialogs/" +
+          encodeURIComponent(peerId) +
+          "/client?" +
+          q.toString()
+      );
+    },
+    chatClientCreate: (peerId, body) =>
+      request("/api/admin/chats/dialogs/" + encodeURIComponent(peerId) + "/client", {
+        method: "POST",
+        body: JSON.stringify(body),
+      }),
+    chatCreate: (body) =>
+      request("/api/admin/chats/dialogs", {
+        method: "POST",
+        body: JSON.stringify(body),
+      }),
+    chatAvatarUrl: (peerId, accountId) => {
+      const q = new URLSearchParams({
+        account_id: String(accountId || ""),
+        token: getToken(),
+      });
+      return (
+        "/api/admin/chats/dialogs/" +
+        encodeURIComponent(peerId) +
+        "/avatar?" +
+        q.toString()
+      );
+    },
+    chatMediaUrl: (peerId, messageId, accountId, opts = {}) => {
+      const q = new URLSearchParams({
+        account_id: String(accountId || ""),
+        token: getToken(),
+      });
+      if (opts.thumb) q.set("thumb", "1");
+      return (
+        "/api/admin/chats/dialogs/" +
+        encodeURIComponent(peerId) +
+        "/messages/" +
+        encodeURIComponent(messageId) +
+        "/media?" +
+        q.toString()
+      );
+    },
   };
 })();

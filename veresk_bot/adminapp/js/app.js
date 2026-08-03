@@ -75,6 +75,11 @@
       tab;
     navItems.forEach((n) => n.classList.toggle("active", n.dataset.nav === navKey));
     document.body.classList.toggle("hide-bnav", tab === "compose");
+    if (tab !== "chats") {
+      document.body.classList.remove("tg-thread-open");
+      $("#tgShell")?.classList.remove("thread-open");
+      stopTgPoll();
+    }
     window.scrollTo({ top: 0, behavior: "smooth" });
     if (tab === "compose") setStep(0);
     if (tab === "home") loadHome();
@@ -82,6 +87,7 @@
     if (tab === "bots") loadBotsStatus();
     if (tab === "settings") loadSettings();
     if (tab === "aichat") initAiChat();
+    if (tab === "chats") loadChats();
   }
   window.go = go;
 
@@ -813,6 +819,11 @@
   window.congratsCurrent = congratsCurrent;
 
   $("#clWrite")?.addEventListener("click", () => congratsCurrent("plain"));
+  $("#clOpenChat")?.addEventListener("click", () => {
+    const c = state.curClient;
+    if (!c?.phone) return alert("У клиента нет телефона");
+    openChatWithClient(c);
+  });
 
   // ── personal ────────────────────────────────────────────────────────────
 
@@ -925,8 +936,8 @@
       const hint = $("#tgHint");
       if (hint) {
         hint.textContent = configured
-          ? "Подключите номер: телефон → код из Telegram/SMS → полный коннект MTProto."
-          : "Сначала раскройте блок «Ключи Telegram API» ниже, затем подключайте номера.";
+          ? "Ключи заданы. Подключите номер: телефон → код из Telegram/SMS → коннект."
+          : "Шаг 1: сохраните API-ключи. Шаг 2: подключите номер телефона.";
       }
       await loadTgApiStatus();
       const tgItems = (data.items || []).filter((a) => a.kind !== "max_bot");
@@ -938,7 +949,7 @@
       const connectBtn = $("#btnConnectTg");
       if (connectBtn) {
         connectBtn.classList.toggle("is-locked", !configured);
-        connectBtn.title = configured ? "Подключить номер" : "Сначала сохраните API-ключи";
+        connectBtn.title = configured ? "Подключить номер" : "Сначала сохраните API-ключи (шаг 1)";
       }
       const checkBtn = $("#btnCheckTgAll");
       if (checkBtn) {
@@ -955,64 +966,10 @@
         box.innerHTML = `<div class="empty-rich" style="padding:28px 16px">
           <div class="er-ic" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><rect x="6" y="2" width="12" height="20" rx="3"/><path d="M11 18h2"/></svg></div>
           <div class="t">Нет подключённых номеров</div>
-          <p class="d">${configured ? "Нажмите «Подключить», чтобы добавить Telegram-аккаунт и получить полный коннект." : "Сохраните API-ключи в блоке ниже — затем появится кнопка подключения."}</p>
+          <p class="d">${configured ? "Нажмите «Подключить», чтобы добавить Telegram-аккаунт." : "Сначала сохраните API-ключи выше — затем подключите номер."}</p>
         </div>`;
       } else {
-        box.innerHTML = tgItems
-          .map((a) => {
-            let statusLabel = "Готов";
-            let statusColor = "var(--ok)";
-            if (a.status === "warmup") {
-              statusLabel = a.warmup_until
-                ? "Прогрев до " + a.warmup_until
-                : "Прогрев";
-              statusColor = "var(--warn)";
-            } else if (a.status === "unavailable" || a.status === "blocked") {
-              statusLabel = a.status === "blocked" ? "Заблокирован" : "Нет сессии";
-              statusColor = "var(--ink-3)";
-            }
-            let connectLabel = "";
-            let connectColor = "";
-            if (a.session_ok === true) {
-              connectLabel = "Коннект ок";
-              connectColor = "var(--ok)";
-            } else if (a.session_ok === false) {
-              connectLabel = "Нет коннекта";
-              connectColor = "#c0492f";
-            }
-            const nameBits = [];
-            if (a.label && a.label !== a.phone) nameBits.push(a.label);
-            if (a.tg_username) nameBits.push("@" + a.tg_username);
-            const aliveHint = a.last_ok_at
-              ? " · ок " + fmtRelTime(a.last_ok_at)
-              : a.last_checked_at
-                ? " · проверка " + fmtRelTime(a.last_checked_at)
-                : "";
-            const sub =
-              (nameBits.length ? nameBits.join(" · ") + " · " : "") +
-              "сегодня " +
-              String(a.sent_today) +
-              " из " +
-              String(a.daily_limit) +
-              aliveHint;
-            const id = a.id != null ? String(a.id) : "";
-            return `<div class="acct" data-acct-id="${esc(id)}">
-              <div class="ico tg">TG</div>
-              <div class="m">
-                <div class="n">${esc(a.phone_masked || a.label || "Telegram")}</div>
-                <div class="p">${esc(sub)}</div>
-              </div>
-              <div class="acct-meta">
-                ${connectLabel ? `<span class="tagi" style="color:${connectColor}"><span class="d" style="background:${connectColor}"></span>${esc(connectLabel)}</span>` : ""}
-                <span class="tagi" style="color:${statusColor}"><span class="d" style="background:${statusColor}"></span>${esc(statusLabel)}</span>
-              </div>
-              <div class="acct-actions">
-                <button type="button" class="btn btn-sm" data-tg-check="${esc(id)}" ${!id ? "disabled" : ""}>Проверить</button>
-                <button type="button" class="btn btn-sm danger" data-tg-del="${esc(id)}" ${!id ? "disabled" : ""}>Отключить</button>
-              </div>
-            </div>`;
-          })
-          .join("");
+        box.innerHTML = tgItems.map((a) => renderTgAccountCard(a)).join("");
 
         box.querySelectorAll("[data-tg-check]").forEach((btn) => {
           btn.addEventListener("click", async () => {
@@ -1177,6 +1134,76 @@
 
   $("#btnBotsRefresh")?.addEventListener("click", () => loadBotsStatus());
 
+  function fmtWarmupDate(raw) {
+    if (!raw) return "";
+    const s = String(raw).trim();
+    const m = s.match(/^(\d{4})-(\d{2})-(\d{2})/);
+    if (m) return m[3] + "." + m[2] + "." + m[1];
+    return s;
+  }
+
+  function renderTgAccountCard(a) {
+    let statusLabel = "Готов";
+    let statusColor = "var(--ok)";
+    if (a.status === "warmup") {
+      statusLabel = a.warmup_until
+        ? "Прогрев до " + fmtWarmupDate(a.warmup_until)
+        : "Прогрев";
+      statusColor = "var(--warn)";
+    } else if (a.status === "unavailable" || a.status === "blocked") {
+      statusLabel = a.status === "blocked" ? "Заблокирован" : "Нет сессии";
+      statusColor = "var(--ink-3)";
+    }
+
+    let connectLabel = "";
+    let connectColor = "";
+    if (a.session_ok === true) {
+      connectLabel = "Коннект ок";
+      connectColor = "var(--ok)";
+    } else if (a.session_ok === false) {
+      connectLabel = "Нет коннекта";
+      connectColor = "#c0492f";
+    }
+
+    const nameBits = [];
+    if (a.label && a.label !== a.phone && a.label !== a.phone_masked) {
+      nameBits.push(a.label);
+    }
+    if (a.tg_username) nameBits.push("@" + a.tg_username);
+
+    const aliveHint = a.last_ok_at
+      ? "ок " + fmtRelTime(a.last_ok_at)
+      : a.last_checked_at
+        ? "проверка " + fmtRelTime(a.last_checked_at)
+        : "";
+
+    const sent = a.sent_today != null ? a.sent_today : 0;
+    const limit = a.daily_limit != null ? a.daily_limit : 200;
+    const id = a.id != null ? String(a.id) : "";
+
+    return `<div class="acct" data-acct-id="${esc(id)}">
+      <div class="acct-id">
+        <div class="ico tg" aria-hidden="true">TG</div>
+        <div class="m">
+          <div class="n">${esc(a.phone_masked || a.label || "Telegram")}</div>
+          <div class="p">${esc(nameBits.join(" · ") || "Личный аккаунт")}</div>
+        </div>
+      </div>
+      <div class="acct-info">
+        <div class="acct-quota"><strong>${esc(String(sent))}</strong> из ${esc(String(limit))} сегодня</div>
+        <div class="acct-tags">
+          ${connectLabel ? `<span class="tagi" style="color:${connectColor}"><span class="d" style="background:${connectColor}"></span>${esc(connectLabel)}</span>` : ""}
+          <span class="tagi" style="color:${statusColor}"><span class="d" style="background:${statusColor}"></span>${esc(statusLabel)}</span>
+          ${aliveHint ? `<span class="acct-alive">${esc(aliveHint)}</span>` : ""}
+        </div>
+      </div>
+      <div class="acct-actions">
+        <button type="button" class="btn btn-sm" data-tg-check="${esc(id)}" ${!id ? "disabled" : ""}>Проверить</button>
+        <button type="button" class="btn btn-sm danger" data-tg-del="${esc(id)}" ${!id ? "disabled" : ""}>Отключить</button>
+      </div>
+    </div>`;
+  }
+
   function renderTgSessionBanner(tgItems, configured) {
     const banner = $("#tgSessionBanner");
     if (!banner) return;
@@ -1246,7 +1273,7 @@
     } finally {
       if (btn) {
         btn.disabled = false;
-        btn.textContent = "Проверить";
+        btn.textContent = "Проверить все";
       }
     }
   }
@@ -1784,7 +1811,7 @@
       const api = $("#tgApiForm");
       if (api && api.tagName === "DETAILS") api.open = true;
       api?.scrollIntoView({ behavior: "smooth", block: "nearest" });
-      alert("Сначала сохраните ключи Telegram API в блоке ниже.");
+      alert("Сначала сохраните ключи Telegram API в блоке выше (шаг 1).");
       return;
     }
     openConnectForm($("#acctForm")?.classList.contains("hidden"));
@@ -1800,6 +1827,18 @@
     loadAccounts({ check: true });
   });
 
+  function tgErrorText(errOrRes) {
+    if (!errOrRes) return "Ошибка";
+    const data = errOrRes.data || errOrRes;
+    if (data.error === "telethon_missing" || /telethon/i.test(String(data.error || ""))) {
+      return (
+        data.detail ||
+        "Библиотека Telethon не установлена на сервере. Выполните: pip install telethon==1.36.0 и перезапустите админку."
+      );
+    }
+    return data.detail || data.error || errOrRes.message || "Ошибка";
+  }
+
   $("#tgSendCode")?.addEventListener("click", async () => {
     const phone = $("#tgPhone").value.trim();
     if (!phone) return alert("Укажите телефон");
@@ -1810,14 +1849,19 @@
     }
     try {
       const res = await AdminAPI.tgStart(phone);
-      if (!res.ok) return alert(res.error || "Ошибка");
+      if (!res.ok) return alert(tgErrorText(res));
       state.tgPhone = res.phone || phone;
+      if (res.already_authorized) {
+        showConnectDone(res);
+        return;
+      }
+      if ($("#tgCode")) $("#tgCode").value = "";
       $("#tgCodeStep").classList.remove("hidden");
       setConnectStep(2);
       $("#tgCode")?.focus();
-      alert("Код отправлен в Telegram / SMS");
+      alert("Код отправлен в Telegram. Введите свежий код (старый после повторного запроса не подойдёт).");
     } catch (err) {
-      alert(err.data?.error || err.message);
+      alert(tgErrorText(err));
     } finally {
       if (btn) {
         btn.disabled = false;
@@ -1841,10 +1885,21 @@
         alert("Введите пароль двухфакторной аутентификации");
         return;
       }
-      if (!res.ok) return alert(res.error || "Ошибка");
+      if (!res.ok) {
+        alert(tgErrorText(res));
+        if (res.need_new_code) {
+          if ($("#tgCode")) $("#tgCode").value = "";
+          $("#tgCode")?.focus();
+        }
+        return;
+      }
       showConnectDone(res);
     } catch (err) {
-      alert(err.data?.error || err.message);
+      alert(tgErrorText(err));
+      if (err.data?.need_new_code) {
+        if ($("#tgCode")) $("#tgCode").value = "";
+        $("#tgCode")?.focus();
+      }
     } finally {
       if (btn) {
         btn.disabled = false;
@@ -2156,6 +2211,918 @@
         </div>`;
     });
   }
+
+  // ── Telegram chats ────────────────────────────────────────────────────────
+
+  const TG_ACCOUNT_KEY = "veresk_tg_chat_account";
+  const TG_ONLY_USERS_KEY = "veresk_tg_only_users";
+  const TG_MAX_ATTACH = 10;
+  const TG_MAX_FILE_MB = 50;
+  const tgState = {
+    ready: false,
+    accounts: [],
+    accountId: null,
+    dialogs: [],
+    peerId: null,
+    peer: null,
+    clientInfo: null,
+    messages: [],
+    attachments: [],
+    loadingDialogs: false,
+    loadingMessages: false,
+    sending: false,
+    searchTimer: null,
+    pollTimer: null,
+    lastQuery: "",
+    onlyUsers: localStorage.getItem(TG_ONLY_USERS_KEY) !== "0",
+  };
+
+  function stopTgPoll() {
+    if (tgState.pollTimer) {
+      clearInterval(tgState.pollTimer);
+      tgState.pollTimer = null;
+    }
+  }
+
+  function startTgPoll() {
+    stopTgPoll();
+    tgState.pollTimer = setInterval(() => {
+      if (!$("#chats")?.classList.contains("active")) return;
+      if (!tgState.accountId) return;
+      refreshTgDialogs({ silent: true });
+      if (tgState.peerId) openTgPeer(tgState.peerId, { silent: true, keepScroll: true });
+    }, 8000);
+  }
+
+  function tgInitials(title) {
+    const parts = String(title || "?").trim().split(/\s+/).filter(Boolean);
+    if (!parts.length) return "?";
+    if (parts.length === 1) return parts[0].slice(0, 2).toUpperCase();
+    return (parts[0][0] + parts[1][0]).toUpperCase();
+  }
+
+  function tgTimeLabel(iso) {
+    if (!iso) return "";
+    const d = new Date(iso);
+    if (Number.isNaN(d.getTime())) return "";
+    const now = new Date();
+    const sameDay =
+      d.getFullYear() === now.getFullYear() &&
+      d.getMonth() === now.getMonth() &&
+      d.getDate() === now.getDate();
+    if (sameDay) {
+      return d.toLocaleTimeString("ru-RU", { hour: "2-digit", minute: "2-digit" });
+    }
+    const yesterday = new Date(now);
+    yesterday.setDate(now.getDate() - 1);
+    if (
+      d.getFullYear() === yesterday.getFullYear() &&
+      d.getMonth() === yesterday.getMonth() &&
+      d.getDate() === yesterday.getDate()
+    ) {
+      return "вчера";
+    }
+    return d.toLocaleDateString("ru-RU", { day: "numeric", month: "short" });
+  }
+
+  function tgMsgTime(iso) {
+    if (!iso) return "";
+    const d = new Date(iso);
+    if (Number.isNaN(d.getTime())) return "";
+    return d.toLocaleTimeString("ru-RU", { hour: "2-digit", minute: "2-digit" });
+  }
+
+  function currentTgAccountId() {
+    const sel = $("#tgAccountSelect");
+    const v = sel?.value || tgState.accountId || localStorage.getItem(TG_ACCOUNT_KEY) || "";
+    return v ? Number(v) : null;
+  }
+
+  function renderTgAccounts() {
+    const sel = $("#tgAccountSelect");
+    if (!sel) return;
+    const items = tgState.accounts || [];
+    if (!items.length) {
+      sel.innerHTML = `<option value="">Нет аккаунтов</option>`;
+      sel.disabled = true;
+      return;
+    }
+    sel.disabled = false;
+    const preferred = String(
+      tgState.accountId || localStorage.getItem(TG_ACCOUNT_KEY) || items[0].id
+    );
+    sel.innerHTML = items
+      .map((a) => {
+        const label = esc(a.label || a.phone_masked || a.phone || `Аккаунт ${a.id}`);
+        const status = a.status && a.status !== "ready" ? ` · ${esc(a.status)}` : "";
+        return `<option value="${a.id}">${label}${status}</option>`;
+      })
+      .join("");
+    if ([...sel.options].some((o) => o.value === preferred)) sel.value = preferred;
+    tgState.accountId = Number(sel.value);
+    localStorage.setItem(TG_ACCOUNT_KEY, String(tgState.accountId));
+  }
+
+  function filteredTgDialogs() {
+    const items = tgState.dialogs || [];
+    if (!tgState.onlyUsers) return items;
+    return items.filter((d) => (d.kind || "user") === "user");
+  }
+
+  function renderTgDialogs() {
+    const box = $("#tgDialogList");
+    if (!box) return;
+    const items = filteredTgDialogs();
+    if (!tgState.accountId) {
+      box.innerHTML = `<div class="tg-empty"><div class="t">Нет аккаунта</div>Подключите Telegram в Настройках.</div>`;
+      return;
+    }
+    if (tgState.loadingDialogs && !items.length && !(tgState.dialogs || []).length) {
+      box.innerHTML = `<div class="tg-empty">Загружаем чаты…</div>`;
+      return;
+    }
+    if (!items.length) {
+      box.innerHTML = `<div class="tg-empty"><div class="t">${
+        tgState.onlyUsers ? "Нет личных чатов" : "Чатов пока нет"
+      }</div>${
+        tgState.onlyUsers
+          ? "Снимите фильтр «Только личные», чтобы увидеть группы и каналы."
+          : "Нажмите «Новый чат», чтобы написать клиенту."
+      }</div>`;
+      return;
+    }
+    const accountId = tgState.accountId;
+    box.innerHTML = items
+      .map((d) => {
+        const kind = d.kind || "user";
+        const active = String(d.peer_id) === String(tgState.peerId) ? " active" : "";
+        const preview = d.last_message
+          ? (d.last_out ? `<span class="you">Вы: </span>` : "") + esc(d.last_message)
+          : "Нет сообщений";
+        const unread =
+          d.unread > 0
+            ? `<span class="tg-unread">${d.unread > 99 ? "99+" : d.unread}</span>`
+            : "";
+        const avUrl = AdminAPI.chatAvatarUrl(d.peer_id, accountId);
+        return `
+          <button type="button" class="tg-dialog${active}" data-peer="${esc(d.peer_id)}">
+            <span class="tg-dialog-av ${esc(kind)}">
+              <img class="tg-av-img" src="${esc(avUrl)}" alt="" loading="lazy" decoding="async" onerror="this.classList.add('broken')">
+              <span class="tg-av-fallback">${esc(tgInitials(d.title))}</span>
+            </span>
+            <span class="tg-dialog-main">
+              <span class="tg-dialog-top">
+                <span class="tg-dialog-title">${esc(d.title || "Без имени")}</span>
+                <span class="tg-dialog-time">${esc(tgTimeLabel(d.date))}</span>
+              </span>
+              <span class="tg-dialog-bottom">
+                <span class="tg-dialog-preview">${preview}</span>
+                ${unread}
+              </span>
+            </span>
+          </button>`;
+      })
+      .join("");
+  }
+
+  function tgMediaBlock(m) {
+    if (!m?.has_media || !tgState.peerId || !tgState.accountId) return "";
+    const kind = m.media_kind || "";
+    if (["geo", "contact", "poll"].includes(kind)) {
+      return `<div class="tg-media-fallback">${esc(m.preview || "Медиа")}</div>`;
+    }
+    const url = AdminAPI.chatMediaUrl(tgState.peerId, m.id, tgState.accountId);
+    if (kind === "photo" || kind === "sticker" || kind === "animation" || kind === "webpage") {
+      const cls = kind === "sticker" ? "tg-media-img sticker" : "tg-media-img";
+      return `<a class="tg-media" href="${esc(url)}" target="_blank" rel="noopener"><img class="${cls}" src="${esc(url)}" alt="" loading="lazy" decoding="async" onerror="this.closest('.tg-media').classList.add('failed')"></a>`;
+    }
+    if (kind === "video" || kind === "video_note") {
+      const round = kind === "video_note" ? " round" : "";
+      return `<video class="tg-media-video${round}" src="${esc(url)}" controls playsinline preload="metadata"></video>`;
+    }
+    if (kind === "voice" || kind === "audio") {
+      return `<audio class="tg-media-audio" src="${esc(url)}" controls preload="metadata"></audio>`;
+    }
+    const label = m.file_name || m.preview || "Файл";
+    return `<a class="tg-media-file" href="${esc(url)}" target="_blank" rel="noopener">📎 ${esc(label)}</a>`;
+  }
+
+  function renderTgMessages({ stickBottom = true, keepScroll = false } = {}) {
+    const box = $("#tgMessages");
+    if (!box) return;
+    const prevHeight = box.scrollHeight;
+    const prevTop = box.scrollTop;
+    const nearBottom = prevHeight - prevTop - box.clientHeight < 80;
+    const msgs = tgState.messages || [];
+    const olderBtn =
+      msgs.length >= 40
+        ? `<button type="button" class="btn tg-load-more" id="tgLoadOlder">Раньше</button>`
+        : "";
+    box.innerHTML =
+      olderBtn +
+      msgs
+        .map((m) => {
+          const side = m.out ? "out" : "in";
+          const raw = (m.text || "").replace(/\n{3,}/g, "\n\n").trim();
+          const media = tgMediaBlock(m);
+          const text = raw
+            ? `<div class="tg-bubble-text">${esc(raw)}</div>`
+            : media
+              ? ""
+              : `<div class="tg-bubble-text"><span class="tg-bubble-media">${esc(m.preview || "Медиа")}</span></div>`;
+          return `<div class="tg-msg ${side}" data-id="${m.id}"><div class="tg-bubble">${media}${text}<div class="tg-bubble-meta">${esc(
+            tgMsgTime(m.date)
+          )}</div></div></div>`;
+        })
+        .join("");
+    if (keepScroll) {
+      if (nearBottom) box.scrollTop = box.scrollHeight;
+      else box.scrollTop = box.scrollHeight - prevHeight + prevTop;
+    } else if (stickBottom) {
+      box.scrollTop = box.scrollHeight;
+    }
+    $("#tgLoadOlder")?.addEventListener("click", () => loadOlderTgMessages());
+  }
+
+  function showTgThread(show) {
+    const empty = $("#tgThreadEmpty");
+    const active = $("#tgThreadActive");
+    const shell = $("#tgShell");
+    if (empty) empty.hidden = !!show;
+    if (active) active.hidden = !show;
+    if (show) {
+      shell?.classList.add("thread-open");
+      document.body.classList.add("tg-thread-open");
+    } else {
+      shell?.classList.remove("thread-open");
+      document.body.classList.remove("tg-thread-open");
+    }
+  }
+
+  function setTgPeerHeader(peer) {
+    tgState.peer = peer || null;
+    $("#tgPeerName").textContent = peer?.title || "Чат";
+    const bits = [];
+    if (peer?.username) bits.push("@" + peer.username);
+    if (peer?.phone) bits.push("+" + String(peer.phone).replace(/^\+/, ""));
+    if (peer?.kind && peer.kind !== "user") bits.push(peer.kind);
+    $("#tgPeerSub").textContent = bits.join(" · ") || "Telegram";
+    const av = $("#tgPeerAv");
+    if (av) {
+      const kind = peer?.kind || "user";
+      av.className = "tg-peer-av " + kind;
+      const peerId = peer?.peer_id || peer?.id || tgState.peerId;
+      if (peerId && tgState.accountId) {
+        const url = AdminAPI.chatAvatarUrl(peerId, tgState.accountId);
+        av.innerHTML = `<img class="tg-av-img" src="${esc(url)}" alt="" onerror="this.classList.add('broken')"><span class="tg-av-fallback">${esc(
+          tgInitials(peer?.title)
+        )}</span>`;
+      } else {
+        av.textContent = tgInitials(peer?.title);
+      }
+    }
+  }
+
+  function resetTgClientUi() {
+    tgState.clientInfo = null;
+    const chip = $("#tgClientChip");
+    const createBtn = $("#tgCreateClientBtn");
+    const openBtn = $("#tgOpenClientBtn");
+    if (chip) {
+      chip.hidden = true;
+      chip.textContent = "";
+      chip.className = "tg-client-chip";
+    }
+    if (createBtn) {
+      createBtn.hidden = true;
+      createBtn.disabled = false;
+      createBtn.textContent = "Создать клиента";
+    }
+    if (openBtn) {
+      openBtn.hidden = true;
+      openBtn.dataset.clientId = "";
+    }
+  }
+
+  function renderTgClientStatus(info) {
+    tgState.clientInfo = info || null;
+    const chip = $("#tgClientChip");
+    const createBtn = $("#tgCreateClientBtn");
+    const openBtn = $("#tgOpenClientBtn");
+    if (!chip || !createBtn || !openBtn) return;
+
+    if (!info) {
+      resetTgClientUi();
+      return;
+    }
+
+    const status = info.status || "";
+    const inBase = status === "in_base" && !!info.in_base && !!info.customer?.id;
+    const customerId = inBase ? info.customer.id : null;
+
+    chip.hidden = false;
+    chip.textContent = info.label || "";
+    chip.title = info.hint || "";
+    chip.className =
+      "tg-client-chip " +
+      (inBase ? "ok" : status === "missing" ? "warn" : "muted");
+
+    createBtn.hidden = !info.can_create;
+    createBtn.disabled = false;
+    createBtn.textContent = "Создать клиента";
+
+    // Не показываем «Открыть карточку», если клиента нет в базе
+    openBtn.hidden = !customerId;
+    openBtn.dataset.clientId = customerId ? String(customerId) : "";
+  }
+
+  async function refreshTgClientStatus({ silent = false } = {}) {
+    const accountId = currentTgAccountId();
+    const peerId = tgState.peerId;
+    if (!accountId || peerId == null) {
+      resetTgClientUi();
+      return;
+    }
+    try {
+      const data = await AdminAPI.chatClientStatus(peerId, accountId);
+      if (String(tgState.peerId) !== String(peerId)) return;
+      if (data.peer) {
+        // Обновим подзаголовок, если пришёл телефон из бота/CRM
+        const cur = tgState.peer || {};
+        setTgPeerHeader({ ...cur, ...data.peer });
+      }
+      renderTgClientStatus(data);
+    } catch (err) {
+      if (!silent) {
+        resetTgClientUi();
+        const chip = $("#tgClientChip");
+        if (chip) {
+          chip.hidden = false;
+          chip.className = "tg-client-chip muted";
+          chip.textContent = "Не удалось проверить клиента";
+          chip.title = err.data?.error || err.message || "";
+        }
+      }
+    }
+  }
+
+  function openTgCreateClientModal(show) {
+    const modal = $("#tgCreateClientModal");
+    if (!modal) return;
+    modal.hidden = !show;
+    if (!show) return;
+    const peer = tgState.peer || tgState.clientInfo?.peer || {};
+    const info = tgState.clientInfo || {};
+    const nameEl = $("#tgCreateClientName");
+    const phoneEl = $("#tgCreateClientPhone");
+    if (nameEl) {
+      nameEl.value =
+        peer.title ||
+        [peer.first_name, peer.last_name].filter(Boolean).join(" ") ||
+        "";
+    }
+    if (phoneEl) {
+      const phone = peer.phone || info.peer?.phone || "";
+      phoneEl.value = phone ? (String(phone).startsWith("+") ? phone : "+" + phone) : "";
+      phoneEl.focus();
+    }
+  }
+
+  async function createTgClientFromChat({ phone, name } = {}) {
+    const accountId = currentTgAccountId();
+    const peerId = tgState.peerId;
+    if (!accountId || peerId == null) return;
+    const createBtn = $("#tgCreateClientBtn");
+    const submitBtn = $("#tgCreateClientSubmit");
+    if (createBtn) {
+      createBtn.disabled = true;
+      createBtn.textContent = "Создаём…";
+    }
+    if (submitBtn) submitBtn.disabled = true;
+    try {
+      const body = { account_id: accountId };
+      if (phone) body.phone = phone;
+      if (name) body.name = name;
+      const data = await AdminAPI.chatClientCreate(peerId, body);
+      openTgCreateClientModal(false);
+      if (data.peer) setTgPeerHeader({ ...(tgState.peer || {}), ...data.peer });
+      renderTgClientStatus({
+        status: "in_base",
+        label: data.label || "Клиент уже в базе",
+        hint: data.hint || (data.created ? "Сохранён в базе и в Posiflora" : ""),
+        can_create: false,
+        need_phone: false,
+        in_base: true,
+        customer: data.customer,
+        peer: data.peer,
+      });
+      alert(
+        data.created
+          ? "Клиент создан в базе и в Posiflora"
+          : "Этот человек уже есть в базе клиентов"
+      );
+    } catch (err) {
+      if (err.data?.need_phone || err.data?.error === "phone_required") {
+        openTgCreateClientModal(true);
+        if (err.data?.peer) {
+          setTgPeerHeader({ ...(tgState.peer || {}), ...err.data.peer });
+        }
+        alert(err.data?.message || "Укажите номер телефона клиента");
+      } else {
+        alert(
+          "Не удалось создать клиента: " +
+            (err.data?.message || err.data?.error || err.message)
+        );
+      }
+      if (createBtn) {
+        createBtn.disabled = false;
+        createBtn.textContent = "Создать клиента";
+      }
+    } finally {
+      if (submitBtn) submitBtn.disabled = false;
+    }
+  }
+
+  async function onTgCreateClientClick() {
+    const info = tgState.clientInfo;
+    if (!info?.can_create) return;
+    if (info.need_phone || !(tgState.peer?.phone || info.peer?.phone)) {
+      openTgCreateClientModal(true);
+      return;
+    }
+    await createTgClientFromChat();
+  }
+
+  async function submitTgCreateClient(e) {
+    e.preventDefault();
+    const phone = ($("#tgCreateClientPhone")?.value || "").trim();
+    const name = ($("#tgCreateClientName")?.value || "").trim();
+    if (!phone) {
+      alert("Укажите телефон");
+      return;
+    }
+    await createTgClientFromChat({ phone, name });
+  }
+
+  async function refreshTgDialogs({ silent = false } = {}) {
+    const accountId = currentTgAccountId();
+    if (!accountId) {
+      tgState.dialogs = [];
+      renderTgDialogs();
+      return;
+    }
+    if (!silent) tgState.loadingDialogs = true;
+    if (!silent) renderTgDialogs();
+    try {
+      const params = { account_id: accountId, limit: 100 };
+      if (tgState.lastQuery) params.q = tgState.lastQuery;
+      if (tgState.onlyUsers) params.only_users = "1";
+      const data = await AdminAPI.chatDialogs(params);
+      tgState.dialogs = data.items || [];
+      tgState.accountId = data.account_id || accountId;
+    } catch (err) {
+      if (!silent) {
+        const msg =
+          err.data?.message || err.data?.error || err.message || "Не удалось загрузить чаты";
+        $("#tgDialogList").innerHTML = `<div class="tg-empty"><div class="t">Ошибка</div>${esc(
+          msg
+        )}${
+          err.data?.error === "no_telegram_accounts"
+            ? `<div style="margin-top:12px"><button class="btn primary" type="button" onclick="go('settings')">Открыть настройки</button></div>`
+            : ""
+        }</div>`;
+        return;
+      }
+    } finally {
+      tgState.loadingDialogs = false;
+    }
+    renderTgDialogs();
+  }
+
+  async function openTgPeer(peerId, { silent = false, keepScroll = false } = {}) {
+    const accountId = currentTgAccountId();
+    if (!accountId || peerId == null) return;
+    const switched = String(tgState.peerId) !== String(peerId);
+    tgState.peerId = peerId;
+    if (!silent) {
+      if (switched) {
+        clearTgAttachments();
+        resetTgClientUi();
+      }
+      tgState.loadingMessages = true;
+      showTgThread(true);
+      renderTgDialogs();
+    }
+    try {
+      const data = await AdminAPI.chatMessages(peerId, {
+        account_id: accountId,
+        limit: 50,
+        mark_read: "1",
+      });
+      setTgPeerHeader(data.peer);
+      tgState.messages = data.messages || [];
+      renderTgMessages({ stickBottom: !keepScroll, keepScroll });
+      // сбросить unread в локальном списке
+      tgState.dialogs = (tgState.dialogs || []).map((d) =>
+        String(d.peer_id) === String(peerId) ? { ...d, unread: 0 } : d
+      );
+      renderTgDialogs();
+      showTgThread(true);
+      if (!silent) $("#tgInput")?.focus();
+      refreshTgClientStatus({ silent: true });
+    } catch (err) {
+      if (!silent) {
+        alert("Не удалось открыть чат: " + (err.data?.error || err.message));
+      }
+    } finally {
+      tgState.loadingMessages = false;
+    }
+  }
+
+  async function loadOlderTgMessages() {
+    const accountId = currentTgAccountId();
+    if (!accountId || !tgState.peerId || !tgState.messages.length) return;
+    const oldest = tgState.messages[0]?.id;
+    if (!oldest) return;
+    const box = $("#tgMessages");
+    const prevHeight = box?.scrollHeight || 0;
+    try {
+      const data = await AdminAPI.chatMessages(tgState.peerId, {
+        account_id: accountId,
+        limit: 40,
+        offset_id: oldest,
+        mark_read: "0",
+      });
+      const older = data.messages || [];
+      if (!older.length) return;
+      const seen = new Set(tgState.messages.map((m) => m.id));
+      const merged = [...older.filter((m) => !seen.has(m.id)), ...tgState.messages];
+      tgState.messages = merged;
+      renderTgMessages({ stickBottom: false, keepScroll: false });
+      if (box) box.scrollTop = box.scrollHeight - prevHeight;
+    } catch (err) {
+      alert("Ошибка: " + (err.data?.error || err.message));
+    }
+  }
+
+  function clearTgAttachments() {
+    for (const a of tgState.attachments) {
+      if (a.url) URL.revokeObjectURL(a.url);
+    }
+    tgState.attachments = [];
+    const asDoc = $("#tgAsDocument");
+    if (asDoc) asDoc.checked = false;
+    renderTgAttachments();
+  }
+
+  function tgFileKind(file) {
+    const t = (file.type || "").toLowerCase();
+    if (t.startsWith("image/")) return "image";
+    if (t.startsWith("video/")) return "video";
+    if (t.startsWith("audio/")) return "audio";
+    return "file";
+  }
+
+  function addTgAttachments(fileList) {
+    const incoming = [...(fileList || [])].filter(Boolean);
+    if (!incoming.length) return;
+    const room = TG_MAX_ATTACH - tgState.attachments.length;
+    if (room <= 0) {
+      alert(`Максимум ${TG_MAX_ATTACH} файлов`);
+      return;
+    }
+    const take = incoming.slice(0, room);
+    for (const file of take) {
+      if (file.size > TG_MAX_FILE_MB * 1024 * 1024) {
+        alert(`«${file.name}» больше ${TG_MAX_FILE_MB} МБ`);
+        continue;
+      }
+      const kind = tgFileKind(file);
+      tgState.attachments.push({
+        id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+        file,
+        kind,
+        url: kind === "image" || kind === "video" ? URL.createObjectURL(file) : "",
+      });
+    }
+    if (incoming.length > take.length) {
+      alert(`Добавлены не все файлы — лимит ${TG_MAX_ATTACH}`);
+    }
+    renderTgAttachments();
+  }
+
+  function removeTgAttachment(id) {
+    const idx = tgState.attachments.findIndex((a) => a.id === id);
+    if (idx < 0) return;
+    const [a] = tgState.attachments.splice(idx, 1);
+    if (a?.url) URL.revokeObjectURL(a.url);
+    renderTgAttachments();
+  }
+
+  function renderTgAttachments() {
+    const bar = $("#tgAttachBar");
+    const list = $("#tgAttachList");
+    if (!bar || !list) return;
+    const items = tgState.attachments;
+    bar.hidden = items.length === 0;
+    list.innerHTML = items
+      .map((a) => {
+        let thumb = `<span class="tg-attach-ico">📎</span>`;
+        if (a.kind === "image" && a.url) {
+          thumb = `<img src="${esc(a.url)}" alt="">`;
+        } else if (a.kind === "video" && a.url) {
+          thumb = `<video src="${esc(a.url)}" muted></video>`;
+        } else if (a.kind === "audio") {
+          thumb = `<span class="tg-attach-ico">🎵</span>`;
+        }
+        const size =
+          a.file.size >= 1024 * 1024
+            ? (a.file.size / (1024 * 1024)).toFixed(1) + " МБ"
+            : Math.max(1, Math.round(a.file.size / 1024)) + " КБ";
+        return `<div class="tg-attach-item" data-attach="${esc(a.id)}">
+          <div class="tg-attach-thumb">${thumb}</div>
+          <div class="tg-attach-meta">
+            <div class="tg-attach-name">${esc(a.file.name || "файл")}</div>
+            <div class="tg-attach-size">${esc(size)}</div>
+          </div>
+          <button type="button" class="tg-attach-rm" data-rm="${esc(a.id)}" aria-label="Убрать">✕</button>
+        </div>`;
+      })
+      .join("");
+  }
+
+  async function sendTgMessage() {
+    const accountId = currentTgAccountId();
+    const input = $("#tgInput");
+    const text = (input?.value || "").trim();
+    const files = tgState.attachments.map((a) => a.file);
+    if (!accountId || !tgState.peerId || tgState.sending) return;
+    if (!text && !files.length) return;
+
+    tgState.sending = true;
+    const btn = $("#tgSendBtn");
+    if (btn) btn.disabled = true;
+    try {
+      let data;
+      if (files.length) {
+        const fd = new FormData();
+        fd.append("account_id", String(accountId));
+        if (text) fd.append("caption", text);
+        if ($("#tgAsDocument")?.checked) fd.append("as_document", "1");
+        for (const f of files) fd.append("files", f, f.name);
+        data = await AdminAPI.chatSendMedia(tgState.peerId, fd);
+        clearTgAttachments();
+        if (input) {
+          input.value = "";
+          input.style.height = "auto";
+        }
+        const added = data.messages || (data.message ? [data.message] : []);
+        if (added.length) {
+          tgState.messages = [...tgState.messages, ...added];
+          renderTgMessages({ stickBottom: true });
+        } else {
+          await openTgPeer(tgState.peerId, { silent: true });
+        }
+      } else {
+        data = await AdminAPI.chatSend(tgState.peerId, {
+          account_id: accountId,
+          text,
+        });
+        if (input) {
+          input.value = "";
+          input.style.height = "auto";
+        }
+        if (data.message) {
+          tgState.messages = [...tgState.messages, data.message];
+          renderTgMessages({ stickBottom: true });
+        } else {
+          await openTgPeer(tgState.peerId, { silent: true });
+        }
+      }
+      await refreshTgDialogs({ silent: true });
+    } catch (err) {
+      alert("Не отправлено: " + (err.data?.error || err.message));
+    } finally {
+      tgState.sending = false;
+      if (btn) btn.disabled = false;
+      input?.focus();
+    }
+  }
+
+  function openTgNewChatModal(open) {
+    const modal = $("#tgNewChatModal");
+    if (!modal) return;
+    modal.hidden = !open;
+    if (open) {
+      $("#tgNewPhone").value = "";
+      $("#tgNewUsername").value = "";
+      $("#tgNewName").value = "";
+      $("#tgNewMessage").value = "";
+      setTimeout(() => $("#tgNewPhone")?.focus(), 50);
+    }
+  }
+
+  async function submitTgNewChat(e) {
+    e.preventDefault();
+    const accountId = currentTgAccountId();
+    if (!accountId) {
+      alert("Сначала подключите Telegram-аккаунт");
+      return;
+    }
+    const phone = ($("#tgNewPhone")?.value || "").trim();
+    const username = ($("#tgNewUsername")?.value || "").trim();
+    const name = ($("#tgNewName")?.value || "").trim();
+    const message = ($("#tgNewMessage")?.value || "").trim();
+    if (!phone && !username) {
+      alert("Укажите телефон или @username");
+      return;
+    }
+    const btn = $("#tgNewChatSubmit");
+    if (btn) btn.disabled = true;
+    try {
+      const data = await AdminAPI.chatCreate({
+        account_id: accountId,
+        phone,
+        username,
+        name,
+        message,
+      });
+      openTgNewChatModal(false);
+      await refreshTgDialogs({ silent: true });
+      const peerId = data.peer?.peer_id;
+      if (peerId != null) await openTgPeer(peerId);
+    } catch (err) {
+      alert("Не удалось создать чат: " + (err.data?.error || err.message));
+    } finally {
+      if (btn) btn.disabled = false;
+    }
+  }
+
+  async function loadChats() {
+    bindTgChatsOnce();
+    try {
+      const data = await AdminAPI.chatAccounts();
+      tgState.accounts = data.items || [];
+      if (!data.telethon_configured && !tgState.accounts.length) {
+        $("#tgDialogList").innerHTML = `<div class="tg-empty"><div class="t">Telegram не настроен</div>Укажите API ID/Hash и подключите аккаунт в Настройках.<div style="margin-top:12px"><button class="btn primary" type="button" onclick="go('settings')">Настройки</button></div></div>`;
+        renderTgAccounts();
+        return;
+      }
+      renderTgAccounts();
+      await refreshTgDialogs();
+      startTgPoll();
+    } catch (err) {
+      $("#tgDialogList").innerHTML = `<div class="tg-empty"><div class="t">Ошибка</div>${esc(
+        err.data?.error || err.message
+      )}</div>`;
+    }
+  }
+
+  function bindTgChatsOnce() {
+    if (tgState.ready) return;
+    tgState.ready = true;
+
+    $("#tgAccountSelect")?.addEventListener("change", async () => {
+      tgState.accountId = currentTgAccountId();
+      if (tgState.accountId) localStorage.setItem(TG_ACCOUNT_KEY, String(tgState.accountId));
+      tgState.peerId = null;
+      tgState.messages = [];
+      showTgThread(false);
+      await refreshTgDialogs();
+    });
+
+    $("#tgRefreshDialogs")?.addEventListener("click", () => refreshTgDialogs());
+    $("#tgNewChatBtn")?.addEventListener("click", () => openTgNewChatModal(true));
+    $("#tgNewChatForm")?.addEventListener("submit", submitTgNewChat);
+    $$("[data-tg-close]").forEach((el) =>
+      el.addEventListener("click", () => openTgNewChatModal(false))
+    );
+
+    const onlyUsersEl = $("#tgOnlyUsers");
+    if (onlyUsersEl) {
+      onlyUsersEl.checked = !!tgState.onlyUsers;
+      onlyUsersEl.addEventListener("change", () => {
+        tgState.onlyUsers = !!onlyUsersEl.checked;
+        localStorage.setItem(TG_ONLY_USERS_KEY, tgState.onlyUsers ? "1" : "0");
+        refreshTgDialogs();
+      });
+    }
+
+    $("#tgCreateClientBtn")?.addEventListener("click", () => onTgCreateClientClick());
+    $("#tgOpenClientBtn")?.addEventListener("click", () => {
+      const id = +($("#tgOpenClientBtn")?.dataset.clientId || 0);
+      if (id) openClientById(id);
+    });
+    $("#tgCreateClientForm")?.addEventListener("submit", submitTgCreateClient);
+    $$("[data-tg-client-close]").forEach((el) =>
+      el.addEventListener("click", () => openTgCreateClientModal(false))
+    );
+
+    $("#tgDialogList")?.addEventListener("click", (e) => {
+      const btn = e.target.closest("[data-peer]");
+      if (!btn) return;
+      openTgPeer(btn.getAttribute("data-peer"));
+    });
+
+    $("#tgBackToList")?.addEventListener("click", () => {
+      tgState.peerId = null;
+      showTgThread(false);
+      renderTgDialogs();
+    });
+
+    $("#tgComposer")?.addEventListener("submit", (e) => {
+      e.preventDefault();
+      sendTgMessage();
+    });
+
+    $("#tgAttachBtn")?.addEventListener("click", () => $("#tgFileInput")?.click());
+    $("#tgFileInput")?.addEventListener("change", (e) => {
+      addTgAttachments(e.target.files);
+      e.target.value = "";
+    });
+    $("#tgAttachList")?.addEventListener("click", (e) => {
+      const rm = e.target.closest("[data-rm]");
+      if (!rm) return;
+      removeTgAttachment(rm.getAttribute("data-rm"));
+    });
+
+    const input = $("#tgInput");
+    input?.addEventListener("keydown", (e) => {
+      if (e.key === "Enter" && !e.shiftKey) {
+        e.preventDefault();
+        sendTgMessage();
+      }
+    });
+    input?.addEventListener("input", () => {
+      input.style.height = "auto";
+      input.style.height = Math.min(input.scrollHeight, 140) + "px";
+    });
+    input?.addEventListener("paste", (e) => {
+      const items = [...(e.clipboardData?.items || [])];
+      const files = items
+        .filter((it) => it.kind === "file")
+        .map((it) => it.getAsFile())
+        .filter(Boolean);
+      if (!files.length) return;
+      e.preventDefault();
+      addTgAttachments(files);
+    });
+
+    const dropZone = $("#tgThread") || $("#tgComposerWrap");
+    dropZone?.addEventListener("dragover", (e) => {
+      if (![...e.dataTransfer.types].includes("Files")) return;
+      e.preventDefault();
+      $("#tgComposerWrap")?.classList.add("dragover");
+    });
+    dropZone?.addEventListener("dragleave", (e) => {
+      if (e.target === dropZone || e.currentTarget === dropZone) {
+        $("#tgComposerWrap")?.classList.remove("dragover");
+      }
+    });
+    dropZone?.addEventListener("drop", (e) => {
+      $("#tgComposerWrap")?.classList.remove("dragover");
+      if (!e.dataTransfer?.files?.length) return;
+      e.preventDefault();
+      if (!tgState.peerId) return;
+      addTgAttachments(e.dataTransfer.files);
+    });
+
+    $("#tgDialogSearch")?.addEventListener("input", (e) => {
+      clearTimeout(tgState.searchTimer);
+      tgState.searchTimer = setTimeout(() => {
+        tgState.lastQuery = (e.target.value || "").trim();
+        refreshTgDialogs();
+      }, 280);
+    });
+  }
+
+  async function openChatWithClient(client) {
+    const phone = (client?.phone || "").trim();
+    const name = (client?.name || "").trim();
+    if (!phone) {
+      alert("У клиента нет телефона");
+      return;
+    }
+    go("chats");
+    await loadChats();
+    const accountId = currentTgAccountId();
+    if (!accountId) {
+      alert("Подключите Telegram-аккаунт в Настройках");
+      return;
+    }
+    try {
+      const data = await AdminAPI.chatCreate({
+        account_id: accountId,
+        phone,
+        name,
+      });
+      await refreshTgDialogs({ silent: true });
+      if (data.peer?.peer_id != null) await openTgPeer(data.peer.peer_id);
+    } catch (err) {
+      alert("Не удалось открыть чат: " + (err.data?.error || err.message));
+    }
+  }
+  window.openChatWithClient = openChatWithClient;
 
   // boot
   tryAuth();

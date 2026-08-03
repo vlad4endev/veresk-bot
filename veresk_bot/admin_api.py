@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
 import secrets
 from datetime import datetime, timedelta
 from typing import Any
@@ -33,6 +34,8 @@ from mailing_db import (
     delete_send_account,
     get_campaign,
     get_customer,
+    get_customer_by_phone,
+    get_customer_by_tg_user_id,
     get_event,
     get_send_account,
     get_stats,
@@ -46,13 +49,16 @@ from mailing_db import (
     list_send_accounts,
     list_upcoming_events,
     next_events_for_customers,
+    set_customer_tg_by_phone,
     set_event_auto_send,
     touch_admin_session,
     update_campaign,
     update_send_account,
+    upsert_customer,
     validate_admin_session,
     customers_for_segment,
     ADMIN_SESSION_HOURS,
+    normalize_phone_db,
 )
 import runtime_settings
 from bot_metrics import get_bot_metrics, init_bot_metrics
@@ -708,6 +714,29 @@ async def handle_accounts_list(request: web.Request) -> web.Response:
     )
 
 
+async def _register_telegram_account(result: dict[str, Any], phone: str) -> dict[str, Any]:
+    """Сохранить Telethon-сессию как send_account и проверить живой коннект."""
+    warmup = (datetime.now() + timedelta(days=4)).date().isoformat()
+    account_id = await create_send_account(
+        kind="tg_userbot",
+        label=result.get("label") or phone,
+        phone=result.get("phone") or phone,
+        session_file=result.get("session_file") or "",
+        daily_limit=200,
+        status="warmup",
+        warmup_until=warmup,
+    )
+    live = await check_telegram_session(str(result.get("session_file") or ""))
+    return {
+        "ok": True,
+        "account_id": account_id,
+        "session_ok": bool(live.get("ok") and live.get("authorized")),
+        "session_error": live.get("error"),
+        "tg_username": live.get("username"),
+        **result,
+    }
+
+
 async def handle_telegram_connect_start(request: web.Request) -> web.Response:
     err = await _require_admin(request)
     if err:
@@ -720,8 +749,12 @@ async def handle_telegram_connect_start(request: web.Request) -> web.Response:
     if not phone:
         return _json({"error": "phone_required"}, status=400)
     result = await start_telegram_login(phone)
-    status = 200 if result.get("ok") else 400
-    return _json(result, status=status)
+    if not result.get("ok"):
+        return _json(result, status=400)
+    if result.get("already_authorized"):
+        registered = await _register_telegram_account(result, phone)
+        return _json(registered)
+    return _json(result)
 
 
 async def handle_telegram_connect_confirm(request: web.Request) -> web.Response:
@@ -735,7 +768,9 @@ async def handle_telegram_connect_confirm(request: web.Request) -> web.Response:
     phone = str(body.get("phone") or "").strip()
     code = str(body.get("code") or "").strip()
     password = body.get("password")
-    if not phone or not code:
+    if not phone:
+        return _json({"error": "phone_required"}, status=400)
+    if not code and not password:
         return _json({"error": "phone_and_code_required"}, status=400)
     result = await confirm_telegram_login(
         phone, code, password=str(password) if password else None
@@ -746,28 +781,8 @@ async def handle_telegram_connect_confirm(request: web.Request) -> web.Response:
             status = 200
         return _json(result, status=status)
 
-    warmup = (datetime.now() + timedelta(days=4)).date().isoformat()
-    account_id = await create_send_account(
-        kind="tg_userbot",
-        label=result.get("label") or phone,
-        phone=result.get("phone") or phone,
-        session_file=result.get("session_file") or "",
-        daily_limit=200,
-        status="warmup",
-        warmup_until=warmup,
-    )
-    # Сразу проверяем, что сессия реально авторизована
-    live = await check_telegram_session(str(result.get("session_file") or ""))
-    return _json(
-        {
-            "ok": True,
-            "account_id": account_id,
-            "session_ok": bool(live.get("ok") and live.get("authorized")),
-            "session_error": live.get("error"),
-            "tg_username": live.get("username"),
-            **result,
-        }
-    )
+    registered = await _register_telegram_account(result, phone)
+    return _json(registered)
 
 
 async def handle_telegram_account_check(request: web.Request) -> web.Response:
@@ -840,6 +855,15 @@ async def handle_telegram_account_delete(request: web.Request) -> web.Response:
     deleted = await delete_send_account(account_id)
     if not deleted:
         return _json({"error": "not_found"}, status=404)
+    try:
+        from senders.telegram_chat import release_session
+
+        await release_session(
+            session_file=str(deleted.get("session_file") or ""),
+            account_id=account_id,
+        )
+    except Exception:
+        logger.exception("release chat session failed for account %s", account_id)
     remove_session_file(str(deleted.get("session_file") or ""))
     return _json({"ok": True, "id": account_id})
 
@@ -1316,6 +1340,737 @@ async def handle_bots_status(request: web.Request) -> web.Response:
     )
 
 
+# ── Telegram chats (live userbot inbox) ─────────────────────────────────────
+
+
+async def _resolve_chat_account(request: web.Request) -> tuple[dict[str, Any] | None, web.Response | None]:
+    """account_id из query/body; если один tg-аккаунт — берём его."""
+    raw = request.query.get("account_id")
+    if raw in (None, ""):
+        try:
+            body = getattr(request, "_chat_body", None)
+            if isinstance(body, dict):
+                raw = body.get("account_id")
+        except Exception:
+            raw = None
+
+    rows = [
+        a
+        for a in await list_send_accounts()
+        if a.get("kind") == "tg_userbot" and a.get("session_file")
+    ]
+    if not rows:
+        return None, _json(
+            {
+                "error": "no_telegram_accounts",
+                "message": "Подключите Telegram-аккаунт в Настройках",
+            },
+            status=400,
+        )
+
+    if raw in (None, ""):
+        if len(rows) == 1:
+            return rows[0], None
+        return None, _json(
+            {
+                "error": "account_id_required",
+                "message": "Выберите Telegram-аккаунт",
+                "accounts": [
+                    {
+                        "id": a["id"],
+                        "label": a.get("label") or a.get("phone"),
+                        "phone": a.get("phone"),
+                        "status": a.get("status"),
+                    }
+                    for a in rows
+                ],
+            },
+            status=400,
+        )
+
+    try:
+        account_id = int(raw)
+    except (TypeError, ValueError):
+        return None, _json({"error": "invalid_account_id"}, status=400)
+
+    acc = await get_send_account(account_id)
+    if not acc or acc.get("kind") != "tg_userbot" or not acc.get("session_file"):
+        return None, _json({"error": "account_not_found"}, status=404)
+    return acc, None
+
+
+async def handle_chats_accounts(request: web.Request) -> web.Response:
+    err = await _require_admin(request)
+    if err:
+        return err
+    rows = await list_send_accounts()
+    items = []
+    for a in rows:
+        if a.get("kind") != "tg_userbot" or not a.get("session_file"):
+            continue
+        items.append(
+            {
+                "id": a["id"],
+                "label": a.get("label") or a.get("phone") or f"Аккаунт {a['id']}",
+                "phone": a.get("phone"),
+                "status": a.get("status"),
+                "phone_masked": _mask_phone(a["phone"]) if a.get("phone") else None,
+            }
+        )
+    return _json(
+        {
+            "items": items,
+            "telethon_configured": is_telethon_configured(),
+        }
+    )
+
+
+def _truthy_query(value: str | None) -> bool:
+    return str(value or "").strip().lower() in ("1", "true", "yes", "on")
+
+
+async def handle_chats_dialogs(request: web.Request) -> web.Response:
+    err = await _require_admin(request)
+    if err:
+        return err
+    acc, acc_err = await _resolve_chat_account(request)
+    if acc_err:
+        return acc_err
+    assert acc is not None
+    try:
+        limit = int(request.query.get("limit") or 80)
+    except (TypeError, ValueError):
+        limit = 80
+    query = str(request.query.get("q") or "").strip()
+    clients_only = _truthy_query(request.query.get("clients_only"))
+    only_users = clients_only or _truthy_query(request.query.get("only_users"))
+    from senders.telegram_chat import list_dialogs
+
+    # При фильтре по клиентам берём больше диалогов, потом отсекаем
+    fetch_limit = min(limit * 4, 200) if clients_only else limit
+    try:
+        items = await list_dialogs(
+            str(acc["session_file"]),
+            account_id=int(acc["id"]),
+            limit=fetch_limit,
+            query=query,
+            only_users=only_users,
+        )
+    except Exception as exc:
+        logger.exception("list dialogs failed")
+        return _json({"error": str(exc)}, status=502)
+
+    if clients_only:
+        from mailing_db import customer_contact_sets
+
+        tg_ids, phones = await customer_contact_sets()
+
+        def _is_known_client(row: dict[str, Any]) -> bool:
+            peer_id = row.get("peer_id")
+            try:
+                if peer_id is not None and int(peer_id) in tg_ids:
+                    return True
+            except (TypeError, ValueError):
+                pass
+            phone = re.sub(r"\D", "", str(row.get("phone") or ""))
+            if len(phone) >= 10 and phone[-10:] in phones:
+                return True
+            return False
+
+        items = [row for row in items if _is_known_client(row)][:limit]
+    elif only_users:
+        items = items[:limit]
+
+    return _json(
+        {
+            "account_id": int(acc["id"]),
+            "account_label": acc.get("label") or acc.get("phone"),
+            "only_users": only_users,
+            "clients_only": clients_only,
+            "items": items,
+        }
+    )
+
+
+async def handle_chats_messages(request: web.Request) -> web.Response:
+    err = await _require_admin(request)
+    if err:
+        return err
+    acc, acc_err = await _resolve_chat_account(request)
+    if acc_err:
+        return acc_err
+    assert acc is not None
+    try:
+        peer_id = int(request.match_info["peer_id"])
+    except (KeyError, TypeError, ValueError):
+        return _json({"error": "invalid_peer_id"}, status=400)
+    try:
+        limit = int(request.query.get("limit") or 50)
+    except (TypeError, ValueError):
+        limit = 50
+    try:
+        offset_id = int(request.query.get("offset_id") or 0)
+    except (TypeError, ValueError):
+        offset_id = 0
+    mark_read = request.query.get("mark_read", "1") != "0"
+    from senders.telegram_chat import get_dialog_messages
+
+    try:
+        data = await get_dialog_messages(
+            str(acc["session_file"]),
+            peer_id,
+            account_id=int(acc["id"]),
+            limit=limit,
+            offset_id=offset_id,
+            mark_read=mark_read,
+        )
+    except Exception as exc:
+        logger.exception("get messages failed")
+        return _json({"error": str(exc)}, status=502)
+    data["account_id"] = int(acc["id"])
+    return _json(data)
+
+
+async def handle_chats_send(request: web.Request) -> web.Response:
+    err = await _require_admin(request)
+    if err:
+        return err
+    try:
+        body = await request.json()
+    except Exception:
+        return _json({"error": "invalid_json"}, status=400)
+    request._chat_body = body  # type: ignore[attr-defined]
+    acc, acc_err = await _resolve_chat_account(request)
+    if acc_err:
+        return acc_err
+    assert acc is not None
+    try:
+        peer_id = int(request.match_info["peer_id"])
+    except (KeyError, TypeError, ValueError):
+        return _json({"error": "invalid_peer_id"}, status=400)
+    text = str(body.get("text") or body.get("message") or "").strip()
+    if not text:
+        return _json({"error": "message_required"}, status=400)
+    from senders.telegram_chat import send_dialog_message
+    from telethon.errors import FloodWaitError
+
+    try:
+        msg = await send_dialog_message(
+            str(acc["session_file"]),
+            peer_id,
+            text,
+            account_id=int(acc["id"]),
+        )
+    except FloodWaitError as exc:
+        return _json(
+            {"error": f"FloodWait {int(getattr(exc, 'seconds', 60))}s"},
+            status=429,
+        )
+    except ValueError as exc:
+        return _json({"error": str(exc)}, status=400)
+    except Exception as exc:
+        logger.exception("send chat message failed")
+        return _json({"error": str(exc)}, status=502)
+    return _json({"ok": True, "message": msg, "account_id": int(acc["id"])})
+
+
+async def handle_chats_send_media(request: web.Request) -> web.Response:
+    """multipart/form-data: file|files, caption, account_id, as_document."""
+    err = await _require_admin(request)
+    if err:
+        return err
+    try:
+        peer_id = int(request.match_info["peer_id"])
+    except (KeyError, TypeError, ValueError):
+        return _json({"error": "invalid_peer_id"}, status=400)
+
+    if not request.content_type.startswith("multipart/"):
+        return _json({"error": "multipart_required"}, status=400)
+
+    reader = await request.multipart()
+    account_id_raw: str | None = None
+    caption = ""
+    as_document = False
+    files: list[dict[str, Any]] = []
+
+    while True:
+        part = await reader.next()
+        if part is None:
+            break
+        name = part.name or ""
+        if name == "account_id":
+            account_id_raw = (await part.text()).strip()
+        elif name in ("caption", "text", "message"):
+            caption = (await part.text()).strip()
+        elif name in ("as_document", "force_document"):
+            as_document = (await part.text()).strip().lower() in ("1", "true", "yes")
+        elif name in ("file", "files", "media"):
+            filename = part.filename or "file"
+            data = await part.read(decode=False)
+            if data:
+                files.append(
+                    {
+                        "filename": filename,
+                        "data": data,
+                        "mime": part.headers.get("Content-Type", ""),
+                    }
+                )
+        else:
+            # skip unknown fields
+            await part.read(decode=False)
+
+    request._chat_body = {"account_id": account_id_raw}  # type: ignore[attr-defined]
+    acc, acc_err = await _resolve_chat_account(request)
+    if acc_err:
+        return acc_err
+    assert acc is not None
+
+    if not files:
+        return _json({"error": "file_required"}, status=400)
+
+    from senders.telegram_chat import MAX_UPLOAD_BYTES, MAX_UPLOAD_FILES, send_dialog_media
+    from telethon.errors import FloodWaitError
+
+    if len(files) > MAX_UPLOAD_FILES:
+        return _json({"error": f"max_{MAX_UPLOAD_FILES}_files"}, status=400)
+    for f in files:
+        if len(f["data"]) > MAX_UPLOAD_BYTES:
+            return _json({"error": "file_too_large", "max_mb": 50}, status=413)
+
+    try:
+        messages = await send_dialog_media(
+            str(acc["session_file"]),
+            peer_id,
+            files,
+            caption=caption,
+            force_document=as_document,
+            account_id=int(acc["id"]),
+        )
+    except FloodWaitError as exc:
+        return _json(
+            {"error": f"FloodWait {int(getattr(exc, 'seconds', 60))}s"},
+            status=429,
+        )
+    except ValueError as exc:
+        return _json({"error": str(exc)}, status=400)
+    except Exception as exc:
+        logger.exception("send media failed")
+        return _json({"error": str(exc)}, status=502)
+
+    return _json(
+        {
+            "ok": True,
+            "messages": messages,
+            "message": messages[-1] if messages else None,
+            "account_id": int(acc["id"]),
+        }
+    )
+
+
+def _customer_public(c: dict[str, Any] | None) -> dict[str, Any] | None:
+    if not c:
+        return None
+    return {
+        "id": c["id"],
+        "name": c.get("name") or "",
+        "phone": c.get("phone") or "",
+        "phone_masked": _mask_phone(c["phone"]) if c.get("phone") else None,
+        "tg_user_id": c.get("tg_user_id"),
+        "posiflora_id": c.get("posiflora_id"),
+        "segment": c.get("segment") or "all",
+    }
+
+
+async def _find_local_customer_for_peer(
+    peer: dict[str, Any],
+) -> dict[str, Any] | None:
+    tg_id = peer.get("tg_user_id") or (
+        peer.get("peer_id") if peer.get("kind") in ("user", "bot") else None
+    )
+    if tg_id is not None:
+        found = await get_customer_by_tg_user_id(int(tg_id))
+        if found:
+            return found
+    phone = peer.get("phone") or ""
+    if phone:
+        found = await get_customer_by_phone(str(phone))
+        if found:
+            return found
+    # Бот мог уже сохранить телефон по tg_id
+    try:
+        from client_db import get_client
+
+        if tg_id is not None:
+            bot_client = await get_client(int(tg_id))
+            if bot_client and bot_client.get("phone"):
+                found = await get_customer_by_phone(str(bot_client["phone"]))
+                if found:
+                    return found
+                # обогатим peer телефоном для UI
+                peer["phone"] = bot_client["phone"]
+                if not peer.get("title") and bot_client.get("name"):
+                    peer["title"] = bot_client["name"]
+    except Exception:
+        pass
+    return None
+
+
+async def handle_chats_client_status(request: web.Request) -> web.Response:
+    """Статус: есть ли собеседник в базе клиентов."""
+    err = await _require_admin(request)
+    if err:
+        return err
+    acc, acc_err = await _resolve_chat_account(request)
+    if acc_err:
+        return acc_err
+    assert acc is not None
+    try:
+        peer_id = int(request.match_info["peer_id"])
+    except (KeyError, TypeError, ValueError):
+        return _json({"error": "invalid_peer_id"}, status=400)
+
+    from senders.telegram_chat import resolve_peer_profile
+
+    try:
+        peer = await resolve_peer_profile(
+            str(acc["session_file"]),
+            peer_id,
+            account_id=int(acc["id"]),
+        )
+    except Exception as exc:
+        logger.exception("resolve peer for client status failed")
+        return _json({"error": str(exc)}, status=502)
+
+    customer = await _find_local_customer_for_peer(peer)
+    kind = peer.get("kind") or "unknown"
+    is_user = kind == "user"
+
+    if customer:
+        status = "in_base"
+        label = "Клиент уже в базе"
+        hint = f"{customer.get('name') or 'Клиент'} · {customer.get('phone') or 'без телефона'}"
+        can_create = False
+        need_phone = False
+    elif not is_user:
+        status = "not_user"
+        label = "Это не личный чат"
+        hint = "Клиента можно создать только из переписки с человеком"
+        can_create = False
+        need_phone = False
+    else:
+        phone_ok = bool(re.sub(r"\D", "", str(peer.get("phone") or "")))
+        status = "missing"
+        label = "Клиента ещё нет в базе"
+        if phone_ok:
+            hint = "Можно добавить в базу и Posiflora"
+            can_create = True
+            need_phone = False
+        else:
+            hint = "В Telegram нет номера — укажите телефон при создании"
+            can_create = True
+            need_phone = True
+
+    return _json(
+        {
+            "status": status,
+            "label": label,
+            "hint": hint,
+            "can_create": can_create,
+            "need_phone": need_phone,
+            "in_base": bool(customer),
+            "peer": peer,
+            "customer": _customer_public(customer),
+            "account_id": int(acc["id"]),
+        }
+    )
+
+
+async def handle_chats_client_create(request: web.Request) -> web.Response:
+    """Создать клиента из чата: Posiflora + локальная база + привязка TG."""
+    err = await _require_admin(request)
+    if err:
+        return err
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    request._chat_body = body if isinstance(body, dict) else {}  # type: ignore[attr-defined]
+    acc, acc_err = await _resolve_chat_account(request)
+    if acc_err:
+        return acc_err
+    assert acc is not None
+    try:
+        peer_id = int(request.match_info["peer_id"])
+    except (KeyError, TypeError, ValueError):
+        return _json({"error": "invalid_peer_id"}, status=400)
+
+    from senders.telegram_chat import resolve_peer_profile
+
+    try:
+        peer = await resolve_peer_profile(
+            str(acc["session_file"]),
+            peer_id,
+            account_id=int(acc["id"]),
+        )
+    except Exception as exc:
+        logger.exception("resolve peer for create failed")
+        return _json({"error": str(exc)}, status=502)
+
+    if peer.get("kind") != "user":
+        return _json(
+            {
+                "error": "not_a_user",
+                "message": "Клиента можно создать только из личного чата",
+            },
+            status=400,
+        )
+
+    existing = await _find_local_customer_for_peer(peer)
+    if existing:
+        # Допривяжем tg_user_id, если ещё не было
+        tg_uid = peer.get("tg_user_id") or peer_id
+        if not existing.get("tg_user_id") and tg_uid:
+            await set_customer_tg_by_phone(existing.get("phone") or "", int(tg_uid))
+            existing = await get_customer(int(existing["id"])) or existing
+        return _json(
+            {
+                "ok": True,
+                "created": False,
+                "already_exists": True,
+                "label": "Клиент уже в базе",
+                "customer": _customer_public(existing),
+                "peer": peer,
+            }
+        )
+
+    phone_raw = str(body.get("phone") or peer.get("phone") or "").strip()
+    phone_fmt = normalize_phone_db(phone_raw)
+    digits = re.sub(r"\D", "", phone_fmt)
+    if len(digits) == 11 and digits[0] in ("7", "8"):
+        digits = digits[1:]
+    if len(digits) != 10:
+        return _json(
+            {
+                "error": "phone_required",
+                "message": "Нужен номер телефона клиента (+7…)",
+                "need_phone": True,
+                "peer": peer,
+            },
+            status=400,
+        )
+
+    name = (
+        str(body.get("name") or "").strip()
+        or peer.get("title")
+        or " ".join(
+            filter(
+                None,
+                [peer.get("first_name"), peer.get("last_name")],
+            )
+        )
+        or (f"@{peer['username']}" if peer.get("username") else "")
+        or "Клиент"
+    )
+    tg_uid = int(peer.get("tg_user_id") or peer_id)
+    notes_parts = [f"Telegram ID: {tg_uid}"]
+    if peer.get("username"):
+        notes_parts.append(f"@{peer['username']}")
+    notes = " · ".join(notes_parts)
+
+    import aiohttp
+    from posiflora import (
+        _get_access_token,
+        get_or_create_customer_id_by_phone,
+        get_or_create_customer_source,
+    )
+
+    try:
+        async with aiohttp.ClientSession() as session:
+            token = await _get_access_token(session)
+            source_id = None
+            try:
+                source_id = await get_or_create_customer_source(
+                    session, token, "Telegram"
+                )
+            except Exception:
+                logger.debug("customer source Telegram unavailable", exc_info=True)
+            pf_id, pf_created = await get_or_create_customer_id_by_phone(
+                session,
+                token,
+                phone_fmt,
+                name,
+                notes=notes,
+                source_id=source_id,
+            )
+    except Exception as exc:
+        logger.exception("Posiflora create from chat failed")
+        return _json(
+            {
+                "error": "posiflora_failed",
+                "message": f"Не удалось создать в Posiflora: {exc}",
+            },
+            status=502,
+        )
+
+    customer_id = await upsert_customer(
+        posiflora_id=str(pf_id),
+        name=name,
+        phone=phone_fmt,
+        notes=notes,
+        tg_user_id=tg_uid,
+        segment="new",
+    )
+    await set_customer_tg_by_phone(phone_fmt, tg_uid)
+
+    try:
+        from client_db import upsert_client
+
+        await upsert_client(tg_uid, name, phone_fmt)
+    except Exception:
+        logger.debug("bot clients upsert skipped", exc_info=True)
+
+    customer = await get_customer(int(customer_id))
+    return _json(
+        {
+            "ok": True,
+            "created": True,
+            "posiflora_created": bool(pf_created),
+            "label": "Клиент добавлен",
+            "hint": "Сохранён в базе и в Posiflora",
+            "customer": _customer_public(customer),
+            "peer": peer,
+            "account_id": int(acc["id"]),
+        }
+    )
+
+
+async def handle_chats_create(request: web.Request) -> web.Response:
+    err = await _require_admin(request)
+    if err:
+        return err
+    try:
+        body = await request.json()
+    except Exception:
+        return _json({"error": "invalid_json"}, status=400)
+    request._chat_body = body  # type: ignore[attr-defined]
+    acc, acc_err = await _resolve_chat_account(request)
+    if acc_err:
+        return acc_err
+    assert acc is not None
+    phone = str(body.get("phone") or "").strip()
+    username = str(body.get("username") or "").strip()
+    name = str(body.get("name") or "").strip()
+    first_message = str(body.get("message") or body.get("text") or "").strip()
+    if not phone and not username:
+        return _json({"error": "phone_or_username_required"}, status=400)
+    from senders.telegram_chat import create_or_open_dialog
+    from telethon.errors import FloodWaitError
+
+    try:
+        data = await create_or_open_dialog(
+            str(acc["session_file"]),
+            account_id=int(acc["id"]),
+            phone=phone,
+            username=username,
+            name=name,
+            first_message=first_message,
+        )
+    except FloodWaitError as exc:
+        return _json(
+            {"error": f"FloodWait {int(getattr(exc, 'seconds', 60))}s"},
+            status=429,
+        )
+    except ValueError as exc:
+        return _json({"error": str(exc)}, status=400)
+    except Exception as exc:
+        logger.exception("create dialog failed")
+        return _json({"error": str(exc)}, status=502)
+    data["ok"] = True
+    data["account_id"] = int(acc["id"])
+    return _json(data)
+
+
+def _media_response(
+    data: bytes,
+    content_type: str,
+    *,
+    filename: str | None = None,
+    cache: str = "private, max-age=3600",
+) -> web.Response:
+    headers = {
+        **_cors(),
+        "Cache-Control": cache,
+        "Content-Type": content_type,
+    }
+    if filename:
+        # ASCII-safe Content-Disposition
+        safe = re.sub(r"[^\w.\-]+", "_", filename)[:120] or "file"
+        headers["Content-Disposition"] = f'inline; filename="{safe}"'
+    return web.Response(body=data, headers=headers)
+
+
+async def handle_chats_avatar(request: web.Request) -> web.Response:
+    err = await _require_admin(request)
+    if err:
+        return err
+    acc, acc_err = await _resolve_chat_account(request)
+    if acc_err:
+        return acc_err
+    assert acc is not None
+    try:
+        peer_id = int(request.match_info["peer_id"])
+    except (KeyError, TypeError, ValueError):
+        return _json({"error": "invalid_peer_id"}, status=400)
+    from senders.telegram_chat import download_peer_avatar
+
+    try:
+        data, mime = await download_peer_avatar(
+            str(acc["session_file"]),
+            peer_id,
+            account_id=int(acc["id"]),
+        )
+    except FileNotFoundError:
+        return web.Response(status=404, headers=_cors())
+    except Exception as exc:
+        logger.exception("avatar download failed")
+        return _json({"error": str(exc)}, status=502)
+    return _media_response(data, mime, cache="private, max-age=86400")
+
+
+async def handle_chats_message_media(request: web.Request) -> web.Response:
+    err = await _require_admin(request)
+    if err:
+        return err
+    acc, acc_err = await _resolve_chat_account(request)
+    if acc_err:
+        return acc_err
+    assert acc is not None
+    try:
+        peer_id = int(request.match_info["peer_id"])
+        message_id = int(request.match_info["message_id"])
+    except (KeyError, TypeError, ValueError):
+        return _json({"error": "invalid_ids"}, status=400)
+    thumb = request.query.get("thumb", "0") in ("1", "true", "yes")
+    from senders.telegram_chat import download_message_media
+
+    try:
+        data, mime, filename = await download_message_media(
+            str(acc["session_file"]),
+            peer_id,
+            message_id,
+            account_id=int(acc["id"]),
+            thumb=thumb,
+        )
+    except FileNotFoundError:
+        return web.Response(status=404, headers=_cors())
+    except ValueError as exc:
+        return _json({"error": str(exc)}, status=413)
+    except Exception as exc:
+        logger.exception("media download failed")
+        return _json({"error": str(exc)}, status=502)
+    return _media_response(data, mime, filename=filename)
+
+
 def setup_admin_routes(app: web.Application) -> None:
     routes = [
         ("/api/admin/login", handle_login, "POST"),
@@ -1344,6 +2099,16 @@ def setup_admin_routes(app: web.Application) -> None:
         ("/api/admin/accounts/{id}", handle_telegram_account_delete, "DELETE"),
         ("/api/admin/accounts/max/settings", handle_max_settings_get, "GET"),
         ("/api/admin/accounts/max/settings", handle_max_settings_save, "POST"),
+        ("/api/admin/chats/accounts", handle_chats_accounts, "GET"),
+        ("/api/admin/chats/dialogs", handle_chats_dialogs, "GET"),
+        ("/api/admin/chats/dialogs", handle_chats_create, "POST"),
+        ("/api/admin/chats/dialogs/{peer_id}/messages", handle_chats_messages, "GET"),
+        ("/api/admin/chats/dialogs/{peer_id}/messages/{message_id}/media", handle_chats_message_media, "GET"),
+        ("/api/admin/chats/dialogs/{peer_id}/avatar", handle_chats_avatar, "GET"),
+        ("/api/admin/chats/dialogs/{peer_id}/send", handle_chats_send, "POST"),
+        ("/api/admin/chats/dialogs/{peer_id}/send-media", handle_chats_send_media, "POST"),
+        ("/api/admin/chats/dialogs/{peer_id}/client", handle_chats_client_status, "GET"),
+        ("/api/admin/chats/dialogs/{peer_id}/client", handle_chats_client_create, "POST"),
         ("/api/admin/segments", handle_segment_counts, "GET"),
         ("/api/admin/ai/compose", handle_ai_compose, "POST"),
         ("/api/admin/ai/settings", handle_ai_settings_get, "GET"),
