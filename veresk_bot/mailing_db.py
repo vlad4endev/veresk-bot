@@ -7,6 +7,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import hashlib
+import json
 import logging
 import re
 import secrets
@@ -142,6 +143,7 @@ CREATE TABLE IF NOT EXISTS admin_users (
     password_hash TEXT NOT NULL,
     name TEXT NOT NULL DEFAULT '',
     role TEXT NOT NULL DEFAULT 'employee',
+    permissions TEXT NOT NULL DEFAULT '',
     is_active INTEGER NOT NULL DEFAULT 1,
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL,
@@ -226,6 +228,7 @@ async def init_mailing_db() -> None:
                 ("login", "TEXT DEFAULT ''"),
             ):
                 _ensure_column(db, "admin_sessions", col, typedef)
+            _ensure_column(db, "admin_users", "permissions", "TEXT DEFAULT ''")
             # Миграция: приводим ранее сохранённые телефоны к +7(999)999-99-99
             rows = db.execute("SELECT id, phone FROM customers").fetchall()
             for row in rows:
@@ -1475,6 +1478,75 @@ _ADMIN_PASSWORD_ITERS = 120_000
 _ADMIN_PASSWORD_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789"
 ADMIN_USER_ROLES = ("admin", "employee")
 
+# Разделы панели, которыми можно управлять для сотрудника
+ADMIN_PERMISSION_DEFS: tuple[tuple[str, str], ...] = (
+    ("home", "Рассылки"),
+    ("clients", "Клиенты"),
+    ("chats", "Чаты"),
+    ("bots", "Боты"),
+    ("settings", "Настройки"),
+    ("aichat", "ИИ чат"),
+    ("access", "Доступ (сотрудники)"),
+)
+ADMIN_PERMISSION_KEYS: tuple[str, ...] = tuple(k for k, _ in ADMIN_PERMISSION_DEFS)
+# Базовый набор для нового сотрудника
+ADMIN_PERMISSIONS_DEFAULT: tuple[str, ...] = ("home", "clients", "chats")
+
+
+def permissions_catalog() -> list[dict[str, str]]:
+    return [{"id": k, "label": label} for k, label in ADMIN_PERMISSION_DEFS]
+
+
+def all_permissions_map(*, enabled: bool = True) -> dict[str, bool]:
+    return {k: bool(enabled) for k in ADMIN_PERMISSION_KEYS}
+
+
+def default_permissions_map() -> dict[str, bool]:
+    allowed = set(ADMIN_PERMISSIONS_DEFAULT)
+    return {k: k in allowed for k in ADMIN_PERMISSION_KEYS}
+
+
+def normalize_permissions(
+    raw: Any = None,
+    *,
+    role: str | None = None,
+    full: bool = False,
+) -> dict[str, bool]:
+    """Приводит права к словарю {section: bool} по всем известным разделам."""
+    if full or (role or "").strip().lower() == "admin":
+        return all_permissions_map(enabled=True)
+
+    enabled: set[str] = set()
+    if raw is None or raw == "":
+        enabled = set(ADMIN_PERMISSIONS_DEFAULT)
+    elif isinstance(raw, dict):
+        for key, val in raw.items():
+            if str(key) in ADMIN_PERMISSION_KEYS and val:
+                enabled.add(str(key))
+    elif isinstance(raw, (list, tuple, set)):
+        for item in raw:
+            key = str(item).strip()
+            if key in ADMIN_PERMISSION_KEYS:
+                enabled.add(key)
+    elif isinstance(raw, str):
+        text = raw.strip()
+        if text:
+            try:
+                parsed = json.loads(text)
+                return normalize_permissions(parsed, role=role, full=full)
+            except json.JSONDecodeError:
+                for part in re.split(r"[,;\s]+", text):
+                    key = part.strip()
+                    if key in ADMIN_PERMISSION_KEYS:
+                        enabled.add(key)
+    return {k: k in enabled for k in ADMIN_PERMISSION_KEYS}
+
+
+def permissions_to_storage(perms: dict[str, bool] | list[str] | None) -> str:
+    normalized = normalize_permissions(perms)
+    allowed = [k for k, on in normalized.items() if on]
+    return json.dumps(allowed, ensure_ascii=False)
+
 
 def generate_admin_password(length: int = 10) -> str:
     """Читаемый пароль без неоднозначных символов (O/0, I/l/1)."""
@@ -1513,11 +1585,14 @@ def verify_admin_password(password: str, stored: str) -> bool:
 
 def _admin_user_public(row: sqlite3.Row | dict[str, Any]) -> dict[str, Any]:
     d = dict(row)
+    role = d.get("role") or "employee"
+    perms = normalize_permissions(d.get("permissions"), role=role)
     return {
         "id": int(d["id"]),
         "phone": d.get("phone") or "",
         "name": d.get("name") or "",
-        "role": d.get("role") or "employee",
+        "role": role,
+        "permissions": perms,
         "is_active": bool(d.get("is_active")),
         "created_at": d.get("created_at"),
         "updated_at": d.get("updated_at"),
@@ -1569,6 +1644,8 @@ async def get_admin_user_by_phone(phone: str) -> dict[str, Any] | None:
                 return None
             d = dict(row)
             d["password_hash"] = row["password_hash"]
+            role = d.get("role") or "employee"
+            d["permissions"] = normalize_permissions(d.get("permissions"), role=role)
             return d
 
     return await _run_db(_get)
@@ -1580,6 +1657,7 @@ async def create_admin_user(
     password: str,
     name: str = "",
     role: str = "employee",
+    permissions: Any = None,
 ) -> dict[str, Any]:
     phone_fmt = normalize_phone_db(phone)
     digits = _phone_digits(phone_fmt)
@@ -1593,6 +1671,13 @@ async def create_admin_user(
     now = _now()
     pw_hash = hash_admin_password(password)
     name_n = str(name or "").strip()
+    perms_raw = (
+        permissions_to_storage(all_permissions_map(enabled=True))
+        if role_n == "admin"
+        else permissions_to_storage(
+            permissions if permissions is not None else default_permissions_map()
+        )
+    )
 
     def _create() -> dict[str, Any]:
         with _connect() as db:
@@ -1605,10 +1690,11 @@ async def create_admin_user(
             cur = db.execute(
                 """
                 INSERT INTO admin_users
-                    (phone, phone_digits, password_hash, name, role, is_active, created_at, updated_at)
-                VALUES (?, ?, ?, ?, ?, 1, ?, ?)
+                    (phone, phone_digits, password_hash, name, role, permissions,
+                     is_active, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, 1, ?, ?)
                 """,
-                (phone_fmt, digits, pw_hash, name_n, role_n, now, now),
+                (phone_fmt, digits, pw_hash, name_n, role_n, perms_raw, now, now),
             )
             db.commit()
             row = db.execute(
@@ -1627,6 +1713,7 @@ async def update_admin_user(
     role: str | None = None,
     is_active: bool | None = None,
     password: str | None = None,
+    permissions: Any = None,
 ) -> dict[str, Any] | None:
     now = _now()
 
@@ -1640,6 +1727,7 @@ async def update_admin_user(
                 return None
             fields: list[str] = []
             vals: list[Any] = []
+            next_role = row["role"]
             if name is not None:
                 fields.append("name = ?")
                 vals.append(str(name).strip())
@@ -1649,6 +1737,7 @@ async def update_admin_user(
                     raise ValueError("invalid_role")
                 fields.append("role = ?")
                 vals.append(role_n)
+                next_role = role_n
             if is_active is not None:
                 fields.append("is_active = ?")
                 vals.append(1 if is_active else 0)
@@ -1657,6 +1746,16 @@ async def update_admin_user(
                     raise ValueError("weak_password")
                 fields.append("password_hash = ?")
                 vals.append(hash_admin_password(password))
+            if permissions is not None or (
+                role is not None and str(role).strip().lower() == "admin"
+            ):
+                if str(next_role).strip().lower() == "admin":
+                    perms_raw = permissions_to_storage(all_permissions_map(enabled=True))
+                else:
+                    source = permissions if permissions is not None else row["permissions"]
+                    perms_raw = permissions_to_storage(source)
+                fields.append("permissions = ?")
+                vals.append(perms_raw)
             if not fields:
                 return _admin_user_public(row)
             fields.append("updated_at = ?")

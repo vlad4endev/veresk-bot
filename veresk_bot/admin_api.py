@@ -27,6 +27,7 @@ from ai_compose import (
 from config import ADMIN_PASSWORD, ADMIN_USERNAME, BOT_TOKEN
 from mailing_db import (
     add_campaign_recipients,
+    all_permissions_map,
     count_customers,
     create_admin_session,
     create_admin_user,
@@ -58,6 +59,8 @@ from mailing_db import (
     list_send_accounts,
     list_upcoming_events,
     next_events_for_customers,
+    normalize_permissions,
+    permissions_catalog,
     pick_ready_account,
     set_customer_tg_by_phone,
     set_event_auto_send,
@@ -199,6 +202,55 @@ def _role_label(role: str) -> str:
     return {"admin": "Администратор", "employee": "Сотрудник"}.get(role, role)
 
 
+async def _current_admin(request: web.Request) -> dict[str, Any] | None:
+    """Контекст текущего пользователя или None, если не авторизован."""
+    token = _extract_token(request)
+    if not token or not await validate_admin_session(token, touch=False):
+        return None
+    session = await get_admin_session(token)
+    if not session:
+        return None
+    if session.get("user_id"):
+        user = await get_admin_user(int(session["user_id"]))
+        if not user or not user.get("is_active"):
+            return None
+        return {
+            "source": "db",
+            "user_id": user["id"],
+            "role": user.get("role") or "employee",
+            "permissions": user.get("permissions")
+            or normalize_permissions(None, role=user.get("role")),
+            "user": user,
+        }
+    return {
+        "source": "env",
+        "user_id": None,
+        "role": "admin",
+        "permissions": all_permissions_map(enabled=True),
+        "user": None,
+    }
+
+
+def _has_perm(ctx: dict[str, Any] | None, perm: str) -> bool:
+    if not ctx:
+        return False
+    perms = ctx.get("permissions") or {}
+    return bool(perms.get(perm))
+
+
+async def _require_perm(request: web.Request, perm: str) -> web.Response | None:
+    err = await _require_admin(request)
+    if err:
+        return err
+    ctx = await _current_admin(request)
+    if not _has_perm(ctx, perm):
+        return _json(
+            {"error": "forbidden", "detail": "Недостаточно прав для этого действия"},
+            status=403,
+        )
+    return None
+
+
 async def handle_login(request: web.Request) -> web.Response:
     try:
         body = await request.json()
@@ -223,13 +275,18 @@ async def handle_login(request: web.Request) -> web.Response:
             login=db_user.get("phone") or username,
         )
         await touch_admin_user_login(int(db_user["id"]))
+        role = db_user.get("role") or "employee"
+        perms = db_user.get("permissions") or normalize_permissions(
+            None, role=role
+        )
         return _json(
             {
                 "token": session,
                 "expires_hours": ADMIN_SESSION_HOURS,
                 "username": db_user.get("phone") or username,
                 "name": db_user.get("name") or "",
-                "role": db_user.get("role") or "employee",
+                "role": role,
+                "permissions": perms,
                 "user_id": int(db_user["id"]),
                 "source": "db",
             }
@@ -249,6 +306,7 @@ async def handle_login(request: web.Request) -> web.Response:
                     "username": ADMIN_USERNAME,
                     "name": "Администратор",
                     "role": "admin",
+                    "permissions": all_permissions_map(enabled=True),
                     "user_id": None,
                     "source": "env",
                 }
@@ -274,34 +332,37 @@ async def handle_me(request: web.Request) -> web.Response:
         return err
     token = _extract_token(request)
     expires_at = await touch_admin_session(token) if token else None
-    session = await get_admin_session(token) if token else None
-    if session and session.get("user_id"):
-        user = await get_admin_user(int(session["user_id"]))
-        if user and user.get("is_active"):
-            return _json(
-                {
-                    "ok": True,
-                    "role": user.get("role") or "employee",
-                    "role_label": _role_label(user.get("role") or "employee"),
-                    "username": user.get("phone") or session.get("login") or "",
-                    "name": user.get("name") or "",
-                    "user_id": user["id"],
-                    "phone": user.get("phone") or "",
-                    "source": "db",
-                    "session_hours": ADMIN_SESSION_HOURS,
-                    "expires_at": expires_at or session.get("expires_at"),
-                    "session_renewed": True,
-                }
-            )
+    ctx = await _current_admin(request)
+    if ctx and ctx.get("source") == "db" and ctx.get("user"):
+        user = ctx["user"]
+        return _json(
+            {
+                "ok": True,
+                "role": user.get("role") or "employee",
+                "role_label": _role_label(user.get("role") or "employee"),
+                "username": user.get("phone") or "",
+                "name": user.get("name") or "",
+                "user_id": user["id"],
+                "phone": user.get("phone") or "",
+                "permissions": ctx.get("permissions") or user.get("permissions"),
+                "permission_catalog": permissions_catalog(),
+                "source": "db",
+                "session_hours": ADMIN_SESSION_HOURS,
+                "expires_at": expires_at,
+                "session_renewed": True,
+            }
+        )
     return _json(
         {
             "ok": True,
             "role": "admin",
             "role_label": "Администратор",
-            "username": (session or {}).get("login") or ADMIN_USERNAME,
+            "username": ADMIN_USERNAME,
             "name": "Администратор",
             "user_id": None,
             "phone": "",
+            "permissions": all_permissions_map(enabled=True),
+            "permission_catalog": permissions_catalog(),
             "source": "env",
             "session_hours": ADMIN_SESSION_HOURS,
             "expires_at": expires_at,
@@ -314,7 +375,7 @@ async def handle_me(request: web.Request) -> web.Response:
 
 
 async def handle_users_list(request: web.Request) -> web.Response:
-    err = await _require_admin(request)
+    err = await _require_perm(request, "access")
     if err:
         return err
     items = await list_admin_users(include_inactive=True)
@@ -328,6 +389,7 @@ async def handle_users_list(request: web.Request) -> web.Response:
             "name": "Системный администратор",
             "role": "admin",
             "role_label": "Администратор",
+            "permissions": all_permissions_map(enabled=True),
             "is_active": True,
             "username": ADMIN_USERNAME,
             "source": "env",
@@ -340,12 +402,13 @@ async def handle_users_list(request: web.Request) -> web.Response:
             "items": items,
             "env_admin": env_admin,
             "roles": [{"id": r, "label": _role_label(r)} for r in ADMIN_USER_ROLES],
+            "permission_catalog": permissions_catalog(),
         }
     )
 
 
 async def handle_users_create(request: web.Request) -> web.Response:
-    err = await _require_admin(request)
+    err = await _require_perm(request, "access")
     if err:
         return err
     try:
@@ -356,13 +419,18 @@ async def handle_users_create(request: web.Request) -> web.Response:
     name = str(body.get("name") or "").strip()
     role = str(body.get("role") or "employee").strip().lower()
     password = str(body.get("password") or "").strip()
+    permissions = body.get("permissions")
     generated = False
     if not password:
         password = generate_admin_password()
         generated = True
     try:
         user = await create_admin_user(
-            phone=phone, password=password, name=name, role=role
+            phone=phone,
+            password=password,
+            name=name,
+            role=role,
+            permissions=permissions,
         )
     except ValueError as exc:
         code = str(exc)
@@ -389,7 +457,7 @@ async def handle_users_create(request: web.Request) -> web.Response:
 
 
 async def handle_users_get(request: web.Request) -> web.Response:
-    err = await _require_admin(request)
+    err = await _require_perm(request, "access")
     if err:
         return err
     try:
@@ -400,11 +468,11 @@ async def handle_users_get(request: web.Request) -> web.Response:
     if not user:
         return _json({"error": "not_found"}, status=404)
     user["role_label"] = _role_label(user.get("role") or "employee")
-    return _json({"user": user})
+    return _json({"user": user, "permission_catalog": permissions_catalog()})
 
 
 async def handle_users_patch(request: web.Request) -> web.Response:
-    err = await _require_admin(request)
+    err = await _require_perm(request, "access")
     if err:
         return err
     try:
@@ -425,6 +493,8 @@ async def handle_users_patch(request: web.Request) -> web.Response:
         kwargs["is_active"] = bool(body.get("is_active"))
     if "password" in body and body.get("password"):
         kwargs["password"] = str(body.get("password"))
+    if "permissions" in body:
+        kwargs["permissions"] = body.get("permissions")
 
     try:
         user = await update_admin_user(user_id, **kwargs)
@@ -442,7 +512,7 @@ async def handle_users_patch(request: web.Request) -> web.Response:
 
 
 async def handle_users_reset_password(request: web.Request) -> web.Response:
-    err = await _require_admin(request)
+    err = await _require_perm(request, "access")
     if err:
         return err
     try:
@@ -476,7 +546,7 @@ async def handle_users_reset_password(request: web.Request) -> web.Response:
 
 
 async def handle_users_delete(request: web.Request) -> web.Response:
-    err = await _require_admin(request)
+    err = await _require_perm(request, "access")
     if err:
         return err
     try:
@@ -498,7 +568,7 @@ async def handle_users_delete(request: web.Request) -> web.Response:
 
 
 async def handle_generate_password(request: web.Request) -> web.Response:
-    err = await _require_admin(request)
+    err = await _require_perm(request, "access")
     if err:
         return err
     length = 10

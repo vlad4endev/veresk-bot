@@ -988,6 +988,33 @@
     font-size:18px;font-weight:700;color:var(--ink);letter-spacing:.08em;margin-top:2px;
   }
   .staff-pass-hint{font-size:12.5px;color:var(--warn);margin:0;line-height:1.4;}
+  .staff-perms{
+    display:grid;grid-template-columns:1fr 1fr;gap:8px;
+  }
+  .staff-perm{
+    display:flex;align-items:center;gap:10px;padding:10px 12px;
+    border:1.5px solid var(--line);border-radius:11px;background:var(--bg);
+    cursor:pointer;user-select:none;font-weight:500;font-size:13.5px;color:var(--ink);
+    transition:border-color .12s ease, background .12s ease;
+  }
+  .staff-perm:hover{border-color:#dccfe3;}
+  .staff-perm.on{border-color:var(--accent);background:var(--accent-soft);color:var(--plum);}
+  .staff-perm input{position:absolute;opacity:0;pointer-events:none;}
+  .staff-perm .tick{
+    width:18px;height:18px;border-radius:6px;border:1.5px solid var(--line);
+    background:var(--surface);flex:none;display:grid;place-items:center;
+  }
+  .staff-perm.on .tick{border-color:var(--accent);background:var(--accent);color:#fff;}
+  .staff-perm .tick svg{width:12px;height:12px;display:none;}
+  .staff-perm.on .tick svg{display:block;}
+  .staff-perms-head{
+    display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:8px;
+  }
+  .staff-perms-head .ttl{font-weight:650;font-size:14px;}
+  .staff-perms-head .links{display:flex;gap:8px;font-size:12.5px;}
+  .staff-perms-head .links button{
+    border:0;background:none;color:var(--accent);font:inherit;font-weight:600;cursor:pointer;padding:0;
+  }
   .staff-actions{display:flex;flex-wrap:wrap;gap:8px;}
   .staff-actions .btn.danger{color:#c0492f;border-color:#f3d3ca;}
   .staff-actions .btn.danger:hover{background:#fdf0ed;}
@@ -997,9 +1024,11 @@
     color:var(--ink-3);font-size:13px;line-height:1.45;
   }
   .staff-sys b{color:var(--ink-2);font-weight:650;}
+  .nav-item[hidden],.bnav-item[hidden],.settings-tab[hidden],.create-btn[hidden]{display:none !important;}
   @media (max-width:560px){
     .staff-person{padding:12px 14px;}
     .staff-pass-row{flex-direction:column;}
+    .staff-perms{grid-template-columns:1fr;}
     .staff-actions .btn{flex:1;justify-content:center;}
     .staff-actions .spacer{display:none;}
     .set-hero #staffAddBtn{width:100%;justify-content:center;}
@@ -1074,11 +1103,12 @@
     font-size:13px;font-weight:600;color:var(--max);
     padding:7px 12px;border-radius:10px;background:#f3ecfb;border:1px solid #e4d6f5;
   }
-  #chats[data-channel="max"] #tgAccountPick,
-  #chats[data-channel="max"] #tgNewChatBtn,
-  #chats[data-channel="max"] #tgOnlyUsersWrap,
   #chats[data-channel="max"] #tgAttachBtn,
   #chats[data-channel="max"] #tgAttachBar{display:none!important;}
+  #chats[data-channel="max"]:not([data-max-mode="userbot"]) #tgAccountPick,
+  #chats[data-channel="max"]:not([data-max-mode="userbot"]) #tgNewChatBtn,
+  #chats[data-channel="max"]:not([data-max-mode="userbot"]) #tgOnlyUsersWrap{display:none!important;}
+  #chats[data-channel="max"][data-max-mode="userbot"] #maxAccountLabel{display:none!important;}
   #chats[data-channel="tg"] #maxAccountLabel{display:none!important;}
   .tg-head-actions{display:flex;flex-wrap:wrap;gap:8px;align-items:center;}
   .tg-account-pick select{

@@ -68,8 +68,86 @@
   const panels = $$(".panel");
   const navItems = $$(".nav-item, .bnav-item[data-nav]");
 
+  const PERM_CATALOG_FALLBACK = [
+    { id: "home", label: "Рассылки" },
+    { id: "clients", label: "Клиенты" },
+    { id: "chats", label: "Чаты" },
+    { id: "bots", label: "Боты" },
+    { id: "settings", label: "Настройки" },
+    { id: "aichat", label: "ИИ чат" },
+    { id: "access", label: "Доступ (сотрудники)" },
+  ];
+  const PERM_DEFAULTS = {
+    home: true,
+    clients: true,
+    chats: true,
+    bots: false,
+    settings: false,
+    aichat: false,
+    access: false,
+  };
+  let authMe = null;
+  let permCatalog = PERM_CATALOG_FALLBACK.slice();
+
+  function normalizePerms(raw) {
+    const out = {};
+    PERM_CATALOG_FALLBACK.forEach((p) => {
+      out[p.id] = false;
+    });
+    if (!raw || typeof raw !== "object") {
+      return Object.assign(out, PERM_DEFAULTS);
+    }
+    Object.keys(out).forEach((k) => {
+      out[k] = !!raw[k];
+    });
+    return out;
+  }
+
+  function canAccess(section) {
+    const perms = (authMe && authMe.permissions) || {};
+    if (authMe && (authMe.source === "env" || authMe.role === "admin")) return true;
+    if (section === "compose" || section === "detail" || section === "personal") {
+      return !!perms.home;
+    }
+    if (section === "client") return !!perms.clients;
+    if (section === "settings") return !!(perms.settings || perms.access);
+    return !!perms[section];
+  }
+
+  function firstAllowedTab() {
+    const order = ["home", "clients", "chats", "bots", "aichat", "settings"];
+    return order.find((t) => canAccess(t)) || "home";
+  }
+
+  function applyNavPermissions() {
+    const perms = normalizePerms(authMe && authMe.permissions);
+    if (authMe && (authMe.source === "env" || authMe.role === "admin")) {
+      Object.keys(perms).forEach((k) => {
+        perms[k] = true;
+      });
+    }
+    $$(".nav-item[data-nav], .bnav-item[data-nav]").forEach((el) => {
+      const key = el.dataset.nav;
+      el.hidden = key ? !perms[key] && !(key === "settings" && (perms.settings || perms.access)) : false;
+      if (key === "settings") el.hidden = !(perms.settings || perms.access);
+    });
+    $$(".bnav-item.bnav-create, .create-btn").forEach((el) => {
+      el.hidden = !perms.home;
+    });
+    $$(".settings-tab").forEach((tab) => {
+      const pane = tab.dataset.settings;
+      if (pane === "users") tab.hidden = !perms.access;
+      else tab.hidden = !perms.settings;
+    });
+  }
+
   function go(tab) {
     if (tab === "accounts") tab = "settings";
+    const gateTab =
+      ({ compose: "home", detail: "home", personal: "home", client: "clients" })[tab] || tab;
+    if (!canAccess(gateTab === "settings" ? "settings" : gateTab) && !canAccess(tab)) {
+      tab = firstAllowedTab();
+    }
     panels.forEach((p) => p.classList.toggle("active", p.id === tab));
     const navKey =
       ({ compose: "home", detail: "home", personal: "home", client: "clients" })[tab] ||
@@ -133,6 +211,13 @@
   async function refreshSideUser() {
     try {
       const me = await AdminAPI.me();
+      authMe = me;
+      if (Array.isArray(me.permission_catalog) && me.permission_catalog.length) {
+        permCatalog = me.permission_catalog;
+      }
+      me.permissions = normalizePerms(me.permissions);
+      authMe.permissions = me.permissions;
+      applyNavPermissions();
       const name =
         me.name ||
         formatPhoneDisplay(me.phone || me.username) ||
@@ -152,7 +237,9 @@
     $("#appShell").classList.remove("hidden");
     startAdminKeepalive();
     await refreshSideUser();
-    await loadHome();
+    const start = firstAllowedTab();
+    if (start === "home") await loadHome();
+    else go(start);
   }
 
   function showLogin() {
@@ -901,8 +988,29 @@
   let logsFilter = "all";
   let accountsCache = null;
 
+  function firstAllowedSettingsTab() {
+    const perms = normalizePerms(authMe && authMe.permissions);
+    if (authMe && (authMe.source === "env" || authMe.role === "admin")) {
+      return settingsTab || "accounts";
+    }
+    const order = ["accounts", "bots", "integrations", "users", "logs"];
+    // bots settings tab is under settings - needs settings perm; users needs access
+    const allowed = order.filter((pane) => {
+      if (pane === "users") return !!perms.access;
+      return !!perms.settings;
+    });
+    if (allowed.includes(settingsTab)) return settingsTab;
+    return allowed[0] || "accounts";
+  }
+
   function setSettingsTab(name) {
     settingsTab = name || "accounts";
+    const perms = normalizePerms(authMe && authMe.permissions);
+    const isFull = authMe && (authMe.source === "env" || authMe.role === "admin");
+    if (!isFull) {
+      if (settingsTab === "users" && !perms.access) settingsTab = firstAllowedSettingsTab();
+      if (settingsTab !== "users" && !perms.settings) settingsTab = firstAllowedSettingsTab();
+    }
     $$(".settings-tab").forEach((b) =>
       b.classList.toggle("on", b.dataset.settings === settingsTab)
     );
@@ -916,14 +1024,15 @@
   }
 
   async function loadSettings() {
-    setSettingsTab(settingsTab);
-    await loadAccounts();
-    // статус MAX в шапке — даже если вкладка другая
-    try {
-      const s = await AdminAPI.maxSettings();
-      updateSettingsGlanceMax(!!s.configured);
-    } catch (_) {
-      updateSettingsGlanceMax(false);
+    setSettingsTab(firstAllowedSettingsTab());
+    if (canAccess("settings")) {
+      await loadAccounts();
+      try {
+        const s = await AdminAPI.maxSettings();
+        updateSettingsGlanceMax(!!s.configured);
+      } catch (_) {
+        updateSettingsGlanceMax(false);
+      }
     }
     if (settingsTab === "bots") loadBotsPane();
     if (settingsTab === "users") loadUsersPane();
@@ -1473,7 +1582,70 @@
     selectedId: null,
     search: "",
     pendingPassword: null,
+    catalog: null,
   };
+
+  function staffPermCatalog() {
+    return (staffState.catalog && staffState.catalog.length
+      ? staffState.catalog
+      : permCatalog) || PERM_CATALOG_FALLBACK;
+  }
+
+  function staffPermsOf(u) {
+    return normalizePerms(u && u.permissions);
+  }
+
+  function renderPermToggles(containerId, perms, { prefix = "staffPerm" } = {}) {
+    const box = typeof containerId === "string" ? $(containerId) : containerId;
+    if (!box) return;
+    const catalog = staffPermCatalog();
+    const map = normalizePerms(perms);
+    box.innerHTML = catalog
+      .map((p) => {
+        const on = !!map[p.id];
+        return `<label class="staff-perm ${on ? "on" : ""}" data-perm="${esc(p.id)}">
+          <input type="checkbox" id="${esc(prefix)}_${esc(p.id)}" ${on ? "checked" : ""}>
+          <span class="tick"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><path d="M20 6 9 17l-5-5"/></svg></span>
+          <span>${esc(p.label)}</span>
+        </label>`;
+      })
+      .join("");
+    box.querySelectorAll(".staff-perm").forEach((el) => {
+      el.addEventListener("click", (e) => {
+        e.preventDefault();
+        const inp = el.querySelector("input");
+        if (!inp) return;
+        inp.checked = !inp.checked;
+        el.classList.toggle("on", inp.checked);
+      });
+    });
+  }
+
+  function readPermToggles(root) {
+    const scope = typeof root === "string" ? $(root) : root || document;
+    const out = {};
+    staffPermCatalog().forEach((p) => {
+      out[p.id] = false;
+    });
+    if (!scope) return out;
+    scope.querySelectorAll(".staff-perm[data-perm]").forEach((el) => {
+      const id = el.dataset.perm;
+      const inp = el.querySelector("input");
+      if (id) out[id] = !!(inp && inp.checked);
+    });
+    return out;
+  }
+
+  function setPermToggles(root, enabled) {
+    const scope = typeof root === "string" ? $(root) : root;
+    if (!scope) return;
+    scope.querySelectorAll(".staff-perm").forEach((el) => {
+      const inp = el.querySelector("input");
+      if (!inp) return;
+      inp.checked = !!enabled;
+      el.classList.toggle("on", !!enabled);
+    });
+  }
 
   function fmtStaffDate(iso) {
     if (!iso) return "ещё не входил";
@@ -1547,11 +1719,13 @@
         const active = !!u.is_active;
         const phone = formatPhoneDisplay(u.phone) || u.phone || "—";
         const on = Number(u.id) === Number(staffState.selectedId) ? "on" : "";
+        const perms = staffPermsOf(u);
+        const count = Object.values(perms).filter(Boolean).length;
         return `<button type="button" class="staff-person ${on} ${active ? "" : "off"}" data-staff-id="${esc(u.id)}">
           <div class="av">${esc(initials(staffDisplayName(u)))}</div>
           <div class="meta">
             <div class="nm">${esc(staffDisplayName(u))}</div>
-            <div class="ph">${esc(phone)}</div>
+            <div class="ph">${esc(phone)} · ${count} раздел${count === 1 ? "" : count > 4 ? "ов" : "а"}</div>
           </div>
           <span class="st ${active ? "" : "off"}">${active ? "Может входить" : "Отключён"}</span>
           <span class="chev" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 6l6 6-6 6"/></svg></span>
@@ -1580,7 +1754,7 @@
       return;
     }
     el.hidden = false;
-    el.innerHTML = `Ещё есть <b>основной вход</b> на сервере (логин <b>${esc(staffState.envAdmin.username || "admin")}</b>) — он всегда работает.`;
+    el.innerHTML = `Ещё есть <b>основной вход</b> на сервере (логин <b>${esc(staffState.envAdmin.username || "admin")}</b>) — полный доступ ко всему.`;
   }
 
   function renderStaffCard() {
@@ -1614,6 +1788,16 @@
           <span>Телефон: <b>${esc(phone)}</b></span>
           <span>Входил: <b>${esc(fmtStaffDate(u.last_login_at))}</b></span>
         </div>
+        <div>
+          <div class="staff-perms-head">
+            <div class="ttl">Доступ к разделам</div>
+            <div class="links">
+              <button type="button" id="staffPermAll">Все</button>
+              <button type="button" id="staffPermNone">Сбросить</button>
+            </div>
+          </div>
+          <div class="staff-perms" id="staffEditPerms"></div>
+        </div>
         <div class="staff-pass-box">
           <div class="ttl">Пароль для входа</div>
           <div class="sub">Старый пароль скрыт. Можно выдать новый и сразу скопировать.</div>
@@ -1635,6 +1819,9 @@
         <div class="form-status" id="staffCardStatus"></div>
       </div>`;
 
+    renderPermToggles("#staffEditPerms", staffPermsOf(u), { prefix: "staffEdit" });
+    $("#staffPermAll")?.addEventListener("click", () => setPermToggles("#staffEditPerms", true));
+    $("#staffPermNone")?.addEventListener("click", () => setPermToggles("#staffEditPerms", false));
     $("#staffCloseCard")?.addEventListener("click", () => {
       staffState.selectedId = null;
       staffState.pendingPassword = null;
@@ -1720,9 +1907,15 @@
     try {
       const res = await AdminAPI.updateUser(id, {
         name: $("#staffEditName")?.value?.trim() || "",
+        permissions: readPermToggles("#staffEditPerms"),
       });
       const idx = staffState.items.findIndex((x) => Number(x.id) === Number(id));
-      if (idx >= 0) staffState.items[idx] = res.user;
+      if (idx >= 0) {
+        staffState.items[idx] = {
+          ...res.user,
+          permissions: normalizePerms(res.user.permissions),
+        };
+      }
       staffState.selectedId = res.user.id;
       renderStaffList();
       setStaffCardStatus("Сохранено");
@@ -1817,9 +2010,13 @@
         phone,
         role: "employee",
         password,
+        permissions: readPermToggles("#staffCreatePerms"),
         return_password: true,
       });
-      staffState.items.unshift(res.user);
+      staffState.items.unshift({
+        ...res.user,
+        permissions: normalizePerms(res.user.permissions),
+      });
       staffState.selectedId = res.user.id;
       staffState.pendingPassword = res.password || password;
       openStaffCreateModal(false);
