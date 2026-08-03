@@ -337,31 +337,6 @@
     inp.focus();
   });
 
-  // Login screen: reveal + soft parallax
-  (function initLoginAtmosphere() {
-    const screen = $("#loginScreen");
-    if (!screen) return;
-    requestAnimationFrame(() => screen.classList.add("is-ready"));
-    const reduce = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
-    if (reduce) return;
-    const orbs = screen.querySelectorAll("[data-parallax]");
-    if (!orbs.length) return;
-    let raf = 0;
-    const onMove = (e) => {
-      cancelAnimationFrame(raf);
-      raf = requestAnimationFrame(() => {
-        const x = (e.clientX / window.innerWidth - 0.5) * 2;
-        const y = (e.clientY / window.innerHeight - 0.5) * 2;
-        orbs.forEach((el) => {
-          const f = parseFloat(el.getAttribute("data-parallax") || "0.04");
-          el.style.setProperty("--px", `${(x * f * 100).toFixed(1)}px`);
-          el.style.setProperty("--py", `${(y * f * 100).toFixed(1)}px`);
-        });
-      });
-    };
-    window.addEventListener("pointermove", onMove, { passive: true });
-  })();
-
   // Подсказка про Caps Lock
   $("#loginPassword")?.addEventListener("keyup", (e) => {
     if (typeof e.getModifierState === "function") {
@@ -4541,7 +4516,7 @@
   }
 
   async function openTgPeer(peerId, { silent = false, keepScroll = false } = {}) {
-    if (peerId == null) return;
+    if (peerId == null || peerId === "") return;
     if (isMaxChannel()) {
       const switched = String(tgState.peerId) !== String(peerId);
       tgState.peerId = peerId;
@@ -4574,7 +4549,7 @@
         mergePeerIntoDialogs(data.peer);
         renderTgDialogs();
         showTgThread(true);
-        if (!silent) $("#tgInput")?.focus();
+        focusTgComposer();
         refreshTgClientStatus({ silent: true });
       } catch (err) {
         if (!silent) {
@@ -4587,7 +4562,12 @@
     }
 
     const accountId = currentTgAccountId();
-    if (!accountId) return;
+    if (!accountId) {
+      if (!silent) {
+        alert("Выберите Telegram-аккаунт сверху, затем откройте чат.");
+      }
+      return;
+    }
     const switched = String(tgState.peerId) !== String(peerId);
     tgState.peerId = peerId;
     if (!silent) {
@@ -4612,7 +4592,7 @@
       mergePeerIntoDialogs(data.peer);
       renderTgDialogs();
       showTgThread(true);
-      if (!silent) $("#tgInput")?.focus();
+      focusTgComposer();
       refreshTgClientStatus({ silent: true });
     } catch (err) {
       if (!silent) {
@@ -4621,6 +4601,12 @@
     } finally {
       tgState.loadingMessages = false;
     }
+  }
+
+  function focusTgComposer() {
+    /* Autofocus on phones opens the keyboard and jumps the fixed thread layout */
+    if (window.matchMedia("(max-width: 899px)").matches) return;
+    $("#tgInput")?.focus();
   }
 
   async function loadOlderTgMessages() {
@@ -5070,7 +5056,10 @@
     $("#tgDialogList")?.addEventListener("click", (e) => {
       const btn = e.target.closest("[data-peer]");
       if (!btn) return;
-      openTgPeer(btn.getAttribute("data-peer"));
+      e.preventDefault();
+      const peer = btn.getAttribute("data-peer");
+      if (peer == null || peer === "") return;
+      openTgPeer(peer);
     });
 
     $("#tgBackToList")?.addEventListener("click", () => {
