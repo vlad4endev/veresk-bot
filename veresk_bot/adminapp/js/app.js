@@ -59,6 +59,9 @@
     curClient: null,
     curCampaign: null,
     curPerson: null,
+    eventsDays: 7,
+    eventsExpanded: false,
+    eventsCache: [],
     wizard: {
       segment: "regular",
       message: "",
@@ -418,7 +421,7 @@
     try {
       const [stats, events, campaigns] = await Promise.all([
         AdminAPI.stats(),
-        AdminAPI.events(14),
+        AdminAPI.events(state.eventsDays),
         AdminAPI.campaigns(),
       ]);
       $("#statCustomers").textContent = fmtNum(stats.customers);
@@ -427,9 +430,23 @@
           ? `${stats.accounts_ready} из ${stats.accounts_total}`
           : "0";
       $("#statAccounts").textContent = accLabel;
-      $("#statDelivery").textContent =
-        stats.delivery_rate != null ? stats.delivery_rate + "%" : "—";
-      renderEvents(events.items || []);
+      const sentMonth = stats.sent_month;
+      if (stats.delivery_rate != null) {
+        $("#statDelivery").textContent = stats.delivery_rate + "%";
+        const lbl = $("#statDeliveryLabel");
+        if (lbl) {
+          lbl.textContent =
+            sentMonth != null
+              ? `успешно · ${fmtNum(sentMonth)} за месяц`
+              : "успешно за месяц";
+        }
+      } else {
+        $("#statDelivery").textContent = sentMonth != null ? fmtNum(sentMonth) : "—";
+        const lbl = $("#statDeliveryLabel");
+        if (lbl) lbl.textContent = "отправлено за месяц";
+      }
+      syncEventsFilters();
+      renderEvents(events);
       renderCampaigns(campaigns.items || []);
     } catch (err) {
       if (err.status === 401) return showLogin();
@@ -447,47 +464,164 @@
     return "🎉";
   }
 
-  function renderEvents(items) {
+  function syncEventsFilters() {
+    $$("#wgFilters .wg-f").forEach((btn) => {
+      btn.classList.toggle("on", +btn.dataset.days === state.eventsDays);
+    });
+    const allBtn = $("#wgAll");
+    if (allBtn) {
+      allBtn.textContent = state.eventsExpanded ? "Свернуть" : "Показать все";
+    }
+  }
+
+  async function loadEvents(days) {
     const box = $("#eventsList");
+    box.innerHTML = '<div class="loading">Загрузка…</div>';
+    try {
+      const data = await AdminAPI.events(days);
+      state.eventsDays = days;
+      syncEventsFilters();
+      renderEvents(data);
+    } catch {
+      box.innerHTML = '<div class="empty-state">Не удалось загрузить события</div>';
+    }
+  }
+
+  function recipientStatusMeta(status) {
+    const map = {
+      pending: { label: "В очереди", cls: "sending" },
+      sent: { label: "Отправлено", cls: "done" },
+      delivered: { label: "Доставлено", cls: "done" },
+      failed: { label: "Ошибка", cls: "err" },
+    };
+    return map[status] || { label: status || "—", cls: "neutral" };
+  }
+
+  function formatSentAt(iso) {
+    if (!iso) return "—";
+    const s = String(iso);
+    // 2024-08-04T14:30:00 → 4 авг · 14:30
+    const m = s.match(/^(\d{4})-(\d{2})-(\d{2})[T ](\d{2}):(\d{2})/);
+    if (!m) return s.slice(0, 16);
+    const months = [
+      "янв",
+      "фев",
+      "мар",
+      "апр",
+      "мая",
+      "июн",
+      "июл",
+      "авг",
+      "сен",
+      "окт",
+      "ноя",
+      "дек",
+    ];
+    return `${+m[3]} ${months[+m[2] - 1] || m[2]} · ${m[4]}:${m[5]}`;
+  }
+
+  function msgStatusLabel(status) {
+    return (
+      {
+        pending: "В очереди",
+        sent: "Отправлено",
+        delivered: "Доставлено",
+        failed: "Ошибка",
+        queued: "В очереди",
+      }[status] || status || "—"
+    );
+  }
+
+  function renderEvents(payload) {
+    const box = $("#eventsList");
+    const items = Array.isArray(payload) ? payload : payload?.items || [];
+    const meta = Array.isArray(payload) ? {} : payload || {};
+    state.eventsCache = items;
+
+    const sub = $("#wgEventsSub");
+    if (sub) {
+      const total = meta.total ?? items.length;
+      const today = meta.today_count ?? items.filter((e) => e.days_until === 0).length;
+      const auto = meta.auto_count ?? items.filter((e) => e.auto_send).length;
+      const parts = [];
+      if (today) parts.push(`${today} сегодня`);
+      parts.push(`${total} за ${state.eventsDays} дн.`);
+      if (auto) parts.push(`${auto} с авто`);
+      sub.textContent = parts.join(" · ") || "Дни рождения и годовщины из Posiflora";
+    }
+
     if (!items.length) {
-      box.innerHTML =
-        '<div class="empty-state"><div class="t">Нет ближайших событий</div>Синхронизируйте базу из Posiflora</div>';
+      box.innerHTML = `<div class="empty-state">
+        <div class="t">Нет событий в ближайшие ${state.eventsDays} дн.</div>
+        <p class="d">Синхронизируйте клиентов из Posiflora или выберите больший период.</p>
+      </div>`;
       return;
     }
-    box.innerHTML = items
-      .slice(0, 8)
-      .map((e) => {
-        const auto = e.auto_send ? " auto" : "";
-        return `<div class="ev${auto}" data-id="${e.id}">
+
+    const limit = state.eventsExpanded ? items.length : Math.min(8, items.length);
+    const shown = items.slice(0, limit);
+    const hidden = items.length - shown.length;
+
+    box.innerHTML =
+      shown
+        .map((e) => {
+          const auto = e.auto_send ? " auto" : "";
+          const greeted = e.greeted_today ? " greeted" : "";
+          const dateBit = e.next_date_label || e.date_label || "";
+          const kindBit = e.kind_label || e.title || "";
+          const subBits = [
+            e.customer_name ? null : null,
+            e.phone_masked,
+            e.channel,
+            dateBit ? dateBit : null,
+          ]
+            .filter(Boolean)
+            .join(" · ");
+          let actionNote = "✓ Поздравим сами";
+          if (e.greeted_today) actionNote = "✓ Уже поздравили сегодня";
+          const sendLabel =
+            e.greeted_today
+              ? "Ещё раз"
+              : e.kind === "bday" || e.kind === "anniv"
+                ? "Поздравить"
+                : "Написать";
+          return `<div class="ev${auto}${greeted}" data-id="${e.id}">
           <span class="ev-ic">${eventIcon(e.kind)}</span>
-          <div class="ev-b clickable" data-client="${e.customer_id}" title="Открыть карточку">
-            <div class="ev-n">${esc(e.title)} · ${esc(e.customer_name)}</div>
-            <div class="ev-s">${esc(e.phone_masked)} · ${esc(e.channel)}</div>
+          <div class="ev-b clickable" data-client="${e.customer_id}" title="Открыть карточку клиента">
+            <div class="ev-n"><span class="ev-kind">${esc(kindBit)}</span> · ${esc(e.customer_name || "Клиент")}</div>
+            <div class="ev-s">${esc(subBits)}</div>
           </div>
-          <span class="ev-when ${esc(e.when_class)}">${esc(e.when_label)}</span>
+          <span class="ev-when ${esc(e.when_class || "later")}">${esc(e.when_label || "—")}</span>
           <div class="ev-act">
-            <label class="sw" title="Поздравлять автоматически">
+            <label class="sw" title="Автопоздравление в день события">
               <input type="checkbox" data-auto="${e.id}" ${e.auto_send ? "checked" : ""}>
               <span class="track"></span>Авто
             </label>
-            <button class="ev-send" data-personal="${encodeURIComponent(JSON.stringify({
-              type: e.kind === "anniv" ? "anniv" : e.kind === "bday" ? "bday" : "plain",
-              customer_id: e.customer_id,
-              name: e.customer_name,
-              contact: e.phone_masked,
-              chan: e.channel,
-              chanClass: e.channel_class,
-              evText: e.title + " · " + e.when_label,
-              whenClass: e.when_class,
-            }))}">
+            <button class="ev-send" type="button" data-personal="${encodeURIComponent(
+              JSON.stringify({
+                type: e.kind === "anniv" ? "anniv" : e.kind === "bday" ? "bday" : "plain",
+                customer_id: e.customer_id,
+                name: e.customer_name,
+                contact: e.phone_masked,
+                chan: e.channel,
+                chanClass: e.channel_class,
+                evText: `${kindBit} · ${e.when_label || ""}${dateBit ? " · " + dateBit : ""}`,
+                whenClass: e.when_class,
+              })
+            )}">
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m3 11 18-8-8 18-2-8z"/></svg>
-              ${e.kind === "bday" || e.kind === "anniv" ? "Поздравить" : "Отправить"}
+              ${esc(sendLabel)}
             </button>
-            <span class="auto-note">✓ Поздравим сами</span>
+            <span class="auto-note">${esc(actionNote)}</span>
           </div>
         </div>`;
-      })
-      .join("");
+        })
+        .join("") +
+      (hidden > 0
+        ? `<button type="button" class="wg-more" id="wgMore">Ещё ${hidden} ${
+            hidden === 1 ? "событие" : hidden < 5 ? "события" : "событий"
+          }</button>`
+        : "");
 
     box.querySelectorAll("[data-client]").forEach((el) => {
       el.addEventListener("click", () => openClientById(+el.dataset.client));
@@ -511,6 +645,11 @@
           openPersonal(d);
         } catch (_) {}
       });
+    });
+    $("#wgMore")?.addEventListener("click", () => {
+      state.eventsExpanded = true;
+      syncEventsFilters();
+      renderEvents({ items, ...meta, total: items.length });
     });
   }
 
@@ -561,23 +700,31 @@
             return `<span class="chan ${cls}">${esc(t)}</span>`;
           })
           .join("");
-        const res =
-          c.status === "sending"
-            ? `${fmtNum(c.sent_count)} из ${fmtNum(c.total_count)}`
-            : c.status === "done"
-              ? `отправлено ${fmtNum(c.sent_count)}`
-              : "";
+        let res = c.when_short || c.when || "";
+        if (c.status === "sending") {
+          res = `${fmtNum(c.ok_count ?? c.sent_count)} из ${fmtNum(c.total_count)}`;
+        } else if (c.status === "done") {
+          const failBit =
+            c.failed_count > 0 ? ` · ${fmtNum(c.failed_count)} ошибок` : "";
+          res = `${fmtNum(c.ok_count ?? c.sent_count)} отправлено${failBit}`;
+        } else if (c.status === "draft" || c.status === "scheduled") {
+          res = `${esc(c.when_short || c.when)} · ${fmtNum(c.total_count)} чел.`;
+        }
         return `<button class="rrow" data-cid="${c.id}">
           <span class="em">${esc(c.emoji)}</span>
           <span class="rname">
             <span class="n">${esc(c.title)}</span>
-            <span class="who">${esc(c.segment_label)} · ${fmtNum(c.total_count)} чел.</span>
+            <span class="who">${esc(c.segment_label)} · ${fmtNum(c.total_count)} чел.${
+          c.when && c.status !== "sending"
+            ? ` · ${esc(c.when_short || "")}`
+            : ""
+        }</span>
             <span class="m-status"><span class="d" style="background:${dot[c.status_class] || "var(--ink-3)"}"></span>${esc(c.status_label)}</span>
           </span>
           <span class="col-chan">${chans}</span>
           <span class="col-status">
             <span class="status ${esc(c.status_class)}"><span class="d" style="background:${dot[c.status_class] || "var(--ink-3)"}"></span>${esc(c.status_label)}</span>
-            ${res ? `<div class="res">${esc(res)}</div>` : ""}
+            ${res ? `<div class="res">${res}</div>` : ""}
           </span>
           <span class="chev"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 6l6 6-6 6"/></svg></span>
         </button>`;
@@ -605,7 +752,7 @@
   window.openDetail = openDetail;
 
   function renderDetail(c, recipients) {
-    const sent = c.status === "sending" || c.status === "done";
+    const started = c.status === "sending" || c.status === "done" || c.status === "error";
     const chans = String(c.channels || "")
       .split(",")
       .filter(Boolean)
@@ -614,68 +761,71 @@
         return `<span class="chan ${t === "MAX" ? "max" : "tg"}">${esc(t)}</span>`;
       })
       .join(" ");
-    const msgHtml = esc(c.message).replace(/\n/g, "<br>");
-    let recipientsHtml = "";
-    (recipients.items || []).forEach((r) => {
-      const stClass =
-        r.status === "failed"
-          ? "err"
-          : r.status === "pending"
-            ? "sending"
-            : r.status === "delivered" || r.status === "sent"
-              ? "done"
-              : "neutral";
-      const stLabel =
-        {
-          pending: "Ожидает",
-          sent: "Отправлено",
-          delivered: "Доставлено",
-          failed: "Не доставлено",
-        }[r.status] || r.status;
-      recipientsHtml += `<tr>
-        <td class="who"><div class="nm">${esc(r.name)}</div><div class="h">${esc(r.phone_masked)}</div></td>
-        <td class="hide-mob"><span class="chan ${r.channel === "max" ? "max" : "tg"}">${r.channel === "max" ? "MAX" : "Telegram"}</span></td>
-        <td>${esc(r.sent_at ? r.sent_at.slice(11, 16) : "—")}</td>
-        <td><span class="status ${stClass}"><span class="d" style="background:currentColor"></span>${esc(stLabel)}</span></td>
-      </tr>`;
-    });
 
-    const leftActions = sent
+    function recipientRowsHtml(list) {
+      if (!list.length) {
+        return '<tr><td colspan="4" class="empty-state">Нет получателей</td></tr>';
+      }
+      return list
+        .map((r) => {
+          const st = recipientStatusMeta(r.status);
+          const errTitle = r.error ? ` title="${esc(r.error)}"` : "";
+          const errLine =
+            r.status === "failed" && r.error
+              ? `<div class="h err-h">${esc(r.error)}</div>`
+              : "";
+          return `<tr>
+        <td class="who"><div class="nm">${esc(r.name)}</div><div class="h">${esc(r.phone_masked)}</div>${errLine}</td>
+        <td class="hide-mob"><span class="chan ${r.channel === "max" ? "max" : "tg"}">${r.channel === "max" ? "MAX" : "Telegram"}</span></td>
+        <td>${esc(formatSentAt(r.sent_at))}</td>
+        <td><span class="status ${st.cls}"${errTitle}><span class="d" style="background:currentColor"></span>${esc(st.label)}</span></td>
+      </tr>`;
+        })
+        .join("");
+    }
+
+    const msgHtml = esc(c.message).replace(/\n/g, "<br>");
+    const recipientsHtml = recipientRowsHtml(recipients.items || []);
+    const pending =
+      c.pending_count ??
+      Math.max(
+        0,
+        (c.total_count || 0) - (c.ok_count ?? c.sent_count ?? 0) - (c.failed_count || 0)
+      );
+    const okCount = c.ok_count ?? c.sent_count ?? 0;
+
+    const leftActions = started
       ? `<div class="det-actions">
           <button class="btn primary" id="btnRepeat">Повторить рассылку</button>
         </div>`
       : `<div class="notsent">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><path d="M12 7v6M12 16h.01"/></svg>
-          <div>${c.status === "scheduled" ? "Рассылка запланирована. " : "Рассылка ещё не отправлена. "}Получатели и статистика появятся после отправки.</div>
+          <div>${
+            c.status === "scheduled"
+              ? `Запланирована на ${esc(c.when_short || c.when)}. ${fmtNum(c.total_count)} получателей уже в очереди.`
+              : `Черновик: ${fmtNum(c.total_count)} получателей готовы. Нажмите «Отправить сейчас», чтобы запустить.`
+          }</div>
         </div>
         <div class="det-actions">
           <button class="btn primary big" id="btnSendNow">Отправить сейчас</button>
-          <button class="btn big" onclick="go('compose')">Редактировать</button>
+          <button class="btn big" id="btnRepeat">Повторить как новую</button>
         </div>`;
 
-    const rightBody = sent
-      ? `<div class="subh">Как дошло</div>
+    const rightBody = `<div class="subh">${started ? "Как дошло" : "Очередь отправки"}</div>
         <div class="dstrip">
-          <div class="stat"><div class="n">${fmtNum(c.sent_count)}</div><div class="l">отправлено</div></div>
-          <div class="stat"><div class="n">${fmtNum(c.delivered_count || "—")}</div><div class="l">доставлено</div></div>
+          <div class="stat"><div class="n">${fmtNum(okCount)}</div><div class="l">отправлено</div></div>
+          <div class="stat"><div class="n">${fmtNum(pending)}</div><div class="l">в очереди</div></div>
           <div class="stat"><div class="n">${fmtNum(c.failed_count)}</div><div class="l">ошибок</div></div>
           <div class="stat"><div class="n">${fmtNum(c.total_count)}</div><div class="l">всего</div></div>
         </div>
-        <div class="subh">Получатели <span class="rcount">· ${fmtNum(recipients.total)} человек</span></div>
+        <div class="subh">Получатели <span class="rcount">· ${fmtNum(recipients.total ?? (recipients.items || []).length)} человек</span></div>
         <div class="searchbox">
           <svg class="si" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="m21 21-4.3-4.3"/></svg>
           <input type="text" id="rSearch" placeholder="Поиск по имени или телефону">
         </div>
         <div class="tbl-wrap" style="margin-top:12px">
           <table><thead><tr><th>Клиент</th><th class="hide-mob">Где</th><th>Когда</th><th>Статус</th></tr></thead>
-          <tbody id="rBody">${recipientsHtml || '<tr><td colspan="4" class="empty-state">Нет получателей</td></tr>'}</tbody></table>
-        </div>`
-      : `<div class="empty-rich" style="padding:28px 16px">
-          <div class="er-ic" aria-hidden="true">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M12 3v4M8 7h8"/><circle cx="12" cy="14" r="6"/><path d="M12 12v3"/></svg>
-          </div>
-          <div class="t">Ждём отправки</div>
-          <p class="d">После запуска здесь появятся статистика и список получателей.</p>
+          <tbody id="rBody">${recipientsHtml}</tbody></table>
         </div>`;
 
     $("#detailBody").innerHTML = `
@@ -696,7 +846,7 @@
                     AdminAPI.campaignMediaUrl(c.media_path)
                   )}" alt=""></div>`
                 : ""
-            }${msgHtml}<div class="tm">${sent ? "✓✓" : ""}</div></div>
+            }${msgHtml}<div class="tm">${started ? "✓✓" : ""}</div></div>
           </div>
           ${leftActions}
         </div>
@@ -748,16 +898,7 @@
       const data = await AdminAPI.recipients(c.id, { search: q });
       const body = $("#rBody");
       if (!body) return;
-      body.innerHTML = (data.items || [])
-        .map(
-          (r) => `<tr>
-          <td class="who"><div class="nm">${esc(r.name)}</div><div class="h">${esc(r.phone_masked)}</div></td>
-          <td class="hide-mob"><span class="chan ${r.channel === "max" ? "max" : "tg"}">${r.channel === "max" ? "MAX" : "Telegram"}</span></td>
-          <td>${esc(r.sent_at ? r.sent_at.slice(11, 16) : "—")}</td>
-          <td>${esc(r.status)}</td>
-        </tr>`
-        )
-        .join("");
+      body.innerHTML = recipientRowsHtml(data.items || []);
     });
   }
 
@@ -939,22 +1080,56 @@
       $("#clContacts").innerHTML = chips;
       const bday = (c.events || []).find((e) => e.kind === "bday");
       const anniv = (c.events || []).find((e) => e.kind === "anniv");
-      $("#clBday").textContent = bday ? bday.date_from : "—";
-      $("#clAnniv").textContent = anniv ? anniv.date_from : "—";
+      $("#clBday").textContent = bday
+        ? `${bday.date_label || bday.date_from}${bday.when_label ? " · " + bday.when_label : ""}`
+        : "—";
+      $("#clAnniv").textContent = anniv
+        ? `${anniv.date_label || anniv.date_from}${anniv.when_label ? " · " + anniv.when_label : ""}`
+        : "—";
       $("#clAnnivBtn")?.classList.toggle("hidden", !anniv);
       $("#clSince").textContent = c.since_label || "—";
       $("#clLast").textContent = c.last_order_label || "—";
-      $("#clEvents").innerHTML = (c.events || [])
-        .map(
-          (e) => `<div class="cev">
+      $("#clEvents").innerHTML =
+        (c.events || [])
+          .map((e) => {
+            const when = e.when_label || "";
+            const dateBit = e.next_date_label || e.date_label || e.date_from || "";
+            const auto = e.auto_send ? " auto" : "";
+            const greeted = e.greeted_today
+              ? `<span class="cev-badge ok">поздравили сегодня</span>`
+              : e.auto_send
+                ? `<span class="cev-badge auto">авто</span>`
+                : "";
+            return `<div class="cev${auto}" data-eid="${e.id}">
           <span class="cev-ic">${eventIcon(e.kind)}</span>
-          <div class="cev-b"><div class="cev-n">${esc(e.title)}</div><div class="cev-d">${esc(e.date_from)}</div></div>
-          <button class="mini-btn" data-kind="${esc(e.kind)}">${e.kind === "other" ? "Написать" : "Поздравить"}</button>
-        </div>`
-        )
-        .join("") || '<p class="hint">Нет событий</p>';
+          <div class="cev-b">
+            <div class="cev-n">${esc(e.kind_label || e.title)}${greeted}</div>
+            <div class="cev-d">${esc(dateBit)}${when ? " · " + esc(when) : ""}</div>
+          </div>
+          <label class="sw cev-sw" title="Автопоздравление">
+            <input type="checkbox" data-auto="${e.id}" ${e.auto_send ? "checked" : ""}>
+            <span class="track"></span>
+          </label>
+          <button class="mini-btn" data-kind="${esc(e.kind)}" data-eid="${e.id}">${
+              e.kind === "other" ? "Написать" : "Поздравить"
+            }</button>
+        </div>`;
+          })
+          .join("") || '<p class="hint">Нет событий в Posiflora</p>';
       $("#clEvents").querySelectorAll("[data-kind]").forEach((btn) => {
         btn.addEventListener("click", () => congratsCurrent(btn.dataset.kind));
+      });
+      $("#clEvents").querySelectorAll("[data-auto]").forEach((inp) => {
+        inp.addEventListener("change", async () => {
+          const row = inp.closest(".cev");
+          row?.classList.toggle("auto", inp.checked);
+          try {
+            await AdminAPI.setEventAuto(+inp.dataset.auto, inp.checked);
+          } catch {
+            inp.checked = !inp.checked;
+            row?.classList.toggle("auto", inp.checked);
+          }
+        });
       });
       const stats = c.order_stats || {};
       const statsEl = $("#clOrderStats");
@@ -979,14 +1154,15 @@
       }
       const msgBody = $("#clMsgBody");
       msgBody.innerHTML = (c.messages || [])
-        .map(
-          (m) => `<tr>
-          <td>${esc((m.date || "").slice(0, 10) || "—")}</td>
+        .map((m) => {
+          const st = recipientStatusMeta(m.status);
+          return `<tr>
+          <td>${esc(formatSentAt(m.date) !== "—" ? formatSentAt(m.date) : (m.date || "").slice(0, 10) || "—")}</td>
           <td class="who"><div class="nm">${esc(m.title)}</div></td>
           <td class="hide-mob"><span class="chan ${m.channel === "max" ? "max" : "tg"}">${m.channel === "max" ? "MAX" : "Telegram"}</span></td>
-          <td><span class="status ${m.status === "failed" ? "err" : "done"}">${esc(m.status)}</span></td>
-        </tr>`
-        )
+          <td><span class="status ${st.cls}">${esc(msgStatusLabel(m.status))}</span></td>
+        </tr>`;
+        })
         .join("") || '<tr><td colspan="4" class="empty-state">Пока нет сообщений</td></tr>';
     } catch {
       $("#clName").textContent = "Ошибка загрузки";
@@ -3857,10 +4033,26 @@
   });
 
   $("#wgAll")?.addEventListener("click", async () => {
-    try {
-      const data = await AdminAPI.events(60);
-      renderEvents(data.items || []);
-    } catch (_) {}
+    state.eventsExpanded = !state.eventsExpanded;
+    syncEventsFilters();
+    if (state.eventsExpanded && state.eventsDays < 60) {
+      await loadEvents(60);
+      return;
+    }
+    renderEvents({
+      items: state.eventsCache,
+      total: state.eventsCache.length,
+      today_count: state.eventsCache.filter((e) => e.days_until === 0).length,
+      auto_count: state.eventsCache.filter((e) => e.auto_send).length,
+    });
+  });
+
+  $$("#wgFilters .wg-f").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      const days = +btn.dataset.days || 7;
+      state.eventsExpanded = false;
+      loadEvents(days);
+    });
   });
 
   // ── AI chat ──────────────────────────────────────────────────────────────

@@ -187,12 +187,148 @@ def _format_relative(iso: str | None) -> str:
     return f"{days // 365} г. назад"
 
 
+_MONTHS_RU = (
+    "января",
+    "февраля",
+    "марта",
+    "апреля",
+    "мая",
+    "июня",
+    "июля",
+    "августа",
+    "сентября",
+    "октября",
+    "ноября",
+    "декабря",
+)
+_MONTHS_RU_SHORT = (
+    "янв",
+    "фев",
+    "мар",
+    "апр",
+    "мая",
+    "июн",
+    "июл",
+    "авг",
+    "сен",
+    "окт",
+    "ноя",
+    "дек",
+)
+
+
 def _when_label(days_until: int) -> tuple[str, str]:
     if days_until == 0:
         return "Сегодня", "today"
     if days_until == 1:
         return "Завтра", "soon"
+    if days_until <= 7:
+        return f"через {days_until} дн.", "soon"
     return f"через {days_until} дн.", "later"
+
+
+def _kind_label(kind: str) -> str:
+    return {
+        "bday": "День рождения",
+        "anniv": "Годовщина",
+        "other": "Событие",
+    }.get(kind or "other", "Событие")
+
+
+def _format_day_month(iso: str | None) -> str:
+    """15 марта — без года, удобно для ДР/годовщин."""
+    if not iso:
+        return "—"
+    raw = str(iso)[:10]
+    try:
+        dt = datetime.strptime(raw, "%Y-%m-%d")
+    except ValueError:
+        return raw
+    return f"{dt.day} {_MONTHS_RU[dt.month - 1]}"
+
+
+def _format_dt_short(iso: str | None) -> str:
+    """4 авг · 14:30"""
+    if not iso:
+        return "—"
+    try:
+        dt = datetime.fromisoformat(str(iso).replace("Z", "+00:00")).replace(tzinfo=None)
+    except ValueError:
+        return str(iso)[:16]
+    return f"{dt.day} {_MONTHS_RU_SHORT[dt.month - 1]} · {dt.strftime('%H:%M')}"
+
+
+def _next_occurrence(date_from: str | None) -> tuple[str | None, int | None]:
+    """Ближайшая дата события в этом/следующем году и дней до неё."""
+    if not date_from:
+        return None, None
+    raw = str(date_from)[:10]
+    try:
+        event_date = datetime.strptime(raw, "%Y-%m-%d").date()
+    except ValueError:
+        return None, None
+    today = datetime.now().date()
+    try:
+        this_year = event_date.replace(year=today.year)
+    except ValueError:
+        this_year = event_date.replace(year=today.year, day=28)
+    if this_year < today:
+        try:
+            this_year = event_date.replace(year=today.year + 1)
+        except ValueError:
+            this_year = event_date.replace(year=today.year + 1, day=28)
+    return this_year.isoformat(), (this_year - today).days
+
+
+def _primary_channel_for_event(e: dict) -> tuple[str, str]:
+    """Канал доставки для события: по реальным идентификаторам, не «любой телефон = TG»."""
+    has_tg = bool(e.get("tg_user_id"))
+    has_max = bool(e.get("max_user_id"))
+    has_phone = bool(e.get("customer_phone") or e.get("phone"))
+    # Userbot может писать по номеру в Telegram, даже без tg_user_id
+    if has_tg or has_phone:
+        if has_max:
+            return "TG · MAX", "tg"
+        return "Telegram", "tg"
+    if has_max:
+        return "MAX", "max"
+    return "нет канала", "none"
+
+
+def _public_event(e: dict, *, days_until: int | None = None, next_date: str | None = None) -> dict:
+    """Единый формат события для виджета и карточки клиента."""
+    if days_until is None or next_date is None:
+        computed_next, computed_days = _next_occurrence(e.get("date_from"))
+        next_date = next_date or computed_next
+        days_until = days_until if days_until is not None else computed_days
+    days_until = int(days_until) if days_until is not None else 0
+    when, when_class = _when_label(days_until)
+    chan, chan_class = _primary_channel_for_event(e)
+    last_auto = e.get("last_auto_sent_on")
+    today_iso = datetime.now().date().isoformat()
+    greeted_today = bool(last_auto and str(last_auto)[:10] == today_iso)
+    return {
+        "id": e["id"],
+        "customer_id": e.get("cust_id") or e.get("customer_id"),
+        "customer_name": e.get("customer_name"),
+        "phone": e.get("customer_phone") or e.get("phone"),
+        "phone_masked": _mask_phone(e.get("customer_phone") or e.get("phone") or ""),
+        "title": e["title"],
+        "kind": e["kind"],
+        "kind_label": _kind_label(e.get("kind") or "other"),
+        "date_from": e.get("date_from"),
+        "date_label": _format_day_month(e.get("date_from")),
+        "next_date": next_date,
+        "next_date_label": _format_day_month(next_date),
+        "days_until": days_until,
+        "when_label": when,
+        "when_class": when_class,
+        "auto_send": bool(e.get("auto_send")),
+        "last_auto_sent_on": last_auto,
+        "greeted_today": greeted_today,
+        "channel": chan,
+        "channel_class": chan_class,
+    }
 
 
 # ── auth ───────────────────────────────────────────────────────────────────
@@ -695,13 +831,16 @@ async def handle_client_detail(request: web.Request) -> web.Response:
             "created_in_pf_at": c.get("created_in_pf_at"),
             "since_label": _format_relative(c.get("created_in_pf_at")),
             "events": [
-                {
-                    "id": e["id"],
-                    "title": e["title"],
-                    "kind": e["kind"],
-                    "date_from": e["date_from"],
-                    "auto_send": bool(e["auto_send"]),
-                }
+                _public_event(
+                    {
+                        **e,
+                        "customer_name": c["name"],
+                        "customer_phone": c.get("phone"),
+                        "tg_user_id": c.get("tg_user_id"),
+                        "max_user_id": c.get("max_user_id"),
+                        "cust_id": c["id"],
+                    }
+                )
                 for e in events
             ],
             "messages": messages,
@@ -730,33 +869,31 @@ async def handle_events_upcoming(request: web.Request) -> web.Response:
     err = await _require_admin(request)
     if err:
         return err
-    days = int(request.query.get("days", "14"))
-    events = await list_upcoming_events(days=days)
-    items = []
-    for e in events:
-        when, when_class = _when_label(int(e.get("days_until", 0)))
-        chan = "Telegram" if e.get("tg_user_id") or e.get("customer_phone") else "MAX"
-        chan_class = "tg" if chan == "Telegram" else "max"
-        items.append(
-            {
-                "id": e["id"],
-                "customer_id": e.get("cust_id") or e.get("customer_id"),
-                "customer_name": e.get("customer_name"),
-                "phone": e.get("customer_phone"),
-                "phone_masked": _mask_phone(e.get("customer_phone") or ""),
-                "title": e["title"],
-                "kind": e["kind"],
-                "date_from": e["date_from"],
-                "next_date": e.get("next_date"),
-                "days_until": e.get("days_until"),
-                "when_label": when,
-                "when_class": when_class,
-                "auto_send": bool(e["auto_send"]),
-                "channel": chan,
-                "channel_class": chan_class,
-            }
+    try:
+        days = int(request.query.get("days", "14"))
+    except ValueError:
+        days = 14
+    days = max(1, min(days, 366))
+    events = await list_upcoming_events(days=days, limit=200)
+    items = [
+        _public_event(
+            e,
+            days_until=int(e.get("days_until", 0)),
+            next_date=e.get("next_date"),
         )
-    return _json({"items": items})
+        for e in events
+    ]
+    today_count = sum(1 for i in items if i["days_until"] == 0)
+    auto_count = sum(1 for i in items if i["auto_send"])
+    return _json(
+        {
+            "items": items,
+            "days": days,
+            "total": len(items),
+            "today_count": today_count,
+            "auto_count": auto_count,
+        }
+    )
 
 
 async def handle_event_patch(request: web.Request) -> web.Response:
@@ -792,15 +929,33 @@ def _campaign_public(c: dict) -> dict:
         "error": ("Ошибка", "err"),
     }
     label, sclass = status_map.get(status, (status, "neutral"))
+    total = int(c.get("total_count") or 0)
+    sent = int(c.get("sent_count") or 0)
+    failed = int(c.get("failed_count") or 0)
+    delivered = int(c.get("delivered_count") or 0)
+    # Доставлено отдельно почти не пишется — успешные уходят в sent
+    ok_count = max(sent, delivered)
+    pending = max(0, total - ok_count - failed)
     when = "—"
+    when_short = "—"
     if status == "sending":
-        when = f"Идёт сейчас · {c.get('sent_count', 0)} из {c.get('total_count', 0)}"
+        when = f"Идёт сейчас · {ok_count} из {total}"
+        when_short = f"{ok_count}/{total}"
     elif status == "scheduled" and c.get("scheduled_at"):
-        when = f"Запланирована на {c['scheduled_at']}"
+        when = f"Запланирована на {_format_dt_short(c['scheduled_at'])}"
+        when_short = _format_dt_short(c["scheduled_at"])
     elif status == "done":
-        when = f"Отправлена {c.get('updated_at') or c.get('created_at') or ''}"
+        stamp = c.get("updated_at") or c.get("created_at")
+        when = f"Отправлена {_format_dt_short(stamp)}"
+        when_short = _format_dt_short(stamp)
+        if failed:
+            when += f" · {failed} с ошибкой"
     elif status == "draft":
-        when = "Ещё не отправлена"
+        when = f"Черновик · {total} в очереди" if total else "Черновик · ещё не отправлена"
+        when_short = "Черновик"
+    elif status == "error":
+        when = "Ошибка отправки"
+        when_short = "Ошибка"
     channels = (c.get("channels") or "tg").replace("tg", "Telegram").replace("max", "MAX")
     media_path = c.get("media_path") or None
     return {
@@ -815,11 +970,14 @@ def _campaign_public(c: dict) -> dict:
         "status_label": label,
         "status_class": sclass,
         "when": when,
+        "when_short": when_short,
         "scheduled_at": c.get("scheduled_at"),
-        "total_count": c.get("total_count", 0),
-        "sent_count": c.get("sent_count", 0),
-        "delivered_count": c.get("delivered_count", 0),
-        "failed_count": c.get("failed_count", 0),
+        "total_count": total,
+        "sent_count": sent,
+        "delivered_count": delivered,
+        "ok_count": ok_count,
+        "failed_count": failed,
+        "pending_count": pending,
         "created_at": c.get("created_at"),
         "updated_at": c.get("updated_at"),
         "media_path": media_path,

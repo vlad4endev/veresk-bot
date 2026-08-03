@@ -112,7 +112,7 @@
         </button>
       </div>
       <div class="head-row dk-flex">
-        <div><h1>Рассылки</h1><p>Сообщения клиентам в Telegram и MAX</p></div>
+        <div><h1>Рассылки</h1><p>Массовые сообщения и поводы написать клиентам в Telegram и MAX</p></div>
         <div class="spacer"></div>
         <button class="btn primary big" onclick="go('compose')"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M12 5v14M5 12h14"/></svg>Создать рассылку</button>
       </div>
@@ -125,20 +125,26 @@
           </div>
           <div class="kpi">
             <div class="kpi-ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="6" y="2" width="12" height="20" rx="3"/><path d="M11 18h2"/></svg></div>
-            <div><div class="n" id="statAccounts">—</div><div class="l">аккаунта готовы к работе</div></div>
+            <div><div class="n" id="statAccounts">—</div><div class="l">аккаунтов готовы к отправке</div></div>
           </div>
           <div class="kpi">
             <div class="kpi-ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="m3 11 18-8-8 18-2-8z"/></svg></div>
-            <div><div class="n" id="statDelivery">—</div><div class="l">доставка за месяц</div></div>
+            <div><div class="n" id="statDelivery">—</div><div class="l" id="statDeliveryLabel">успешно за месяц</div></div>
           </div>
         </div>
         <div class="widget">
           <div class="wg-head">
             <div>
               <h3>События клиентов</h3>
-              <span class="sub">Поводы написать — из Posiflora</span>
+              <span class="sub" id="wgEventsSub">Дни рождения и годовщины из Posiflora</span>
             </div>
-            <button class="wg-all" id="wgAll">Все события</button>
+            <button class="wg-all" id="wgAll" type="button">Показать все</button>
+          </div>
+          <div class="wg-filters" id="wgFilters" role="tablist" aria-label="Период событий">
+            <button type="button" class="wg-f on" data-days="7">7 дней</button>
+            <button type="button" class="wg-f" data-days="14">14 дней</button>
+            <button type="button" class="wg-f" data-days="30">30 дней</button>
+            <button type="button" class="wg-f" data-days="60">60 дней</button>
           </div>
           <div id="eventsList"></div>
         </div>
@@ -151,7 +157,7 @@
             <span class="cp-count" id="campaignsCount"></span>
           </div>
         </div>
-        <div class="mhead dk-grid" id="campaignsHead"><span></span><span>Рассылка</span><span>Где</span><span>Статус</span><span></span></div>
+        <div class="mhead dk-grid" id="campaignsHead"><span></span><span>Рассылка</span><span>Где</span><span>Статус и когда</span><span></span></div>
         <div class="rlist" id="campaignsList"></div>
       </div>
     </section>
@@ -236,7 +242,8 @@
           </div>
         </div>
         <div class="cl-card">
-          <h4>Все события</h4>
+          <h4>События и автопоздравления</h4>
+          <p class="cl-card-hint">Включите «Авто» — бот сам поздравит в день события. Или напишите вручную.</p>
           <div id="clEvents"></div>
         </div>
       </div>
