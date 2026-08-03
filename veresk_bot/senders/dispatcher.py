@@ -104,10 +104,14 @@ async def _send_via_channel(
     text: str,
     tg_user_id: int | None = None,
     max_user_id: int | None = None,
+    media_path: str | None = None,
+    media_filename: str | None = None,
+    media_mime: str | None = None,
 ) -> tuple[bool, str, str | None]:
     """Возвращает (ok, status, error). status: sent | failed | deferred."""
     body = _personalize(text, name)
     ch = normalize_channel(channel) or channel
+    media = (media_path or "").strip() or None
 
     if ch == "tg":
         account = await pick_ready_account("tg_userbot")
@@ -121,6 +125,7 @@ async def _send_via_channel(
             name=name,
             text=body,
             tg_user_id=tg_user_id,
+            media_path=media,
         )
         if result.ok:
             await bump_account_sent(int(account["id"]))
@@ -148,6 +153,9 @@ async def _send_via_channel(
                     name=name,
                     text=body,
                     max_user_id=resolved,
+                    media_path=media,
+                    media_filename=media_filename,
+                    media_mime=media_mime,
                 )
                 if result.ok:
                     await bump_account_sent(int(account["id"]))
@@ -170,6 +178,9 @@ async def _send_via_channel(
             name=name,
             text=body,
             max_user_id=resolved,
+            media_path=media,
+            media_filename=media_filename,
+            media_mime=media_mime,
         )
         return result.ok, result.status, result.error
 
@@ -212,6 +223,14 @@ async def process_campaign_batch() -> int:
             processed += 1
             continue
 
+        media_stored = row.get("campaign_media_path")
+        media_abs = None
+        if media_stored:
+            from campaign_media import resolve_campaign_media
+
+            resolved = resolve_campaign_media(media_stored)
+            media_abs = str(resolved) if resolved else None
+
         ok, status, error = await _send_via_channel(
             channel,
             phone=phone,
@@ -219,6 +238,9 @@ async def process_campaign_batch() -> int:
             text=text,
             tg_user_id=tg_uid,
             max_user_id=max_uid,
+            media_path=media_abs,
+            media_filename=row.get("campaign_media_filename"),
+            media_mime=row.get("campaign_media_mime"),
         )
         if not ok and _is_defer(status, error):
             # Дневной лимит / нет аккаунта — не сжигаем очередь, подождём

@@ -802,6 +802,7 @@ def _campaign_public(c: dict) -> dict:
     elif status == "draft":
         when = "Ещё не отправлена"
     channels = (c.get("channels") or "tg").replace("tg", "Telegram").replace("max", "MAX")
+    media_path = c.get("media_path") or None
     return {
         "id": c["id"],
         "title": c["title"],
@@ -821,6 +822,14 @@ def _campaign_public(c: dict) -> dict:
         "failed_count": c.get("failed_count", 0),
         "created_at": c.get("created_at"),
         "updated_at": c.get("updated_at"),
+        "media_path": media_path,
+        "media_kind": c.get("media_kind"),
+        "media_filename": c.get("media_filename"),
+        "media_mime": c.get("media_mime"),
+        "media_url": (
+            f"/api/admin/campaigns/media/{media_path}" if media_path else None
+        ),
+        "has_media": bool(media_path),
     }
 
 
@@ -864,6 +873,71 @@ async def handle_mailing_preview(request: web.Request) -> web.Response:
     return _json(data)
 
 
+async def handle_campaign_media_upload(request: web.Request) -> web.Response:
+    """Загрузка одного фото для рассылки (multipart field: file)."""
+    err = await _require_admin(request)
+    if err:
+        return err
+    if not (request.content_type or "").startswith("multipart/"):
+        return _json({"error": "multipart_required"}, status=400)
+    from campaign_media import CAMPAIGN_MEDIA_MAX_BYTES, save_campaign_photo
+
+    reader = await request.multipart()
+    raw = b""
+    filename = ""
+    mime = ""
+    while True:
+        part = await reader.next()
+        if part is None:
+            break
+        if part.name == "file":
+            filename = part.filename or "photo.jpg"
+            mime = part.headers.get("Content-Type", "") or ""
+            raw = await part.read(decode=False)
+        else:
+            await part.read(decode=False)
+    if not raw:
+        return _json({"error": "file_required"}, status=400)
+    if len(raw) > CAMPAIGN_MEDIA_MAX_BYTES:
+        return _json(
+            {"error": "file_too_large", "max_mb": CAMPAIGN_MEDIA_MAX_BYTES // (1024 * 1024)},
+            status=413,
+        )
+    try:
+        meta = save_campaign_photo(raw, filename=filename, mime=mime)
+    except ValueError as exc:
+        code = str(exc)
+        if code == "only_images":
+            return _json(
+                {"error": "only_images", "message": "Можно прикрепить только фото (JPG, PNG, WEBP, GIF)"},
+                status=400,
+            )
+        if code == "file_too_large":
+            return _json({"error": "file_too_large"}, status=413)
+        return _json({"error": code or "bad_file"}, status=400)
+    return _json(
+        {
+            "ok": True,
+            **meta,
+            "media_url": f"/api/admin/campaigns/media/{meta['media_path']}",
+        }
+    )
+
+
+async def handle_campaign_media_get(request: web.Request) -> web.Response:
+    """Отдача сохранённого фото рассылки (с авторизацией)."""
+    err = await _require_admin(request)
+    if err:
+        return err
+    from campaign_media import resolve_campaign_media
+
+    name = str(request.match_info.get("name") or "")
+    path = resolve_campaign_media(name)
+    if not path:
+        return _json({"error": "not_found"}, status=404)
+    return web.FileResponse(path)
+
+
 async def handle_campaign_create(request: web.Request) -> web.Response:
     err = await _require_admin(request)
     if err:
@@ -894,6 +968,20 @@ async def handle_campaign_create(request: web.Request) -> web.Response:
         status = "sending"
     elif scheduled_at:
         status = "scheduled"
+
+    media_path = str(body.get("media_path") or "").strip() or None
+    media_kind = None
+    media_filename = None
+    media_mime = None
+    if media_path:
+        from campaign_media import resolve_campaign_media
+
+        resolved = resolve_campaign_media(media_path)
+        if not resolved:
+            return _json({"error": "media_not_found"}, status=400)
+        media_kind = str(body.get("media_kind") or "photo")
+        media_filename = str(body.get("media_filename") or resolved.name)[:180]
+        media_mime = str(body.get("media_mime") or "image/jpeg")
 
     # Сверка клиентов с аккаунтами до постановки в очередь
     customers = await customers_for_segment(segment)
@@ -944,6 +1032,10 @@ async def handle_campaign_create(request: web.Request) -> web.Response:
         emoji=emoji,
         status=status,
         scheduled_at=scheduled_at,
+        media_path=media_path,
+        media_kind=media_kind,
+        media_filename=media_filename,
+        media_mime=media_mime,
     )
     await add_campaign_recipients(cid, recipients)
     c = await get_campaign(cid)
@@ -3989,6 +4081,8 @@ def setup_admin_routes(app: web.Application) -> None:
         ("/api/admin/events/{id}", handle_event_patch, "PATCH"),
         ("/api/admin/campaigns", handle_campaigns_list, "GET"),
         ("/api/admin/campaigns", handle_campaign_create, "POST"),
+        ("/api/admin/campaigns/media", handle_campaign_media_upload, "POST"),
+        ("/api/admin/campaigns/media/{name}", handle_campaign_media_get, "GET"),
         ("/api/admin/campaigns/{id}", handle_campaign_get, "GET"),
         ("/api/admin/campaigns/{id}", handle_campaign_patch, "PATCH"),
         ("/api/admin/campaigns/{id}/recipients", handle_campaign_recipients, "GET"),

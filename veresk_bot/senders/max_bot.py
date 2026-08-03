@@ -90,6 +90,9 @@ class MaxBotSender:
         name: str,
         text: str,
         max_user_id: int | None = None,
+        media_path: str | None = None,
+        media_filename: str | None = None,
+        media_mime: str | None = None,
     ) -> SendResult:
         if not self.available:
             return SendResult(
@@ -124,7 +127,36 @@ class MaxBotSender:
 
         api = MaxBotAPI(self.token)
         try:
-            await api.send_message(user_id=user_id, text=text, markdown=False)
+            attachments = None
+            media = (media_path or "").strip()
+            if media:
+                from pathlib import Path
+
+                path = Path(media)
+                if not path.is_file():
+                    return SendResult(
+                        ok=False,
+                        status="failed",
+                        error="Файл вложения не найден",
+                    )
+                raw = path.read_bytes()
+                filename = media_filename or path.name
+                mime = media_mime or "image/jpeg"
+                upload_type = "image" if str(mime).startswith("image/") else "file"
+                attachments = [
+                    await api.upload_file(
+                        upload_type,
+                        raw,
+                        filename=filename,
+                        content_type=mime,
+                    )
+                ]
+            await api.send_message(
+                user_id=user_id,
+                text=text,
+                attachments=attachments,
+                markdown=False,
+            )
             logger.info("MAX рассылка: отправлено user_id=%s (%s)", user_id, name)
             return SendResult(ok=True, status="sent")
         except MaxAPIError as exc:

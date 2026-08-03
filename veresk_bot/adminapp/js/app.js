@@ -59,7 +59,17 @@
     curClient: null,
     curCampaign: null,
     curPerson: null,
-    wizard: { segment: "regular", message: "", when: "later", date: "", time: "10:00", channels: ["tg"] },
+    wizard: {
+      segment: "regular",
+      message: "",
+      when: "now",
+      date: "",
+      time: "10:00",
+      channels: ["tg"],
+      willSend: null,
+      keepMessage: false,
+      media: null, // { media_path, media_filename, media_mime, media_kind, localUrl }
+    },
     tgPhone: "",
     maxPhone: "",
     step: 0,
@@ -188,7 +198,10 @@
       openStaffCreateModal(false);
     }
     window.scrollTo({ top: 0, behavior: "smooth" });
-    if (tab === "compose") setStep(0);
+    if (tab === "compose") {
+      if (typeof resetComposeForm === "function") resetComposeForm();
+      setStep(0);
+    }
     if (tab === "home") loadHome();
     if (tab === "clients") loadClients();
     if (tab === "bots") loadBotsStatus();
@@ -677,7 +690,13 @@
           <div class="subh" style="margin-bottom:10px">Текст сообщения</div>
           <div class="phone msgcard phone-sticky">
             <div class="ptop"><div class="dot">V</div>Veresk</div>
-            <div class="bubble">${msgHtml}<div class="tm">${sent ? "✓✓" : ""}</div></div>
+            <div class="bubble">${
+              c.has_media && c.media_path
+                ? `<div class="detail-media"><img src="${esc(
+                    AdminAPI.campaignMediaUrl(c.media_path)
+                  )}" alt=""></div>`
+                : ""
+            }${msgHtml}<div class="tm">${sent ? "✓✓" : ""}</div></div>
           </div>
           ${leftActions}
         </div>
@@ -696,7 +715,31 @@
       openDetail(c.id);
     });
     $("#btnRepeat")?.addEventListener("click", () => {
-      $("#msg").value = c.message;
+      state.wizard.keepMessage = true;
+      const ta = $("#msg");
+      if (ta) ta.value = c.message;
+      const seg = c.segment || "all";
+      state.wizard.segment = seg;
+      $$("#s0 .choice").forEach((btn) =>
+        btn.classList.toggle("on", btn.dataset.seg === seg)
+      );
+      const chans = String(c.channels || "tg")
+        .toLowerCase()
+        .split(",")
+        .map((x) => x.trim())
+        .filter(Boolean);
+      const wantTg = chans.some((x) => x === "tg" || x === "telegram");
+      const wantMax = chans.some((x) => x === "max");
+      $("#chanTg")?.classList.toggle("on", wantTg || (!wantTg && !wantMax));
+      $("#chanTg")?.setAttribute(
+        "aria-pressed",
+        $("#chanTg")?.classList.contains("on") ? "true" : "false"
+      );
+      $("#chanMax")?.classList.toggle("on", wantMax);
+      $("#chanMax")?.setAttribute(
+        "aria-pressed",
+        wantMax ? "true" : "false"
+      );
       go("compose");
       setStep(1);
     });
@@ -3081,6 +3124,43 @@
 
   // ── wizard ──────────────────────────────────────────────────────────────
 
+  const DEFAULT_MSG =
+    "Здравствуйте, {имя}!\n\nТолько для вас — весенние букеты со скидкой 15%.\n\nЗаказать: veresk.flowers";
+
+  const SEG_LABELS = {
+    regular: "Постоянные",
+    all: "Все клиенты",
+    new: "Новые",
+    inactive: "Давно не заказывали",
+  };
+
+  const AI_CHIP_PROMPTS = {
+    regular: {
+      promo: "Тёплое предложение со скидкой 15% для постоянных клиентов, благодарность за доверие",
+      holiday: "Напомнить постоянным клиентам о празднике и предложить заказать букет заранее",
+      new: "Анонс новинок для постоянных клиентов, пригласить посмотреть в салоне",
+      winback: "Мягко напомнить постоянным клиентам о себе без давления",
+    },
+    all: {
+      promo: "Скидка 15% на весенние букеты, тёплое предложение для клиентов",
+      holiday: "Напомнить о предстоящем празднике и предложить заказать букет заранее",
+      new: "Анонс новых букетов в салоне, пригласить посмотреть",
+      winback: "Короткое дружелюбное приглашение заглянуть за букетом",
+    },
+    new: {
+      promo: "Приветствие новым клиентам со скидкой 15% на первый/следующий букет",
+      holiday: "Познакомить новых клиентов с салоном к празднику, мягко предложить букет",
+      new: "Показать новинки новым клиентам, пригласить в салон",
+      winback: "Тёплое продолжение знакомства с новыми клиентами без давления",
+    },
+    inactive: {
+      promo: "Мягко вернуть клиентов со скидкой 15%, без давления и упрёков",
+      holiday: "Напомнить о празднике клиентам, которые давно не заказывали",
+      new: "Показать, что в салоне появились новые букеты — пригласить вернуться",
+      winback: "Мягко вернуть клиентов, которые давно не заказывали, без давления",
+    },
+  };
+
   function selectedChannels() {
     const list = [];
     if ($("#chanTg")?.classList.contains("on")) list.push("tg");
@@ -3094,12 +3174,100 @@
       .join(" + ");
   }
 
+  function currentSegment() {
+    return $("#s0 .choice.on")?.dataset.seg || state.wizard.segment || "all";
+  }
+
+  function segmentLabel(seg) {
+    return SEG_LABELS[seg] || "Клиенты";
+  }
+
+  function hasAudience() {
+    return (state.wizard.willSend || 0) > 0;
+  }
+
+  function setAudienceError(show) {
+    const el = $("#audienceError");
+    if (!el) return;
+    el.hidden = !show;
+  }
+
+  function updateAudienceContext() {
+    const el = $("#wizAudienceText");
+    if (!el) return;
+    const seg = currentSegment();
+    const will = state.wizard.willSend;
+    const ch = channelsLabel(selectedChannels());
+    const count =
+      will == null ? "…" : will > 0 ? fmtNum(will) + " доставок" : "нет доставок";
+    el.textContent = `${segmentLabel(seg)} · ${count} · ${ch}`;
+  }
+
+  function adaptAiChipsForSegment() {
+    const seg = currentSegment();
+    const map = AI_CHIP_PROMPTS[seg] || AI_CHIP_PROMPTS.all;
+    $$("#aiChips .ai-chip").forEach((chip) => {
+      const key = chip.dataset.chip;
+      if (key && map[key]) chip.dataset.prompt = map[key];
+    });
+  }
+
+  function refreshSendSummary() {
+    const seg = currentSegment();
+    const will = state.wizard.willSend;
+    const channels = selectedChannels();
+    if ($("#sumSeg")) $("#sumSeg").textContent = segmentLabel(seg);
+    if ($("#sumChannels")) $("#sumChannels").textContent = channelsLabel(channels);
+    if ($("#sumWho")) {
+      $("#sumWho").textContent =
+        will == null ? "…" : will > 0 ? fmtNum(will) + " доставок" : "нет получателей";
+    }
+    if ($("#sumMsg")) {
+      const raw = (msgTa?.value || "").trim().replace(/\s+/g, " ");
+      $("#sumMsg").textContent = raw
+        ? raw.slice(0, 90) + (raw.length > 90 ? "…" : "")
+        : "—";
+    }
+    const mediaRow = $("#sumMediaRow");
+    const mediaLabel = $("#sumMedia");
+    if (mediaRow) {
+      const has = !!(state.wizard.media && state.wizard.media.media_path);
+      mediaRow.hidden = !has;
+      if (mediaLabel) {
+        mediaLabel.textContent = has
+          ? state.wizard.media.media_filename || "прикреплено"
+          : "—";
+      }
+    }
+    updateWhenSummary();
+  }
+
+  function updateWhenSummary() {
+    const when = state.wizard.when || $("#s2 .choice.on")?.dataset.when || "now";
+    const sumWhen = $("#sumWhen");
+    if (!sumWhen) return;
+    if (when === "now") sumWhen.textContent = "сейчас";
+    else
+      sumWhen.textContent =
+        ($("#wizDate").value || "") + ", " + ($("#wizTime").value || "10:00");
+  }
+
+  function syncWizardCta() {
+    const nextBtn = $("#wnext");
+    if (!nextBtn || state.step >= 3) return;
+    if (state.step === 2) {
+      const when = state.wizard.when || $("#s2 .choice.on")?.dataset.when || "now";
+      nextBtn.textContent = when === "now" ? "Отправить сейчас" : "Запланировать";
+    } else {
+      nextBtn.textContent = "Далее";
+    }
+  }
+
   async function refreshMatchPreview() {
-    const segment = $("#s0 .choice.on")?.dataset.seg || state.wizard.segment || "all";
+    const segment = currentSegment();
     const channels = selectedChannels();
     state.wizard.channels = channels;
-    const sumCh = $("#sumChannels");
-    if (sumCh) sumCh.textContent = channelsLabel(channels);
+    state.wizard.segment = segment;
     const box = $("#matchPreview");
     try {
       const data = await AdminAPI.mailingPreview({
@@ -3107,6 +3275,7 @@
         channels: channels.join(","),
       });
       const will = data.will_send || 0;
+      state.wizard.willSend = will;
       const tgN = (data.reachable && data.reachable.tg) || 0;
       const maxN = (data.reachable && data.reachable.max) || 0;
       if ($("#matchWill")) $("#matchWill").textContent = fmtNum(will) + " доставок";
@@ -3114,13 +3283,14 @@
       if ($("#matchMax")) $("#matchMax").textContent = fmtNum(maxN);
       if ($("#matchTgRow")) $("#matchTgRow").hidden = !channels.includes("tg");
       if ($("#matchMaxRow")) $("#matchMaxRow").hidden = !channels.includes("max");
-      if ($("#sumWho")) $("#sumWho").textContent = fmtNum(will) + " доставок";
 
       const tgAcc = data.accounts && data.accounts.tg;
       const maxAcc = data.accounts && data.accounts.max;
       if ($("#chanTgMeta")) {
         $("#chanTgMeta").textContent = tgAcc?.ready
-          ? (tgAcc.count > 1 ? tgAcc.count + " акк." : "аккаунт готов")
+          ? tgAcc.count > 1
+            ? tgAcc.count + " акк."
+            : "аккаунт готов"
           : "нет аккаунта";
       }
       if ($("#chanMaxMeta")) {
@@ -3160,8 +3330,15 @@
         }
       }
       if (box) box.hidden = false;
+      if (will > 0) setAudienceError(false);
+      updateAudienceContext();
+      if (state.step === 2) refreshSendSummary();
+      syncComposeNext();
     } catch (_) {
+      state.wizard.willSend = null;
       if (box) box.hidden = true;
+      updateAudienceContext();
+      syncComposeNext();
     }
   }
 
@@ -3179,6 +3356,155 @@
     } catch (_) {}
   }
 
+  function clearComposeMedia() {
+    if (state.wizard.media?.localUrl) {
+      try {
+        URL.revokeObjectURL(state.wizard.media.localUrl);
+      } catch (_) {}
+    }
+    state.wizard.media = null;
+    const fileInp = $("#mediaFile");
+    if (fileInp) fileInp.value = "";
+    syncMediaUi();
+  }
+
+  function syncMediaUi() {
+    const media = state.wizard.media;
+    const wrap = $("#mediaPreviewWrap");
+    const img = $("#mediaPreviewImg");
+    const nameEl = $("#mediaPreviewName");
+    const pick = $("#mediaPick");
+    const hint = $("#mediaHint");
+    const bubbleMedia = $("#msgMediaPreview");
+    const bubbleImg = $("#msgMediaImg");
+    const err = $("#mediaError");
+    if (err) err.hidden = true;
+    if (wrap) wrap.hidden = !media;
+    if (pick) pick.hidden = !!media;
+    if (hint) hint.hidden = !!media;
+    if (media) {
+      if (img) img.src = media.localUrl || AdminAPI.campaignMediaUrl(media.media_path);
+      if (nameEl) nameEl.textContent = media.media_filename || "фото";
+      if (bubbleMedia) bubbleMedia.hidden = false;
+      if (bubbleImg)
+        bubbleImg.src = media.localUrl || AdminAPI.campaignMediaUrl(media.media_path);
+    } else {
+      if (bubbleMedia) bubbleMedia.hidden = true;
+      if (bubbleImg) bubbleImg.removeAttribute("src");
+    }
+  }
+
+  function setMediaError(text) {
+    const err = $("#mediaError");
+    if (!err) return;
+    if (!text) {
+      err.hidden = true;
+      err.textContent = "";
+      return;
+    }
+    err.hidden = false;
+    err.textContent = text;
+  }
+
+  async function onMediaFileChosen(file) {
+    if (!file) return;
+    if (!String(file.type || "").startsWith("image/")) {
+      setMediaError("Можно прикрепить только фото");
+      return;
+    }
+    if (file.size > 10 * 1024 * 1024) {
+      setMediaError("Файл больше 10 МБ");
+      return;
+    }
+    const box = $("#mediaAttach");
+    box?.classList.add("busy");
+    setMediaError("");
+    const localUrl = URL.createObjectURL(file);
+    try {
+      const res = await AdminAPI.uploadCampaignMedia(file);
+      if (state.wizard.media?.localUrl) {
+        try {
+          URL.revokeObjectURL(state.wizard.media.localUrl);
+        } catch (_) {}
+      }
+      state.wizard.media = {
+        media_path: res.media_path,
+        media_kind: res.media_kind || "photo",
+        media_filename: res.media_filename || file.name,
+        media_mime: res.media_mime || file.type,
+        localUrl,
+      };
+      syncMediaUi();
+    } catch (err) {
+      try {
+        URL.revokeObjectURL(localUrl);
+      } catch (_) {}
+      const msg =
+        err.data?.message ||
+        (err.data?.error === "only_images"
+          ? "Можно прикрепить только фото"
+          : err.data?.error === "file_too_large"
+            ? "Файл больше 10 МБ"
+            : null) ||
+        err.message ||
+        "Не удалось загрузить фото";
+      setMediaError(msg);
+    }
+    box?.classList.remove("busy");
+  }
+
+  $("#mediaPick")?.addEventListener("click", () => $("#mediaFile")?.click());
+  $("#mediaClear")?.addEventListener("click", () => {
+    clearComposeMedia();
+  });
+  $("#mediaFile")?.addEventListener("change", () => {
+    const file = $("#mediaFile")?.files?.[0];
+    onMediaFileChosen(file);
+  });
+
+  function resetComposeForm() {
+    setAudienceError(false);
+    setMsgError(false);
+    setAiOpen(false);
+    if (aiUndoRow) aiUndoRow.hidden = true;
+
+    // повтор рассылки: оставляем текст/аудиторию, которые уже выставили снаружи
+    if (state.wizard.keepMessage) {
+      state.wizard.keepMessage = false;
+      state.wizard.when = "now";
+      $$("#s2 .choice").forEach((c) =>
+        c.classList.toggle("on", c.dataset.when === "now")
+      );
+      const datebox = $("#datebox");
+      if (datebox) datebox.style.display = "none";
+      updatePreview();
+      updateAudienceContext();
+      syncMediaUi();
+      return;
+    }
+
+    state.wizard.segment = "regular";
+    state.wizard.when = "now";
+    state.wizard.willSend = null;
+    state.wizard.channels = ["tg"];
+    clearComposeMedia();
+    $$("#s0 .choice").forEach((c) =>
+      c.classList.toggle("on", c.dataset.seg === "regular")
+    );
+    $("#chanTg")?.classList.add("on");
+    $("#chanTg")?.setAttribute("aria-pressed", "true");
+    $("#chanMax")?.classList.remove("on");
+    $("#chanMax")?.setAttribute("aria-pressed", "false");
+    $$("#s2 .choice").forEach((c) =>
+      c.classList.toggle("on", c.dataset.when === "now")
+    );
+    const datebox = $("#datebox");
+    if (datebox) datebox.style.display = "none";
+    if (msgTa) msgTa.value = DEFAULT_MSG;
+    updatePreview();
+    updateAudienceContext();
+  }
+
   $$("#s0 .choice").forEach((c) =>
     c.addEventListener("click", () => {
       $$("#s0 .choice").forEach((x) => x.classList.remove("on"));
@@ -3192,7 +3518,6 @@
     btn.addEventListener("click", () => {
       btn.classList.toggle("on");
       btn.setAttribute("aria-pressed", btn.classList.contains("on") ? "true" : "false");
-      // хотя бы один канал должен остаться включённым
       if (!selectedChannels().length) {
         btn.classList.add("on");
         btn.setAttribute("aria-pressed", "true");
@@ -3207,30 +3532,82 @@
       c.classList.add("on");
       state.wizard.when = c.dataset.when;
       $("#datebox").style.display = c.dataset.when === "later" ? "flex" : "none";
+      updateWhenSummary();
+      syncWizardCta();
     })
   );
 
+  $("#wizDate")?.addEventListener("change", updateWhenSummary);
+  $("#wizTime")?.addEventListener("change", updateWhenSummary);
+  $("#wizTime")?.addEventListener("input", updateWhenSummary);
+
   const msgTa = $("#msg");
-  function updatePreview() {
-    const disc = "15%"; // совпадает с MAILING_DISCOUNT_TEXT по умолчанию
-    $("#msgPreview").innerHTML = esc(msgTa.value)
-      .replace(/\{имя\}/g, "Мария")
-      .replace(/\{скидка\}/gi, disc)
-      .replace(/\n/g, "<br>");
+  const msgError = $("#msgError");
+  const msgPreviewEl = $("#msgPreview");
+
+  function messageHasText() {
+    return !!(msgTa && msgTa.value.trim());
   }
+
+  function setMsgError(show) {
+    if (!msgError) return;
+    msgError.hidden = !show;
+    msgTa?.classList.toggle("has-error", !!show);
+  }
+
+  function syncComposeNext() {
+    const nextBtn = $("#wnext");
+    if (!nextBtn || state.step >= 3) return;
+    if (state.step === 0) {
+      nextBtn.disabled = !hasAudience();
+    } else if (state.step === 1) {
+      nextBtn.disabled = !messageHasText();
+    } else if (state.step === 2) {
+      nextBtn.disabled = !hasAudience() || !messageHasText();
+    }
+    syncWizardCta();
+  }
+
+  function updatePreview() {
+    if (!msgPreviewEl || !msgTa) return;
+    const raw = msgTa.value;
+    const disc = "15%";
+    if (!raw.trim()) {
+      msgPreviewEl.innerHTML = `<span class="pv-empty">Текст появится здесь…</span>`;
+    } else {
+      msgPreviewEl.innerHTML = esc(raw)
+        .replace(/\{имя\}/g, '<b class="pv-var">Мария</b>')
+        .replace(/\{скидка\}/gi, `<b class="pv-var">${esc(disc)}</b>`)
+        .replace(/\n/g, "<br>");
+    }
+    if (messageHasText()) setMsgError(false);
+    syncComposeNext();
+  }
+
+  function insertAtCursor(ta, chunk) {
+    if (!ta || !chunk) return;
+    const start = ta.selectionStart ?? ta.value.length;
+    const end = ta.selectionEnd ?? ta.value.length;
+    const before = ta.value.slice(0, start);
+    const after = ta.value.slice(end);
+    const needsSpaceBefore =
+      before.length && !/\s$/.test(before) && !/^[\s.,!?;:]/.test(chunk);
+    const insert = (needsSpaceBefore ? " " : "") + chunk;
+    ta.value = before + insert + after;
+    const pos = before.length + insert.length;
+    ta.focus();
+    ta.setSelectionRange(pos, pos);
+  }
+
   msgTa?.addEventListener("input", updatePreview);
-  $$(".ins").forEach((b) =>
+  $$("#s1 .ins").forEach((b) =>
     b.addEventListener("click", () => {
-      const map = {
-        "+ Имя клиента": "{имя}",
-        "+ Скидка": "{скидка}",
-        "+ Ссылка": "veresk.flowers",
-      };
-      msgTa.value += " " + (map[b.textContent] || "");
-      msgTa.focus();
+      const chunk = b.dataset.insert || "";
+      insertAtCursor(msgTa, chunk);
       updatePreview();
     })
   );
+  updatePreview();
 
   // ── AI editor (compose step) ─────────────────────────────────────────────
   let aiPrevText = "";
@@ -3246,7 +3623,6 @@
     aiToggle.setAttribute("aria-expanded", open ? "true" : "false");
     if (open) {
       aiPrompt?.focus();
-      // на мобиле прокрутить к панели
       aiEditor.scrollIntoView({ behavior: "smooth", block: "nearest" });
     }
   }
@@ -3294,7 +3670,7 @@
       msgTa?.focus();
       return;
     }
-    const segment = $("#s0 .choice.on")?.dataset.seg || state.wizard.segment || "all";
+    const segment = currentSegment();
     setAiBusy(true);
     setAiStatus(mode === "improve" ? "Улучшаю текст…" : "Пишу текст…");
     try {
@@ -3310,7 +3686,7 @@
       msgTa.value = text;
       updatePreview();
       if (aiUndoRow) aiUndoRow.hidden = false;
-      setAiStatus("Готово — текст вставлен в сообщение. Справа — превью.", "ok");
+      setAiStatus("Готово — текст вставлен в сообщение. Превью обновлено.", "ok");
       msgTa.focus();
     } catch (err) {
       const detail =
@@ -3356,7 +3732,6 @@
     }
   });
 
-  // дата по умолчанию — завтра
   (function initDate() {
     const d = new Date();
     d.setDate(d.getDate() + 1);
@@ -3387,28 +3762,44 @@
     });
     wback.style.display = i > 0 && i < 3 ? "inline-flex" : "none";
     wnav.style.display = i < 3 ? "flex" : "none";
-    wnext.textContent = i === 2 ? "Запланировать" : "Далее";
-    if (i === 0) refreshSegmentCounts();
+    if (i === 0) {
+      refreshSegmentCounts();
+    }
+    if (i === 1) {
+      updateAudienceContext();
+      adaptAiChipsForSegment();
+      updatePreview();
+      setMsgError(false);
+    }
     if (i === 2) {
-      const when = state.wizard.when;
-      const sumWhen = $("#sumWhen");
-      if (when === "now") sumWhen.textContent = "сейчас";
-      else
-        sumWhen.textContent =
-          ($("#wizDate").value || "") + ", " + ($("#wizTime").value || "10:00");
+      refreshSendSummary();
       refreshMatchPreview();
     }
+    syncComposeNext();
   }
 
   wnext?.addEventListener("click", async () => {
-    if (state.step < 2) {
-      setStep(state.step + 1);
+    if (state.step === 0) {
+      if (!hasAudience()) {
+        setAudienceError(true);
+        $("#matchPreview")?.scrollIntoView({ behavior: "smooth", block: "nearest" });
+        return;
+      }
+      setStep(1);
       return;
     }
-    // создать кампанию
-    const segBtn = $("#s0 .choice.on");
-    const segment = segBtn?.dataset.seg || "all";
-    const sendNow = state.wizard.when === "now" || $("#s2 .choice.on")?.dataset.when === "now";
+    if (state.step === 1) {
+      if (!messageHasText()) {
+        setMsgError(true);
+        msgTa?.focus();
+        return;
+      }
+      setStep(2);
+      return;
+    }
+    const segment = currentSegment();
+    const sendNow =
+      state.wizard.when === "now" || $("#s2 .choice.on")?.dataset.when === "now";
     let scheduled_at = null;
     if (!sendNow) {
       scheduled_at = `${$("#wizDate").value}T${$("#wizTime").value || "10:00"}:00`;
@@ -3419,6 +3810,7 @@
     try {
       wnext.disabled = true;
       const channels = selectedChannels();
+      const media = state.wizard.media;
       const created = await AdminAPI.createCampaign({
         title,
         message: msgTa.value,
@@ -3427,7 +3819,12 @@
         emoji: "🌷",
         send_now: sendNow,
         scheduled_at,
+        media_path: media?.media_path || undefined,
+        media_kind: media?.media_kind || undefined,
+        media_filename: media?.media_filename || undefined,
+        media_mime: media?.media_mime || undefined,
       });
+      clearComposeMedia();
       setStep(3);
       const will =
         (created.match && created.match.will_send) ||
@@ -3445,8 +3842,9 @@
         err.data?.error ||
         err.message;
       alert("Ошибка: " + detail);
+      syncComposeNext();
     }
-    wnext.disabled = false;
+    if (state.step < 3) wnext.disabled = false;
   });
   wback?.addEventListener("click", () => {
     if (state.step > 0) setStep(state.step - 1);

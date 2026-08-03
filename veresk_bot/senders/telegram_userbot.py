@@ -398,6 +398,7 @@ class TelegramUserbotSender:
         name: str,
         text: str,
         tg_user_id: int | None = None,
+        media_path: str | None = None,
     ) -> SendResult:
         if not self.available:
             return SendResult(ok=False, status="failed", error="Telethon не настроен")
@@ -450,7 +451,26 @@ class TelegramUserbotSender:
                         status="failed",
                         error="Не удалось найти пользователя в Telegram",
                     )
-                await client.send_message(user, text)
+                media = (media_path or "").strip()
+                if media:
+                    from pathlib import Path
+
+                    path = Path(media)
+                    if not path.is_file():
+                        return SendResult(
+                            ok=False,
+                            status="failed",
+                            error="Файл вложения не найден",
+                        )
+                    # Telegram caption limit for photos ≈ 1024
+                    caption = text or ""
+                    if len(caption) <= 1024:
+                        await client.send_file(user, str(path), caption=caption or None)
+                    else:
+                        await client.send_file(user, str(path))
+                        await client.send_message(user, caption)
+                else:
+                    await client.send_message(user, text)
                 # Допривяжем tg_user_id к карточке, если узнали
                 if phone_norm and getattr(user, "id", None):
                     try:

@@ -811,7 +811,6 @@
           </form>
         </div>
       </div>
-
     </section>
 
     <!-- DETAIL -->
@@ -864,11 +863,11 @@
         <div class="bar"></div>
         <div class="step"><div class="num">2</div><div class="tx">Сообщение</div></div>
         <div class="bar"></div>
-        <div class="step"><div class="num">3</div><div class="tx">Отправка</div></div>
+        <div class="step"><div class="num">3</div><div class="tx">Запуск</div></div>
       </div>
       <div class="wstep active" id="s0">
         <div class="wq">Кому отправим?</div>
-        <p class="wsub">Выберите группу клиентов и каналы отправки от имени аккаунтов.</p>
+        <p class="wsub">Сначала аудитория и канал — сразу видно, сколько человек реально получат сообщение.</p>
         <div class="choices">
           <button type="button" class="choice on" data-seg="regular" data-count="0">
             <div class="ci"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"/></svg></div>
@@ -893,7 +892,7 @@
         </div>
         <div class="wiz-channels" id="wizChannels">
           <div class="wiz-channels-title">Куда отправить</div>
-          <p class="wsub wiz-channels-hint">Сообщения уйдут от имени подключённых аккаунтов. В очередь попадут только клиенты, которых можно доставить в выбранный канал.</p>
+          <p class="wsub wiz-channels-hint">Только клиенты с доставкой в выбранный канал. Сообщения уходят от имени подключённых аккаунтов.</p>
           <div class="chan-toggles">
             <button type="button" class="chan-toggle on" data-channel="tg" id="chanTg" aria-pressed="true">
               <span class="chan-toggle-name">Telegram</span>
@@ -910,11 +909,16 @@
             <div class="match-preview-row" id="matchMaxRow" hidden><span>MAX</span><b id="matchMax">—</b></div>
             <div class="match-preview-note" id="matchNote"></div>
           </div>
+          <p class="msg-error" id="audienceError" hidden>Нет получателей для отправки — смените сегмент, канал или подключите аккаунт в Настройках.</p>
         </div>
       </div>
       <div class="wstep" id="s1">
         <div class="wq">Что напишем?</div>
-        <p class="wsub">Справа сразу видно, как сообщение придёт клиенту.</p>
+        <p class="wsub">Текст сразу виден в превью — как его увидит клиент.</p>
+        <div class="wiz-context" id="wizAudience" aria-live="polite">
+          <span class="wiz-context-label">Кому</span>
+          <span class="wiz-context-text" id="wizAudienceText">—</span>
+        </div>
         <div class="compose">
           <div>
             <div class="msg-head">
@@ -930,10 +934,10 @@
                 <button type="button" class="ai-editor-close" id="aiClose" aria-label="Закрыть">×</button>
               </div>
               <div class="ai-chips" id="aiChips">
-                <button type="button" class="ai-chip" data-prompt="Скидка 15% на весенние букеты, тёплое предложение только для них">Скидка</button>
-                <button type="button" class="ai-chip" data-prompt="Напомнить о предстоящем празднике и предложить заказать букет заранее">К празднику</button>
-                <button type="button" class="ai-chip" data-prompt="Анонс новых букетов в салоне, пригласить посмотреть">Новинки</button>
-                <button type="button" class="ai-chip" data-prompt="Мягко вернуть клиентов, которые давно не заказывали, без давления">Вернуть</button>
+                <button type="button" class="ai-chip" data-chip="promo" data-prompt="Скидка 15% на весенние букеты, тёплое предложение только для них">Скидка</button>
+                <button type="button" class="ai-chip" data-chip="holiday" data-prompt="Напомнить о предстоящем празднике и предложить заказать букет заранее">К празднику</button>
+                <button type="button" class="ai-chip" data-chip="new" data-prompt="Анонс новых букетов в салоне, пригласить посмотреть">Новинки</button>
+                <button type="button" class="ai-chip" data-chip="winback" data-prompt="Мягко вернуть клиентов, которые давно не заказывали, без давления">Вернуть</button>
               </div>
               <label class="sr-only" for="aiPrompt">Описание текста</label>
               <textarea id="aiPrompt" class="ai-prompt" rows="2" placeholder="Например: акция −20% на пионы до воскресенья, с ссылкой veresk.flowers"></textarea>
@@ -954,36 +958,65 @@
 Только для вас — весенние букеты со скидкой 15%.
 
 Заказать: veresk.flowers</textarea>
-            <div class="inserts"><button type="button" class="ins">+ Имя клиента</button><button type="button" class="ins">+ Скидка</button><button type="button" class="ins">+ Ссылка</button></div>
+            <p class="msg-error" id="msgError" hidden>Напишите текст сообщения</p>
+            <div class="inserts">
+              <button type="button" class="ins" data-insert="{имя}">+ Имя клиента</button>
+              <button type="button" class="ins" data-insert="{скидка}">+ Скидка</button>
+              <button type="button" class="ins" data-insert="veresk.flowers">+ Ссылка</button>
+            </div>
+            <div class="media-attach" id="mediaAttach">
+              <input type="file" id="mediaFile" accept="image/jpeg,image/png,image/webp,image/gif,.jpg,.jpeg,.png,.webp,.gif" hidden>
+              <button type="button" class="btn media-attach-btn" id="mediaPick">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><rect x="3" y="5" width="18" height="14" rx="2"/><circle cx="8.5" cy="10" r="1.5"/><path d="m21 15-5-5L5 19"/></svg>
+                Прикрепить фото
+              </button>
+              <div class="media-attach-preview" id="mediaPreviewWrap" hidden>
+                <img id="mediaPreviewImg" alt="Превью фото">
+                <div class="media-attach-meta">
+                  <span id="mediaPreviewName">фото</span>
+                  <button type="button" class="btn" id="mediaClear">Убрать</button>
+                </div>
+              </div>
+              <p class="media-attach-hint" id="mediaHint">JPG, PNG, WEBP или GIF · до 10 МБ</p>
+              <p class="msg-error" id="mediaError" hidden></p>
+            </div>
           </div>
           <div class="phone phone-sticky">
             <div class="ptop"><div class="dot">V</div>Veresk</div>
-            <div class="bubble"><span id="msgPreview"></span><div class="tm">10:00 ✓✓</div></div>
+            <div class="bubble">
+              <div class="bubble-media" id="msgMediaPreview" hidden><img id="msgMediaImg" alt=""></div>
+              <span id="msgPreview"></span>
+              <div class="tm">10:00 ✓✓</div>
+            </div>
           </div>
         </div>
       </div>
       <div class="wstep" id="s2">
-        <div class="wq">Когда отправить?</div>
-        <p class="wsub">Сообщения уйдут через подключённые аккаунты порциями.</p>
+        <div class="wq">Проверьте и отправьте</div>
+        <p class="wsub">Сверьте аудиторию и текст — затем отправьте сейчас или запланируйте.</p>
         <div class="send-layout">
+          <div class="summary summary-review" id="sendSummary">
+            <div class="r"><span>Кому</span><b id="sumSeg">—</b></div>
+            <div class="r"><span>Получат</span><b id="sumWho">—</b></div>
+            <div class="r"><span>Каналы</span><b id="sumChannels">Telegram</b></div>
+            <div class="r sum-msg"><span>Текст</span><b id="sumMsg">—</b></div>
+            <div class="r" id="sumMediaRow" hidden><span>Фото</span><b id="sumMedia">прикреплено</b></div>
+            <div class="r"><span>Когда</span><b id="sumWhen">сейчас</b></div>
+          </div>
+          <div class="wiz-when-title">Когда отправить</div>
           <div class="choices when-choices">
-            <button type="button" class="choice" data-when="now">
+            <button type="button" class="choice on" data-when="now">
               <div class="ci"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M13 2 3 14h8l-1 8 10-12h-8l1-8z"/></svg></div>
-              <div><div class="ct">Сейчас</div><div class="cc">начнём сразу</div></div>
+              <div><div class="ct">Сейчас</div><div class="cc">начнём сразу порциями</div></div>
               <span class="rc"><svg viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="3"><path d="M20 6 9 17l-5-5"/></svg></span>
             </button>
-            <button type="button" class="choice on" data-when="later">
+            <button type="button" class="choice" data-when="later">
               <div class="ci"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3" y="5" width="18" height="16" rx="2"/><path d="M3 10h18M8 3v4M16 3v4"/></svg></div>
               <div><div class="ct">Позже</div><div class="cc">выбрать дату и время</div></div>
               <span class="rc"><svg viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="3"><path d="M20 6 9 17l-5-5"/></svg></span>
             </button>
           </div>
-          <div class="datebox" id="datebox"><input type="date" id="wizDate"><input type="time" id="wizTime" value="10:00"></div>
-          <div class="summary">
-            <div class="r"><span>Получат сообщение</span><b id="sumWho">— клиентов</b></div>
-            <div class="r"><span>Каналы</span><b id="sumChannels">Telegram</b></div>
-            <div class="r"><span>Когда</span><b id="sumWhen">—</b></div>
-          </div>
+          <div class="datebox" id="datebox" style="display:none"><input type="date" id="wizDate"><input type="time" id="wizTime" value="10:00"></div>
         </div>
       </div>
       <div class="wstep" id="s3">

@@ -138,6 +138,21 @@ const AdminAPI = (() => {
         method: "POST",
         body: JSON.stringify(body),
       }),
+    uploadCampaignMedia: (file) => {
+      const fd = new FormData();
+      fd.append("file", file, file.name || "photo.jpg");
+      return requestForm("/api/admin/campaigns/media", fd);
+    },
+    campaignMediaUrl: (mediaPath) => {
+      if (!mediaPath) return "";
+      const q = new URLSearchParams({ token: getToken() });
+      return (
+        "/api/admin/campaigns/media/" +
+        encodeURIComponent(mediaPath) +
+        "?" +
+        q.toString()
+      );
+    },
     mailingPreview: (params = {}) => {
       const q = new URLSearchParams(params).toString();
       return request("/api/admin/mailing/preview" + (q ? "?" + q : ""));

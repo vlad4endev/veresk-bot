@@ -686,6 +686,9 @@ class MaxUserbotSender:
         name: str,
         text: str,
         max_user_id: int | None = None,
+        media_path: str | None = None,
+        media_filename: str | None = None,
+        media_mime: str | None = None,
     ) -> SendResult:
         if not self.available:
             return SendResult(
@@ -703,7 +706,7 @@ class MaxUserbotSender:
         resolved_uid: list[int] = []
 
         try:
-            from senders.max_userbot_chat import max_session
+            from senders.max_userbot_chat import _pick_attach_builder, max_session
 
             async with max_session(
                 self.session_file,
@@ -717,7 +720,25 @@ class MaxUserbotSender:
                     return SendResult(ok=False, status="failed", error=err or "chat_not_found")
                 if uid is not None:
                     resolved_uid.append(uid)
-                await client.send_message(chat_id=int(chat_id), text=text)
+                media = (media_path or "").strip()
+                if media:
+                    media_file = Path(media)
+                    if not media_file.is_file():
+                        return SendResult(
+                            ok=False,
+                            status="failed",
+                            error="Файл вложения не найден",
+                        )
+                    filename = media_filename or media_file.name
+                    mime = media_mime or "image/jpeg"
+                    builder_cls = _pick_attach_builder(filename, mime, force_document=False)
+                    await client.send_message(
+                        chat_id=int(chat_id),
+                        text=text or "",
+                        attachments=[builder_cls(path=str(media_file), name=filename)],
+                    )
+                else:
+                    await client.send_message(chat_id=int(chat_id), text=text)
         except Exception as exc:
             logger.exception("MAX userbot send failed to %s", phone)
             return SendResult(ok=False, status="failed", error=str(exc))

@@ -84,6 +84,10 @@ CREATE TABLE IF NOT EXISTS campaigns (
     channels TEXT NOT NULL DEFAULT 'tg',
     status TEXT NOT NULL DEFAULT 'draft',
     scheduled_at TEXT,
+    media_path TEXT,
+    media_kind TEXT,
+    media_filename TEXT,
+    media_mime TEXT,
     total_count INTEGER NOT NULL DEFAULT 0,
     sent_count INTEGER NOT NULL DEFAULT 0,
     delivered_count INTEGER NOT NULL DEFAULT 0,
@@ -230,6 +234,13 @@ async def init_mailing_db() -> None:
                 _ensure_column(db, "admin_sessions", col, typedef)
             _ensure_column(db, "admin_users", "permissions", "TEXT DEFAULT ''")
             _ensure_column(db, "customer_events", "last_auto_sent_on", "TEXT")
+            for col, typedef in (
+                ("media_path", "TEXT"),
+                ("media_kind", "TEXT"),
+                ("media_filename", "TEXT"),
+                ("media_mime", "TEXT"),
+            ):
+                _ensure_column(db, "campaigns", col, typedef)
             # Миграция: приводим ранее сохранённые телефоны к +7(999)999-99-99
             rows = db.execute("SELECT id, phone FROM customers").fetchall()
             for row in rows:
@@ -945,6 +956,10 @@ async def create_campaign(
     emoji: str = "🌷",
     status: str = "draft",
     scheduled_at: str | None = None,
+    media_path: str | None = None,
+    media_kind: str | None = None,
+    media_filename: str | None = None,
+    media_mime: str | None = None,
 ) -> int:
     now = _now()
 
@@ -954,8 +969,9 @@ async def create_campaign(
                 """
                 INSERT INTO campaigns (
                     title, emoji, message, segment, channels, status,
-                    scheduled_at, created_at, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    scheduled_at, media_path, media_kind, media_filename, media_mime,
+                    created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     title,
@@ -965,6 +981,10 @@ async def create_campaign(
                     channels,
                     status,
                     scheduled_at,
+                    media_path,
+                    media_kind,
+                    media_filename,
+                    media_mime,
                     now,
                     now,
                 ),
@@ -984,6 +1004,10 @@ async def update_campaign(campaign_id: int, **fields: Any) -> bool:
         "channels",
         "status",
         "scheduled_at",
+        "media_path",
+        "media_kind",
+        "media_filename",
+        "media_mime",
         "total_count",
         "sent_count",
         "delivered_count",
@@ -1113,7 +1137,11 @@ async def fetch_pending_recipients(limit: int = 20) -> list[dict[str, Any]]:
                 """
                 SELECT r.*, c.name AS customer_name, c.phone AS customer_phone,
                        c.tg_user_id, c.max_user_id,
-                       camp.message AS campaign_message, camp.id AS camp_id
+                       camp.message AS campaign_message, camp.id AS camp_id,
+                       camp.media_path AS campaign_media_path,
+                       camp.media_kind AS campaign_media_kind,
+                       camp.media_filename AS campaign_media_filename,
+                       camp.media_mime AS campaign_media_mime
                 FROM campaign_recipients r
                 JOIN customers c ON c.id = r.customer_id
                 JOIN campaigns camp ON camp.id = r.campaign_id
