@@ -889,7 +889,38 @@
         </div>
         <div class="compose">
           <div>
-            <label class="lbl" for="pmsg">Текст сообщения</label>
+            <div class="msg-head">
+              <label class="lbl" for="pmsg">Текст сообщения</label>
+              <button type="button" class="ai-toggle" id="pAiToggle" aria-expanded="false" aria-controls="pAiEditor">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="M12 3v3M12 18v3M3 12h3M18 12h3M5.6 5.6l2.1 2.1M16.3 16.3l2.1 2.1M18.4 5.6l-2.1 2.1M7.7 16.3l-2.1 2.1"/><circle cx="12" cy="12" r="3.2"/></svg>
+                ИИ
+              </button>
+            </div>
+            <div class="ai-editor" id="pAiEditor" hidden>
+              <div class="ai-editor-top">
+                <div class="ai-editor-title">Что написать этому клиенту?</div>
+                <button type="button" class="ai-editor-close" id="pAiClose" aria-label="Закрыть">×</button>
+              </div>
+              <div class="ai-chips" id="pAiChips">
+                <button type="button" class="ai-chip" data-chip="bday" data-prompt="Тёплое поздравление с днём рождения и скидка 15% на букет на неделю">День рождения</button>
+                <button type="button" class="ai-chip" data-chip="anniv" data-prompt="Поздравление с годовщиной, предложить букет со скидкой 15%">Годовщина</button>
+                <button type="button" class="ai-chip" data-chip="thanks" data-prompt="Поблагодарить за заказ, пригласить снова без давления">Благодарность</button>
+                <button type="button" class="ai-chip" data-chip="soft" data-prompt="Мягко напомнить о себе и предложить заглянуть за букетом">Напомнить</button>
+              </div>
+              <label class="sr-only" for="pAiPrompt">Описание текста</label>
+              <textarea id="pAiPrompt" class="ai-prompt" rows="2" placeholder="Например: поздравить с ДР, скидка 15%, тёплый тон"></textarea>
+              <div class="ai-editor-actions">
+                <button type="button" class="btn" id="pAiImprove" title="Переписать текущий текст">Улучшить</button>
+                <button type="button" class="btn primary" id="pAiGenerate">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M12 3v3M12 18v3M3 12h3M18 12h3M5.6 5.6l2.1 2.1M16.3 16.3l2.1 2.1M18.4 5.6l-2.1 2.1M7.7 16.3l-2.1 2.1"/><circle cx="12" cy="12" r="3.2"/></svg>
+                  Сгенерировать
+                </button>
+              </div>
+              <p class="ai-editor-status" id="pAiStatus" hidden></p>
+              <div class="ai-editor-undo" id="pAiUndoRow" hidden>
+                <button type="button" class="btn" id="pAiUndo">Вернуть прежний текст</button>
+              </div>
+            </div>
             <textarea class="textarea" id="pmsg"></textarea>
           </div>
           <div class="phone phone-sticky">

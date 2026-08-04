@@ -58,6 +58,7 @@ SEGMENT_HINTS = {
     "all": "все клиенты цветочного магазина",
     "new": "новые клиенты, недавно оставившие контакты",
     "inactive": "клиенты, которые давно не заказывали",
+    "personal": "личное сообщение одному клиенту (не массовая рассылка)",
 }
 
 SYSTEM_PROMPT = """Ты копирайтер цветочного салона Veresk (букеты, доставка, поздравления).
@@ -69,6 +70,20 @@ SYSTEM_PROMPT = """Ты копирайтер цветочного салона V
 - Обращение на «вы», можно начать с «Здравствуйте, {имя}!».
 - Плейсхолдер имени клиента — строго {имя} (если уместно).
 - Для скидки можно использовать {скидка}.
+- 2–5 коротких абзацев, без markdown и без эмодзи-спама (1–2 эмодзи максимум, по желанию).
+- Без ссылок, кроме veresk.flowers если нужна ссылка на заказ.
+- Не выдумывай акции/цены, которых нет в запросе пользователя."""
+
+PERSONAL_SYSTEM_PROMPT = """Ты копирайтер цветочного салона Veresk (букеты, доставка, поздравления).
+Пиши короткие тёплые личные сообщения одному клиенту в Telegram / MAX.
+
+Правила:
+- Только текст сообщения, без кавычек, без пояснений и заголовков.
+- Язык: русский; обращение на «вы».
+- Это личное 1:1 сообщение, не массовая рассылка — тон ближе и персональнее.
+- Если известно имя клиента — обращайся по имени напрямую (не плейсхолдер {имя}).
+- Если имя неизвестно — можно «Здравствуйте!» без плейсхолдеров.
+- Для скидки можно использовать конкретный процент из запроса или {скидка}.
 - 2–5 коротких абзацев, без markdown и без эмодзи-спама (1–2 эмодзи максимум, по желанию).
 - Без ссылок, кроме veresk.flowers если нужна ссылка на заказ.
 - Не выдумывай акции/цены, которых нет в запросе пользователя."""
@@ -365,16 +380,34 @@ def _mask_key(key: str) -> str:
     return key[:4] + "…" + key[-4:]
 
 
-def _build_user_content(*, prompt: str, current: str, segment: str, mode: str) -> str:
+def _build_user_content(
+    *,
+    prompt: str,
+    current: str,
+    segment: str,
+    mode: str,
+    client_name: str = "",
+    occasion: str = "",
+) -> str:
     audience = SEGMENT_HINTS.get(segment, SEGMENT_HINTS["all"])
+    personal = segment == "personal"
+    meta_parts: list[str] = []
+    if personal and client_name:
+        meta_parts.append(f"Имя клиента: {client_name}")
+    if personal and occasion:
+        meta_parts.append(f"Повод: {occasion}")
+    meta = ("\n".join(meta_parts) + "\n") if meta_parts else ""
+
     if mode == "improve":
+        kind = "личного сообщения" if personal else "рассылки"
         return (
             f"Аудитория: {audience}.\n"
-            f"Улучши или перепиши текст рассылки.\n"
+            f"{meta}"
+            f"Улучши или перепиши текст {kind}.\n"
             f"Пожелания: {prompt or 'сделай теплее и убедительнее'}.\n\n"
             f"Текущий текст:\n{current}"
         )
-    user_content = f"Аудитория: {audience}.\nЗапрос: {prompt}"
+    user_content = f"Аудитория: {audience}.\n{meta}Запрос: {prompt}"
     if current:
         user_content += f"\n\nМожно опереться на черновик:\n{current}"
     return user_content
@@ -435,9 +468,12 @@ async def generate_mailing_text(
     current_text: str = "",
     segment: str = "all",
     mode: str = "write",
+    client_name: str = "",
+    occasion: str = "",
 ) -> str:
     """
     mode: write — новый текст; improve — улучшить current_text с учётом prompt.
+    segment=personal — личное 1:1 сообщение (имя/повод через client_name, occasion).
     """
     user_prompt = (prompt or "").strip()
     current = (current_text or "").strip()
@@ -446,15 +482,19 @@ async def generate_mailing_text(
     if mode != "improve" and not user_prompt:
         raise AiComposeError("prompt_required", "Опишите, какой текст нужен")
 
+    seg = (segment or "all").strip() or "all"
     user_content = _build_user_content(
         prompt=user_prompt,
         current=current,
-        segment=segment,
+        segment=seg,
         mode=mode,
+        client_name=(client_name or "").strip(),
+        occasion=(occasion or "").strip(),
     )
+    system = PERSONAL_SYSTEM_PROMPT if seg == "personal" else SYSTEM_PROMPT
     return await _chat_completion(
         [
-            {"role": "system", "content": SYSTEM_PROMPT},
+            {"role": "system", "content": system},
             {"role": "user", "content": user_content},
         ],
         temperature=0.7,

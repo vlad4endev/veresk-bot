@@ -1384,8 +1384,14 @@
       chanClass,
       chan: channelLabel(chanClass),
       contact: d.contact || "—",
+      type: d.type || "plain",
     };
     syncPersonalChannelUi();
+    adaptPersonalAiChips(state.curPerson.type);
+    setPAiOpen(false);
+    setPAiStatus("");
+    if (pAiUndoRow) pAiUndoRow.hidden = true;
+    if (pAiPrompt) pAiPrompt.value = "";
     go("personal");
   }
   window.openPersonal = openPersonal;
@@ -1420,6 +1426,175 @@
       $("#personalDone")?.classList.remove("hidden");
     } catch (err) {
       alert("Ошибка: " + (err.data?.message || err.data?.error || err.message));
+    }
+  });
+
+  // ── AI editor (personal message) ─────────────────────────────────────────
+  let pAiPrevText = "";
+  const pAiEditor = $("#pAiEditor");
+  const pAiToggle = $("#pAiToggle");
+  const pAiPrompt = $("#pAiPrompt");
+  const pAiStatus = $("#pAiStatus");
+  const pAiUndoRow = $("#pAiUndoRow");
+  const pMsgTa = $("#pmsg");
+
+  /**
+   * Подсказки чипов под повод (ДР / годовщина / обычное).
+   * Заполните строки — ими ИИ будет пользоваться при клике на чип.
+   */
+  function adaptPersonalAiChips(type) {
+    // type: "bday" | "anniv" | "plain"
+    // TODO (ваш вклад): подставьте формулировки под тон Veresk.
+    // Можно менять только тексты — ключи bday/anniv/thanks/soft лучше не трогать.
+    const defaults = {
+      bday: {
+        bday: "Тёплое поздравление с днём рождения и скидка 15% на букет на неделю",
+        anniv: "Короткое поздравление с днём рождения без акцента на скидку",
+        thanks: "Поблагодарить за доверие к салону и поздравить с днём рождения",
+        soft: "Очень короткое тёплое поздравление с ДР от Veresk",
+      },
+      anniv: {
+        bday: "Тёплое поздравление с годовщиной со скидкой 15%",
+        anniv: "Поздравление с годовщиной, предложить букет со скидкой 15%",
+        thanks: "Поблагодарить за то, что отмечают важный день с Veresk",
+        soft: "Мягкое поздравление с годовщиной без скидки",
+      },
+      plain: {
+        bday: "Тёплое поздравление с днём рождения и скидка 15% на букет на неделю",
+        anniv: "Поздравление с годовщиной, предложить букет со скидкой 15%",
+        thanks: "Поблагодарить за заказ, пригласить снова без давления",
+        soft: "Мягко напомнить о себе и предложить заглянуть за букетом",
+      },
+    };
+    const map = defaults[type] || defaults.plain;
+    $$("#pAiChips .ai-chip").forEach((chip) => {
+      const key = chip.dataset.chip;
+      if (key && map[key]) chip.dataset.prompt = map[key];
+      // Подсветить чип, совпадающий с поводом
+      chip.classList.toggle("on", type === key);
+    });
+  }
+
+  function personalOccasionLabel(type) {
+    if (type === "bday") return "день рождения";
+    if (type === "anniv") return "годовщина";
+    return (state.curPerson && state.curPerson.evText) || "";
+  }
+
+  function setPAiOpen(open) {
+    if (!pAiEditor || !pAiToggle) return;
+    pAiEditor.hidden = !open;
+    pAiToggle.setAttribute("aria-expanded", open ? "true" : "false");
+    if (open) {
+      pAiPrompt?.focus();
+      pAiEditor.scrollIntoView({ behavior: "smooth", block: "nearest" });
+    }
+  }
+
+  function setPAiStatus(text, kind) {
+    if (!pAiStatus) return;
+    if (!text) {
+      pAiStatus.hidden = true;
+      pAiStatus.textContent = "";
+      pAiStatus.className = "ai-editor-status";
+      return;
+    }
+    pAiStatus.hidden = false;
+    pAiStatus.textContent = text;
+    pAiStatus.className = "ai-editor-status" + (kind ? " " + kind : "");
+  }
+
+  function setPAiBusy(busy) {
+    ["pAiGenerate", "pAiImprove", "pAiToggle"].forEach((id) => {
+      const el = document.getElementById(id);
+      if (el) el.disabled = busy;
+    });
+    $$("#pAiChips .ai-chip").forEach((c) => {
+      c.disabled = busy;
+    });
+    if (pAiPrompt) pAiPrompt.disabled = busy;
+    const gen = $("#pAiGenerate");
+    if (gen) {
+      gen.innerHTML = busy
+        ? "Генерирую…"
+        : `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M12 3v3M12 18v3M3 12h3M18 12h3M5.6 5.6l2.1 2.1M16.3 16.3l2.1 2.1M18.4 5.6l-2.1 2.1M7.7 16.3l-2.1 2.1"/><circle cx="12" cy="12" r="3.2"/></svg> Сгенерировать`;
+    }
+  }
+
+  async function runPersonalAiCompose(mode) {
+    const prompt = (pAiPrompt?.value || "").trim();
+    const current = pMsgTa?.value || "";
+    if (mode === "write" && !prompt) {
+      setPAiStatus("Кратко опишите, о чём сообщение — или нажмите подсказку сверху", "err");
+      pAiPrompt?.focus();
+      return;
+    }
+    if (mode === "improve" && !current.trim()) {
+      setPAiStatus("Сначала напишите или вставьте черновик в поле ниже", "err");
+      pMsgTa?.focus();
+      return;
+    }
+    const person = state.curPerson || {};
+    setPAiBusy(true);
+    setPAiStatus(mode === "improve" ? "Улучшаю текст…" : "Пишу текст…");
+    try {
+      const res = await AdminAPI.aiCompose({
+        prompt,
+        current_text: current,
+        segment: "personal",
+        mode,
+        client_name: person.fn || (person.name || "").split(" ")[0] || "",
+        occasion: personalOccasionLabel(person.type),
+      });
+      const text = (res.text || "").trim();
+      if (!text) throw new Error("empty");
+      pAiPrevText = current;
+      pMsgTa.value = text;
+      updatePPreview();
+      if (pAiUndoRow) pAiUndoRow.hidden = false;
+      setPAiStatus("Готово — текст вставлен. Превью обновлено.", "ok");
+      pMsgTa.focus();
+    } catch (err) {
+      const detail =
+        err.data?.detail ||
+        (err.data?.error === "ai_not_configured"
+          ? "Подключите ИИ в Настройках → Сервисы"
+          : null) ||
+        err.message ||
+        "Не удалось сгенерировать";
+      setPAiStatus(detail, "err");
+    }
+    setPAiBusy(false);
+  }
+
+  pAiToggle?.addEventListener("click", () => {
+    const open = pAiToggle.getAttribute("aria-expanded") !== "true";
+    setPAiOpen(open);
+    if (open) setPAiStatus("");
+  });
+  $("#pAiClose")?.addEventListener("click", () => setPAiOpen(false));
+  $("#pAiGenerate")?.addEventListener("click", () => runPersonalAiCompose("write"));
+  $("#pAiImprove")?.addEventListener("click", () => runPersonalAiCompose("improve"));
+  $("#pAiUndo")?.addEventListener("click", () => {
+    if (pMsgTa && pAiPrevText !== undefined) {
+      pMsgTa.value = pAiPrevText;
+      updatePPreview();
+    }
+    if (pAiUndoRow) pAiUndoRow.hidden = true;
+    setPAiStatus("Вернули предыдущий текст", "ok");
+  });
+  $$("#pAiChips .ai-chip").forEach((chip) => {
+    chip.addEventListener("click", () => {
+      $$("#pAiChips .ai-chip").forEach((c) => c.classList.remove("on"));
+      chip.classList.add("on");
+      if (pAiPrompt) pAiPrompt.value = chip.dataset.prompt || chip.textContent;
+      runPersonalAiCompose("write");
+    });
+  });
+  pAiPrompt?.addEventListener("keydown", (e) => {
+    if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
+      e.preventDefault();
+      runPersonalAiCompose("write");
     }
   });
 

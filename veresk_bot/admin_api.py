@@ -2158,7 +2158,7 @@ async def handle_segment_counts(request: web.Request) -> web.Response:
 
 
 async def handle_ai_compose(request: web.Request) -> web.Response:
-    """POST /api/admin/ai/compose — сгенерировать текст рассылки."""
+    """POST /api/admin/ai/compose — сгенерировать текст рассылки или личного сообщения."""
     err = await _require_admin(request)
     if err:
         return err
@@ -2179,6 +2179,8 @@ async def handle_ai_compose(request: web.Request) -> web.Response:
     current_text = str(body.get("current_text") or "")
     segment = str(body.get("segment") or "all").strip() or "all"
     mode = str(body.get("mode") or "write").strip() or "write"
+    client_name = str(body.get("client_name") or "").strip()
+    occasion = str(body.get("occasion") or "").strip()
     if mode not in ("write", "improve"):
         mode = "write"
 
@@ -2188,6 +2190,8 @@ async def handle_ai_compose(request: web.Request) -> web.Response:
             current_text=current_text,
             segment=segment,
             mode=mode,
+            client_name=client_name,
+            occasion=occasion,
         )
     except AiComposeError as exc:
         status = 400 if exc.code in ("prompt_required",) else 502
