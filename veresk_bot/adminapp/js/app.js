@@ -3504,14 +3504,50 @@
       if ($("#tgCode")) $("#tgCode").value = "";
       $("#tgCodeStep").classList.remove("hidden");
       setConnectStep(2);
+      const hint =
+        res.code_hint ||
+        res.detail ||
+        "Код отправлен. Проверьте приложение Telegram (чат «Telegram»), не SMS.";
+      const hintEl = $("#tgCodeHint");
+      if (hintEl) hintEl.textContent = hint;
       $("#tgCode")?.focus();
-      alert("Код отправлен в Telegram. Введите свежий код (старый после повторного запроса не подойдёт).");
+      alert(hint);
     } catch (err) {
       alert(tgErrorText(err));
     } finally {
       if (btn) {
         btn.disabled = false;
         btn.textContent = "Получить код";
+      }
+    }
+  });
+
+  $("#tgResendCode")?.addEventListener("click", async () => {
+    const phone = state.tgPhone || $("#tgPhone")?.value?.trim();
+    if (!phone) return alert("Сначала запросите код");
+    const btn = $("#tgResendCode");
+    if (btn) {
+      btn.disabled = true;
+      btn.textContent = "Отправка…";
+    }
+    try {
+      const res = await AdminAPI.tgResend(phone);
+      if (!res.ok) return alert(tgErrorText(res));
+      if ($("#tgCode")) $("#tgCode").value = "";
+      const hint =
+        res.code_hint ||
+        res.detail ||
+        "Код отправлен повторно. Проверьте Telegram или SMS.";
+      const hintEl = $("#tgCodeHint");
+      if (hintEl) hintEl.textContent = hint;
+      $("#tgCode")?.focus();
+      alert(hint);
+    } catch (err) {
+      alert(tgErrorText(err));
+    } finally {
+      if (btn) {
+        btn.disabled = false;
+        btn.textContent = "Прислать иначе";
       }
     }
   });

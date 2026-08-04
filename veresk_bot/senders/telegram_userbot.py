@@ -134,15 +134,86 @@ async def start_telegram_login(phone: str) -> dict[str, Any]:
         return {"ok": False, "error": _friendly_telethon_error(exc)}
 
     phone_code_hash = getattr(sent, "phone_code_hash", None) or ""
+    code_type = type(getattr(sent, "type", None)).__name__ if sent else None
     _pending_logins[phone_norm] = {
         "client": client,
         "phone_code_hash": phone_code_hash,
+        "code_type": code_type,
     }
+    hint = _code_delivery_hint(code_type)
+    logger.info("Telegram login code requested for %s via %s", phone_norm, code_type)
     return {
         "ok": True,
         "phone": phone_norm,
         "need_code": True,
-        "code_type": type(getattr(sent, "type", None)).__name__ if sent else None,
+        "code_type": code_type,
+        "code_hint": hint,
+        "detail": hint,
+    }
+
+
+def _code_delivery_hint(code_type: str | None) -> str:
+    """Куда Telegram реально отправил код — App ≠ SMS."""
+    name = (code_type or "").lower()
+    if "app" in name:
+        return (
+            "Код отправлен в приложение Telegram на устройстве, где этот номер уже вошёл. "
+            "Откройте Telegram → чат «Telegram» (служебные сообщения). Это не SMS."
+        )
+    if "sms" in name or "fragment" in name or "firebase" in name:
+        return "Код отправлен по SMS на этот номер. Проверьте SMS и папку «Спам»."
+    if "call" in name or "flash" in name or "missed" in name:
+        return "Код придёт звонком / пропущенным вызовом — последние цифры номера и есть код."
+    if "email" in name:
+        return "Код отправлен на email, привязанный к аккаунту Telegram."
+    return (
+        "Код отправлен. Сначала проверьте приложение Telegram (чат «Telegram»), "
+        "не SMS. Если нет — нажмите «Получить код» ещё раз или «Прислать иначе»."
+    )
+
+
+async def resend_telegram_login_code(phone: str) -> dict[str, Any]:
+    """Повторная отправка кода (часто переключает App → SMS)."""
+    if not is_telethon_configured():
+        return {
+            "ok": False,
+            "error": "TELEGRAM_API_ID / TELEGRAM_API_HASH не заданы — укажите их в настройках",
+        }
+    phone_norm = _normalize_phone(phone)
+    pending = _pending_logins.get(phone_norm)
+    if not pending:
+        return {
+            "ok": False,
+            "error": "Сначала запросите код для этого номера (кнопка «Получить код»)",
+        }
+    client = pending["client"]
+    phone_code_hash = pending.get("phone_code_hash") or ""
+    if not phone_code_hash:
+        return {"ok": False, "error": "Нет phone_code_hash — запросите код заново"}
+    try:
+        from telethon.tl.functions.auth import ResendCodeRequest
+    except ImportError:
+        return _telethon_missing_error()
+    try:
+        sent = await client(ResendCodeRequest(phone_norm, phone_code_hash))
+    except Exception as exc:
+        logger.exception("Telethon ResendCodeRequest failed")
+        return {"ok": False, "error": _friendly_telethon_error(exc)}
+
+    new_hash = getattr(sent, "phone_code_hash", None) or phone_code_hash
+    code_type = type(getattr(sent, "type", None)).__name__ if sent else None
+    pending["phone_code_hash"] = new_hash
+    pending["code_type"] = code_type
+    hint = _code_delivery_hint(code_type)
+    logger.info("Telegram login code resent for %s via %s", phone_norm, code_type)
+    return {
+        "ok": True,
+        "phone": phone_norm,
+        "need_code": True,
+        "code_type": code_type,
+        "code_hint": hint,
+        "detail": hint,
+        "resent": True,
     }
 
 

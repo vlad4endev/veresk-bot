@@ -106,6 +106,7 @@ from senders.telegram_userbot import (
     get_api_credentials,
     is_telethon_configured,
     remove_session_file,
+    resend_telegram_login_code,
     start_telegram_login,
 )
 
@@ -1527,6 +1528,24 @@ async def handle_telegram_connect_start(request: web.Request) -> web.Response:
     if result.get("already_authorized"):
         registered = await _register_telegram_account(result, phone)
         return _json(registered)
+    return _json(result)
+
+
+async def handle_telegram_connect_resend(request: web.Request) -> web.Response:
+    """Повторно запросить код (часто App → SMS)."""
+    err = await _require_admin(request)
+    if err:
+        return err
+    try:
+        body = await request.json()
+    except Exception:
+        return _json({"error": "invalid_json"}, status=400)
+    phone = str(body.get("phone") or "").strip()
+    if not phone:
+        return _json({"error": "phone_required"}, status=400)
+    result = await resend_telegram_login_code(phone)
+    if not result.get("ok"):
+        return _json(result, status=400)
     return _json(result)
 
 
@@ -4449,6 +4468,7 @@ def setup_admin_routes(app: web.Application) -> None:
         ("/api/admin/accounts/telegram/settings", handle_telegram_settings_get, "GET"),
         ("/api/admin/accounts/telegram/settings", handle_telegram_settings_save, "POST"),
         ("/api/admin/accounts/telegram/start", handle_telegram_connect_start, "POST"),
+        ("/api/admin/accounts/telegram/resend", handle_telegram_connect_resend, "POST"),
         ("/api/admin/accounts/telegram/confirm", handle_telegram_connect_confirm, "POST"),
         ("/api/admin/accounts/telegram/keepalive", handle_telegram_keepalive, "POST"),
         ("/api/admin/accounts/max/userbot/start", handle_max_userbot_connect_start, "POST"),

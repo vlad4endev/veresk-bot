@@ -206,6 +206,11 @@ const AdminAPI = (() => {
         method: "POST",
         body: JSON.stringify({ phone }),
       }),
+    tgResend: (phone) =>
+      request("/api/admin/accounts/telegram/resend", {
+        method: "POST",
+        body: JSON.stringify({ phone }),
+      }),
     tgConfirm: (phone, code, password) =>
       request("/api/admin/accounts/telegram/confirm", {
         method: "POST",
