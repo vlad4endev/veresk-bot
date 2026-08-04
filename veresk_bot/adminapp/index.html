@@ -954,16 +954,19 @@
           </div>
         </div>
         <div id="audPickBlock" class="aud-pick" hidden>
-          <label class="lbl" for="pickSearch">Найти клиента</label>
+          <div class="aud-pick-head">
+            <div class="aud-pick-title">Клиенты из базы</div>
+            <div class="aud-pick-hint" id="pickListHint">выберите из списка</div>
+          </div>
           <div class="aud-pick-search">
-            <input type="search" id="pickSearch" class="inp" placeholder="Имя или телефон…" autocomplete="off">
+            <input type="search" id="pickSearch" class="inp" placeholder="Фильтр: имя или телефон…" autocomplete="off" aria-label="Фильтр клиентов">
           </div>
           <div class="aud-pick-selected" id="pickSelected" hidden>
             <div class="aud-pick-selected-title">Выбрано · <span id="pickSelectedCount">0</span></div>
             <div class="aud-pick-chips" id="pickChips"></div>
           </div>
-          <div class="aud-pick-results" id="pickResults" role="listbox" aria-label="Результаты поиска">
-            <div class="aud-pick-empty">Начните вводить имя или телефон</div>
+          <div class="aud-pick-results" id="pickResults" role="listbox" aria-label="Список клиентов">
+            <div class="aud-pick-loading">Загрузка…</div>
           </div>
         </div>
         <div class="wiz-channels" id="wizChannels">

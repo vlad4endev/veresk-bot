@@ -3624,9 +3624,7 @@
     if (next === "pick") {
       state.wizard.segment = "selected";
       renderPickSelected();
-      const q = ($("#pickSearch")?.value || "").trim();
-      if (q.length >= 2) searchPickClients(q);
-      else renderPickResults([]);
+      loadPickClients(($("#pickSearch")?.value || "").trim());
     } else if (state.wizard.segment === "selected") {
       state.wizard.segment =
         $("#s0 .choice.on")?.dataset.seg || "regular";
@@ -3660,9 +3658,9 @@
     if (!items.length) {
       const q = ($("#pickSearch")?.value || "").trim();
       box.innerHTML = `<div class="aud-pick-empty">${
-        q.length < 2
-          ? "Начните вводить имя или телефон"
-          : "Никого не нашли"
+        q
+          ? "Никого не нашли по фильтру"
+          : "Клиентов пока нет — синхронизируйте базу"
       }</div>`;
       return;
     }
@@ -3703,35 +3701,45 @@
     }
     state.wizard.selectedCustomers = list;
     renderPickSelected();
-    // обновить подсветку в результатах без нового запроса
-    const q = ($("#pickSearch")?.value || "").trim();
-    if (q.length >= 2 && pickSearchCache.length) {
-      renderPickResults(pickSearchCache);
-    }
+    if (pickSearchCache.length) renderPickResults(pickSearchCache);
     refreshMatchPreview();
   }
 
   let pickSearchTimer = null;
   let pickSearchCache = [];
   let pickSearchSeq = 0;
+  let pickListTotal = 0;
 
-  async function searchPickClients(query) {
+  async function loadPickClients(query) {
     const box = $("#pickResults");
+    const hint = $("#pickListHint");
     const seq = ++pickSearchSeq;
-    if (box) box.innerHTML = `<div class="aud-pick-loading">Ищем…</div>`;
+    const q = (query || "").trim();
+    if (box) box.innerHTML = `<div class="aud-pick-loading">${q ? "Ищем…" : "Загрузка…"}</div>`;
     try {
-      const data = await AdminAPI.clients({
-        search: query,
-        page_size: 30,
-      });
+      const params = { page_size: 100 };
+      if (q) params.search = q;
+      const data = await AdminAPI.clients(params);
       if (seq !== pickSearchSeq) return;
       pickSearchCache = data.items || [];
+      pickListTotal = data.total || pickSearchCache.length;
+      if (hint) {
+        hint.textContent = q
+          ? `найдено ${fmtNum(pickSearchCache.length)}${
+              pickListTotal > pickSearchCache.length
+                ? ` из ${fmtNum(pickListTotal)}`
+                : ""
+            }`
+          : `${fmtNum(pickListTotal)} в базе · нажмите, чтобы выбрать`;
+      }
       renderPickResults(pickSearchCache);
     } catch (_) {
       if (seq !== pickSearchSeq) return;
       pickSearchCache = [];
+      pickListTotal = 0;
+      if (hint) hint.textContent = "не удалось загрузить";
       if (box)
-        box.innerHTML = `<div class="aud-pick-empty">Не удалось загрузить</div>`;
+        box.innerHTML = `<div class="aud-pick-empty">Не удалось загрузить список</div>`;
     }
   }
 
@@ -3822,7 +3830,7 @@
       if ($("#matchMaxRow")) $("#matchMaxRow").hidden = !channels.includes("max");
       const note = $("#matchNote");
       if (note) {
-        note.textContent = "Выберите клиентов из поиска — справа видны Telegram и MAX.";
+        note.textContent = "Выберите клиентов из списка — справа видны Telegram и MAX.";
         note.className = "match-preview-note";
       }
       if (box) box.hidden = false;
@@ -4064,7 +4072,10 @@
       updatePreview();
       updateAudienceContext();
       syncMediaUi();
-      if (currentAudienceMode() === "pick") renderPickSelected();
+      if (currentAudienceMode() === "pick") {
+        renderPickSelected();
+        loadPickClients(($("#pickSearch")?.value || "").trim());
+      }
       refreshMatchPreview();
       return;
     }
@@ -4114,12 +4125,7 @@
     clearTimeout(pickSearchTimer);
     const q = ($("#pickSearch").value || "").trim();
     pickSearchTimer = setTimeout(() => {
-      if (q.length < 2) {
-        pickSearchCache = [];
-        renderPickResults([]);
-        return;
-      }
-      searchPickClients(q);
+      loadPickClients(q);
     }, 280);
   });
 
