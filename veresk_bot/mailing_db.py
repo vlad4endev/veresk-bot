@@ -2053,3 +2053,32 @@ async def customers_for_segment(segment: str) -> list[dict[str, Any]]:
         return [dict(r) for r in rows]
 
     return await _run_db(_list)
+
+
+async def customers_by_ids(customer_ids: list[int]) -> list[dict[str, Any]]:
+    """Клиенты по списку id (порядок как в запросе, дубликаты отбрасываются)."""
+    seen: set[int] = set()
+    ordered: list[int] = []
+    for raw in customer_ids:
+        try:
+            cid = int(raw)
+        except (TypeError, ValueError):
+            continue
+        if cid in seen:
+            continue
+        seen.add(cid)
+        ordered.append(cid)
+    if not ordered:
+        return []
+
+    def _list() -> list[dict[str, Any]]:
+        placeholders = ",".join("?" * len(ordered))
+        with _connect() as db:
+            rows = db.execute(
+                f"SELECT * FROM customers WHERE id IN ({placeholders})",
+                ordered,
+            ).fetchall()
+        by_id = {int(r["id"]): dict(r) for r in rows}
+        return [by_id[cid] for cid in ordered if cid in by_id]
+
+    return await _run_db(_list)

@@ -64,6 +64,8 @@
     eventsCache: [],
     wizard: {
       segment: "regular",
+      audienceMode: "segment", // segment | pick
+      selectedCustomers: [], // [{id, name, phone, phone_masked, messengers}]
       message: "",
       when: "now",
       date: "",
@@ -912,9 +914,6 @@
       if (ta) ta.value = c.message;
       const seg = c.segment || "all";
       state.wizard.segment = seg;
-      $$("#s0 .choice").forEach((btn) =>
-        btn.classList.toggle("on", btn.dataset.seg === seg)
-      );
       const chans = String(c.channels || "tg")
         .toLowerCase()
         .split(",")
@@ -932,6 +931,47 @@
         "aria-pressed",
         wantMax ? "true" : "false"
       );
+
+      if (seg === "selected") {
+        const byId = new Map();
+        (recipients.items || []).forEach((r) => {
+          if (!r.customer_id || byId.has(r.customer_id)) return;
+          byId.set(r.customer_id, {
+            id: r.customer_id,
+            name: r.name || "Клиент",
+            phone: r.phone || "",
+            phone_masked: r.phone_masked || r.phone || "",
+            messengers: null,
+          });
+        });
+        state.wizard.selectedCustomers = [...byId.values()];
+        state.wizard.audienceMode = "pick";
+        $$(".aud-mode-btn").forEach((b) => {
+          const on = b.dataset.aud === "pick";
+          b.classList.toggle("on", on);
+          b.setAttribute("aria-selected", on ? "true" : "false");
+        });
+        const segBlock = $("#audSegmentBlock");
+        const pickBlock = $("#audPickBlock");
+        if (segBlock) segBlock.hidden = true;
+        if (pickBlock) pickBlock.hidden = false;
+        renderPickSelected();
+      } else {
+        state.wizard.audienceMode = "segment";
+        state.wizard.selectedCustomers = [];
+        $$(".aud-mode-btn").forEach((b) => {
+          const on = b.dataset.aud === "segment";
+          b.classList.toggle("on", on);
+          b.setAttribute("aria-selected", on ? "true" : "false");
+        });
+        const segBlock = $("#audSegmentBlock");
+        const pickBlock = $("#audPickBlock");
+        if (segBlock) segBlock.hidden = false;
+        if (pickBlock) pickBlock.hidden = true;
+        $$("#s0 .choice").forEach((btn) =>
+          btn.classList.toggle("on", btn.dataset.seg === seg)
+        );
+      }
       go("compose");
       setStep(1);
     });
@@ -968,7 +1008,10 @@
     return `<span class="seg-pill ${esc(cls)}"><span class="d"></span>${esc(label)}</span>`;
   }
 
-  function clientChannelsHtml(channels) {
+  function clientChannelsHtml(channels, messengers) {
+    if (messengers && (messengers.tg || messengers.max)) {
+      return messengerBadgesHtml(messengers);
+    }
     const parts = String(channels || "")
       .split(",")
       .map((ch) => ch.trim())
@@ -1039,7 +1082,7 @@
             </div>
           </td>
           <td>${clientSegmentPillHtml(c)}</td>
-          <td><div class="ch-cell-inner">${clientChannelsHtml(c.channels)}</div></td>
+          <td><div class="ch-cell-inner">${clientChannelsHtml(c.channels, c.messengers)}</div></td>
           <td class="hide-mob">${clientLastOrderHtml(c)}</td>
           <td>${clientNextEventHtml(c.next_event)}</td>
           <td class="cl-chev"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 6l6 6-6 6"/></svg></td>
@@ -3446,6 +3489,7 @@
     all: "Все клиенты",
     new: "Новые",
     inactive: "Давно не заказывали",
+    selected: "Выбранные клиенты",
   };
 
   const AI_CHIP_PROMPTS = {
@@ -3488,15 +3532,33 @@
       .join(" + ");
   }
 
+  function currentAudienceMode() {
+    return state.wizard.audienceMode === "pick" ? "pick" : "segment";
+  }
+
   function currentSegment() {
+    if (currentAudienceMode() === "pick") return "selected";
     return $("#s0 .choice.on")?.dataset.seg || state.wizard.segment || "all";
   }
 
   function segmentLabel(seg) {
+    if (seg === "selected") {
+      const n = (state.wizard.selectedCustomers || []).length;
+      return n ? `Выбранные · ${fmtNum(n)}` : "Выбранные клиенты";
+    }
     return SEG_LABELS[seg] || "Клиенты";
   }
 
+  function selectedCustomerIds() {
+    return (state.wizard.selectedCustomers || []).map((c) => c.id);
+  }
+
   function hasAudience() {
+    if (currentAudienceMode() === "pick") {
+      return (
+        selectedCustomerIds().length > 0 && (state.wizard.willSend || 0) > 0
+      );
+    }
     return (state.wizard.willSend || 0) > 0;
   }
 
@@ -3504,6 +3566,173 @@
     const el = $("#audienceError");
     if (!el) return;
     el.hidden = !show;
+    if (show && currentAudienceMode() === "pick" && !selectedCustomerIds().length) {
+      el.textContent =
+        "Выберите хотя бы одного клиента с Telegram или MAX.";
+    } else if (show) {
+      el.textContent =
+        "Нет получателей для отправки — смените сегмент, канал или подключите аккаунт в Настройках.";
+    }
+  }
+
+  function messengerBadgesHtml(messengers, { compact = false } = {}) {
+    const m = messengers || {};
+    const badges = [];
+    const tg = m.tg || {};
+    const mx = m.max || {};
+    if (tg.linked) {
+      badges.push(
+        `<span class="ms-badge tg"${compact ? "" : ' title="Есть Telegram id"'}>Telegram</span>`
+      );
+    } else if (tg.by_phone || tg.reachable) {
+      badges.push(
+        `<span class="ms-badge tg soft"${
+          compact ? "" : ' title="Можно отправить по телефону"'
+        }>${compact ? "TG·тел" : "TG · телефон"}</span>`
+      );
+    }
+    if (mx.linked) {
+      badges.push(
+        `<span class="ms-badge max"${compact ? "" : ' title="Есть MAX id"'}>MAX</span>`
+      );
+    }
+    if (!badges.length) {
+      badges.push(`<span class="ms-badge none">нет</span>`);
+    }
+    return badges.join("");
+  }
+
+  function clientHasMessenger(c) {
+    const m = c?.messengers || {};
+    return (
+      (m.tg && (m.tg.linked || m.tg.reachable)) || (m.max && m.max.linked)
+    );
+  }
+
+  function setAudienceMode(mode) {
+    const next = mode === "pick" ? "pick" : "segment";
+    state.wizard.audienceMode = next;
+    $$(".aud-mode-btn").forEach((b) => {
+      const on = b.dataset.aud === next;
+      b.classList.toggle("on", on);
+      b.setAttribute("aria-selected", on ? "true" : "false");
+    });
+    const segBlock = $("#audSegmentBlock");
+    const pickBlock = $("#audPickBlock");
+    if (segBlock) segBlock.hidden = next === "pick";
+    if (pickBlock) pickBlock.hidden = next !== "pick";
+    if (next === "pick") {
+      state.wizard.segment = "selected";
+      renderPickSelected();
+      const q = ($("#pickSearch")?.value || "").trim();
+      if (q.length >= 2) searchPickClients(q);
+      else renderPickResults([]);
+    } else if (state.wizard.segment === "selected") {
+      state.wizard.segment =
+        $("#s0 .choice.on")?.dataset.seg || "regular";
+    }
+    refreshMatchPreview();
+  }
+
+  function renderPickSelected() {
+    const wrap = $("#pickSelected");
+    const chips = $("#pickChips");
+    const countEl = $("#pickSelectedCount");
+    const list = state.wizard.selectedCustomers || [];
+    if (countEl) countEl.textContent = String(list.length);
+    if (wrap) wrap.hidden = !list.length;
+    if (!chips) return;
+    chips.innerHTML = list
+      .map(
+        (c) => `<span class="aud-chip" data-id="${c.id}">
+          <span class="aud-chip-name">${esc(c.name || "Клиент")}</span>
+          <span class="aud-chip-ms">${messengerBadgesHtml(c.messengers, { compact: true })}</span>
+          <button type="button" class="aud-chip-x" data-remove="${c.id}" aria-label="Убрать">×</button>
+        </span>`
+      )
+      .join("");
+  }
+
+  function renderPickResults(items) {
+    const box = $("#pickResults");
+    if (!box) return;
+    const selected = new Set(selectedCustomerIds());
+    if (!items.length) {
+      const q = ($("#pickSearch")?.value || "").trim();
+      box.innerHTML = `<div class="aud-pick-empty">${
+        q.length < 2
+          ? "Начните вводить имя или телефон"
+          : "Никого не нашли"
+      }</div>`;
+      return;
+    }
+    box.innerHTML = items
+      .map((c) => {
+        const on = selected.has(c.id);
+        const hasAny = clientHasMessenger(c);
+        const disabled = !hasAny && !on;
+        return `<button type="button" class="aud-pick-row${on ? " on" : ""}${
+          disabled ? " disabled" : ""
+        }" data-pick-id="${c.id}" ${disabled ? "disabled" : ""} role="option" aria-selected="${on}">
+          <span class="aud-pick-av">${esc(initials(c.name))}</span>
+          <span class="aud-pick-meta">
+            <div class="aud-pick-name">${esc(c.name || "Клиент")}</div>
+            <div class="aud-pick-phone">${esc(c.phone_masked || c.phone || "—")}</div>
+          </span>
+          <span class="aud-pick-ms">${messengerBadgesHtml(c.messengers)}</span>
+        </button>`;
+      })
+      .join("");
+  }
+
+  function togglePickCustomer(c) {
+    if (!c || !c.id) return;
+    const list = state.wizard.selectedCustomers || [];
+    const idx = list.findIndex((x) => x.id === c.id);
+    if (idx >= 0) {
+      list.splice(idx, 1);
+    } else {
+      if (!clientHasMessenger(c)) return;
+      list.push({
+        id: c.id,
+        name: c.name || "Клиент",
+        phone: c.phone || "",
+        phone_masked: c.phone_masked || c.phone || "",
+        messengers: c.messengers || null,
+      });
+    }
+    state.wizard.selectedCustomers = list;
+    renderPickSelected();
+    // обновить подсветку в результатах без нового запроса
+    const q = ($("#pickSearch")?.value || "").trim();
+    if (q.length >= 2 && pickSearchCache.length) {
+      renderPickResults(pickSearchCache);
+    }
+    refreshMatchPreview();
+  }
+
+  let pickSearchTimer = null;
+  let pickSearchCache = [];
+  let pickSearchSeq = 0;
+
+  async function searchPickClients(query) {
+    const box = $("#pickResults");
+    const seq = ++pickSearchSeq;
+    if (box) box.innerHTML = `<div class="aud-pick-loading">Ищем…</div>`;
+    try {
+      const data = await AdminAPI.clients({
+        search: query,
+        page_size: 30,
+      });
+      if (seq !== pickSearchSeq) return;
+      pickSearchCache = data.items || [];
+      renderPickResults(pickSearchCache);
+    } catch (_) {
+      if (seq !== pickSearchSeq) return;
+      pickSearchCache = [];
+      if (box)
+        box.innerHTML = `<div class="aud-pick-empty">Не удалось загрузить</div>`;
+    }
   }
 
   function updateAudienceContext() {
@@ -3518,7 +3747,7 @@
   }
 
   function adaptAiChipsForSegment() {
-    const seg = currentSegment();
+    const seg = currentSegment() === "selected" ? "all" : currentSegment();
     const map = AI_CHIP_PROMPTS[seg] || AI_CHIP_PROMPTS.all;
     $$("#aiChips .ai-chip").forEach((chip) => {
       const key = chip.dataset.chip;
@@ -3580,14 +3809,37 @@
   async function refreshMatchPreview() {
     const segment = currentSegment();
     const channels = selectedChannels();
+    const mode = currentAudienceMode();
     state.wizard.channels = channels;
     state.wizard.segment = segment;
     const box = $("#matchPreview");
+    if (mode === "pick" && !selectedCustomerIds().length) {
+      state.wizard.willSend = 0;
+      if ($("#matchWill")) $("#matchWill").textContent = "0 доставок";
+      if ($("#matchTg")) $("#matchTg").textContent = "0";
+      if ($("#matchMax")) $("#matchMax").textContent = "0";
+      if ($("#matchTgRow")) $("#matchTgRow").hidden = !channels.includes("tg");
+      if ($("#matchMaxRow")) $("#matchMaxRow").hidden = !channels.includes("max");
+      const note = $("#matchNote");
+      if (note) {
+        note.textContent = "Выберите клиентов из поиска — справа видны Telegram и MAX.";
+        note.className = "match-preview-note";
+      }
+      if (box) box.hidden = false;
+      updateAudienceContext();
+      if (state.step === 2) refreshSendSummary();
+      syncComposeNext();
+      return;
+    }
     try {
-      const data = await AdminAPI.mailingPreview({
+      const params = {
         segment,
         channels: channels.join(","),
-      });
+      };
+      if (mode === "pick") {
+        params.customer_ids = selectedCustomerIds().join(",");
+      }
+      const data = await AdminAPI.mailingPreview(params);
       const will = data.will_send || 0;
       state.wizard.willSend = will;
       const tgN = (data.reachable && data.reachable.tg) || 0;
@@ -3608,14 +3860,14 @@
           : "нет аккаунта";
       }
       if ($("#chanMaxMeta")) {
-        const mode = maxAcc?.mode;
-        if (mode === "userbot") {
+        const modeMax = maxAcc?.mode;
+        if (modeMax === "userbot") {
           $("#chanMaxMeta").textContent = maxAcc.label
             ? "личный · " + maxAcc.label
             : maxAcc.userbot_count > 1
               ? maxAcc.userbot_count + " акк."
               : "личный аккаунт";
-        } else if (mode === "bot") {
+        } else if (modeMax === "bot") {
           $("#chanMaxMeta").textContent = "бот подключён";
         } else {
           $("#chanMaxMeta").textContent = "не подключён";
@@ -3624,13 +3876,28 @@
       $("#chanTg")?.classList.toggle("is-off", !tgAcc?.ready);
       $("#chanMax")?.classList.toggle("is-off", !maxAcc?.ready);
 
+      // обновить messengers у выбранных, если сервер вернул selected
+      if (mode === "pick" && Array.isArray(data.selected)) {
+        const byId = Object.fromEntries(
+          data.selected.map((s) => [s.id, s.messengers])
+        );
+        state.wizard.selectedCustomers = (
+          state.wizard.selectedCustomers || []
+        ).map((c) =>
+          byId[c.id] ? { ...c, messengers: byId[c.id] } : c
+        );
+        renderPickSelected();
+      }
+
       const note = $("#matchNote");
       if (note) {
         const skipped = data.skipped || {};
         const skipTotal = Object.values(skipped).reduce((a, b) => a + b, 0);
         if (!will) {
           note.textContent =
-            "Нет доставляемых получателей — подключите аккаунты или выберите другой сегмент/канал.";
+            mode === "pick"
+              ? "У выбранных нет доставки в отмеченные каналы — смените канал или клиента."
+              : "Нет доставляемых получателей — подключите аккаунты или выберите другой сегмент/канал.";
           note.className = "match-preview-note warn";
         } else if (skipTotal) {
           note.textContent =
@@ -3639,7 +3906,10 @@
             " (нет привязки к каналу или аккаунт недоступен).";
           note.className = "match-preview-note warn";
         } else {
-          note.textContent = "Все выбранные клиенты сверены с аккаунтами.";
+          note.textContent =
+            mode === "pick"
+              ? "Выбранные клиенты сверены с Telegram и MAX."
+              : "Все выбранные клиенты сверены с аккаунтами.";
           note.className = "match-preview-note ok";
         }
       }
@@ -3794,14 +4064,31 @@
       updatePreview();
       updateAudienceContext();
       syncMediaUi();
+      if (currentAudienceMode() === "pick") renderPickSelected();
+      refreshMatchPreview();
       return;
     }
 
     state.wizard.segment = "regular";
+    state.wizard.audienceMode = "segment";
+    state.wizard.selectedCustomers = [];
     state.wizard.when = "now";
     state.wizard.willSend = null;
     state.wizard.channels = ["tg"];
     clearComposeMedia();
+    $$(".aud-mode-btn").forEach((b) => {
+      const on = b.dataset.aud === "segment";
+      b.classList.toggle("on", on);
+      b.setAttribute("aria-selected", on ? "true" : "false");
+    });
+    const segBlock = $("#audSegmentBlock");
+    const pickBlock = $("#audPickBlock");
+    if (segBlock) segBlock.hidden = false;
+    if (pickBlock) pickBlock.hidden = true;
+    if ($("#pickSearch")) $("#pickSearch").value = "";
+    pickSearchCache = [];
+    renderPickSelected();
+    renderPickResults([]);
     $$("#s0 .choice").forEach((c) =>
       c.classList.toggle("on", c.dataset.seg === "regular")
     );
@@ -3818,6 +4105,46 @@
     updatePreview();
     updateAudienceContext();
   }
+
+  $$(".aud-mode-btn").forEach((btn) =>
+    btn.addEventListener("click", () => setAudienceMode(btn.dataset.aud))
+  );
+
+  $("#pickSearch")?.addEventListener("input", () => {
+    clearTimeout(pickSearchTimer);
+    const q = ($("#pickSearch").value || "").trim();
+    pickSearchTimer = setTimeout(() => {
+      if (q.length < 2) {
+        pickSearchCache = [];
+        renderPickResults([]);
+        return;
+      }
+      searchPickClients(q);
+    }, 280);
+  });
+
+  $("#pickResults")?.addEventListener("click", (e) => {
+    const row = e.target.closest("[data-pick-id]");
+    if (!row || row.disabled) return;
+    const id = Number(row.dataset.pickId);
+    const fromCache = pickSearchCache.find((c) => c.id === id);
+    const fromSelected = (state.wizard.selectedCustomers || []).find(
+      (c) => c.id === id
+    );
+    togglePickCustomer(fromCache || fromSelected || { id });
+  });
+
+  $("#pickChips")?.addEventListener("click", (e) => {
+    const btn = e.target.closest("[data-remove]");
+    if (!btn) return;
+    const id = Number(btn.dataset.remove);
+    state.wizard.selectedCustomers = (
+      state.wizard.selectedCustomers || []
+    ).filter((c) => c.id !== id);
+    renderPickSelected();
+    if (pickSearchCache.length) renderPickResults(pickSearchCache);
+    refreshMatchPreview();
+  });
 
   $$("#s0 .choice").forEach((c) =>
     c.addEventListener("click", () => {
@@ -4125,7 +4452,7 @@
       wnext.disabled = true;
       const channels = selectedChannels();
       const media = state.wizard.media;
-      const created = await AdminAPI.createCampaign({
+      const body = {
         title,
         message: msgTa.value,
         segment,
@@ -4137,7 +4464,12 @@
         media_kind: media?.media_kind || undefined,
         media_filename: media?.media_filename || undefined,
         media_mime: media?.media_mime || undefined,
-      });
+      };
+      if (currentAudienceMode() === "pick") {
+        body.customer_ids = selectedCustomerIds();
+        body.segment = "selected";
+      }
+      const created = await AdminAPI.createCampaign(body);
       clearComposeMedia();
       setStep(3);
       const will =

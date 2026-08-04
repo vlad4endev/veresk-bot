@@ -924,28 +924,47 @@
       </div>
       <div class="wstep active" id="s0">
         <div class="wq">Кому отправим?</div>
-        <p class="wsub">Сначала аудитория и канал — сразу видно, сколько человек реально получат сообщение.</p>
-        <div class="choices">
-          <button type="button" class="choice on" data-seg="regular" data-count="0">
-            <div class="ci"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"/></svg></div>
-            <div><div class="ct">Постоянные</div><div class="cc">— человек</div></div>
-            <span class="rc"><svg viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="3"><path d="M20 6 9 17l-5-5"/></svg></span>
-          </button>
-          <button type="button" class="choice" data-seg="all" data-count="0">
-            <div class="ci"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="9" cy="8" r="3"/><path d="M3 20c0-3 3-5 6-5s6 2 6 5"/><path d="M16 6a3 3 0 010 6"/><path d="M18 20c0-2-.6-3.5-2-4.5"/></svg></div>
-            <div><div class="ct">Все клиенты</div><div class="cc">— человек</div></div>
-            <span class="rc"><svg viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="3"><path d="M20 6 9 17l-5-5"/></svg></span>
-          </button>
-          <button type="button" class="choice" data-seg="new" data-count="0">
-            <div class="ci"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M12 3v6M9 6h6"/><path d="M5 21c1-5 3.5-8 7-9 3.5 1 6 4 7 9"/></svg></div>
-            <div><div class="ct">Новые</div><div class="cc">— человек</div></div>
-            <span class="rc"><svg viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="3"><path d="M20 6 9 17l-5-5"/></svg></span>
-          </button>
-          <button type="button" class="choice" data-seg="inactive" data-count="0">
-            <div class="ci"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg></div>
-            <div><div class="ct">Давно не заказывали</div><div class="cc">— человек</div></div>
-            <span class="rc"><svg viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="3"><path d="M20 6 9 17l-5-5"/></svg></span>
-          </button>
+        <p class="wsub">Сегмент целиком или точечно из базы — сразу видно, кто есть в Telegram и MAX.</p>
+        <div class="aud-mode" role="tablist" aria-label="Тип аудитории">
+          <button type="button" class="aud-mode-btn on" data-aud="segment" id="audModeSegment" role="tab" aria-selected="true">Сегмент</button>
+          <button type="button" class="aud-mode-btn" data-aud="pick" id="audModePick" role="tab" aria-selected="false">Выбрать клиентов</button>
+        </div>
+        <div id="audSegmentBlock">
+          <div class="choices">
+            <button type="button" class="choice on" data-seg="regular" data-count="0">
+              <div class="ci"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"/></svg></div>
+              <div><div class="ct">Постоянные</div><div class="cc">— человек</div></div>
+              <span class="rc"><svg viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="3"><path d="M20 6 9 17l-5-5"/></svg></span>
+            </button>
+            <button type="button" class="choice" data-seg="all" data-count="0">
+              <div class="ci"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="9" cy="8" r="3"/><path d="M3 20c0-3 3-5 6-5s6 2 6 5"/><path d="M16 6a3 3 0 010 6"/><path d="M18 20c0-2-.6-3.5-2-4.5"/></svg></div>
+              <div><div class="ct">Все клиенты</div><div class="cc">— человек</div></div>
+              <span class="rc"><svg viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="3"><path d="M20 6 9 17l-5-5"/></svg></span>
+            </button>
+            <button type="button" class="choice" data-seg="new" data-count="0">
+              <div class="ci"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M12 3v6M9 6h6"/><path d="M5 21c1-5 3.5-8 7-9 3.5 1 6 4 7 9"/></svg></div>
+              <div><div class="ct">Новые</div><div class="cc">— человек</div></div>
+              <span class="rc"><svg viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="3"><path d="M20 6 9 17l-5-5"/></svg></span>
+            </button>
+            <button type="button" class="choice" data-seg="inactive" data-count="0">
+              <div class="ci"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg></div>
+              <div><div class="ct">Давно не заказывали</div><div class="cc">— человек</div></div>
+              <span class="rc"><svg viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="3"><path d="M20 6 9 17l-5-5"/></svg></span>
+            </button>
+          </div>
+        </div>
+        <div id="audPickBlock" class="aud-pick" hidden>
+          <label class="lbl" for="pickSearch">Найти клиента</label>
+          <div class="aud-pick-search">
+            <input type="search" id="pickSearch" class="inp" placeholder="Имя или телефон…" autocomplete="off">
+          </div>
+          <div class="aud-pick-selected" id="pickSelected" hidden>
+            <div class="aud-pick-selected-title">Выбрано · <span id="pickSelectedCount">0</span></div>
+            <div class="aud-pick-chips" id="pickChips"></div>
+          </div>
+          <div class="aud-pick-results" id="pickResults" role="listbox" aria-label="Результаты поиска">
+            <div class="aud-pick-empty">Начните вводить имя или телефон</div>
+          </div>
         </div>
         <div class="wiz-channels" id="wizChannels">
           <div class="wiz-channels-title">Куда отправить</div>

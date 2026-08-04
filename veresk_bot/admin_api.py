@@ -75,6 +75,7 @@ from mailing_db import (
     upsert_customer,
     validate_admin_session,
     verify_admin_password,
+    customers_by_ids,
     customers_for_segment,
     ADMIN_SESSION_HOURS,
     ADMIN_USER_ROLES,
@@ -86,6 +87,7 @@ from posiflora_sync import last_sync_info, sync_from_posiflora
 from senders.matching import (
     build_recipients_for_customers,
     customer_can_receive,
+    customer_messenger_status,
     normalize_channel,
     parse_channels,
     preview_mailing_match,
@@ -152,20 +154,40 @@ def _mask_phone(phone: str) -> str:
 
 def _channel_for_customer(c: dict) -> str:
     """Каналы доставки: TG по id/телефону; MAX по id или max_profiles по телефону."""
-    from senders.matching import resolve_max_user_id_sync
-
+    status = customer_messenger_status(c)
     parts = []
-    if c.get("tg_user_id") or c.get("phone"):
+    if status["tg"]["reachable"]:
         parts.append("Telegram")
-    if (
-        resolve_max_user_id_sync(
-            max_user_id=c.get("max_user_id"),
-            phone=c.get("phone"),
-        )
-        is not None
-    ):
+    if status["max"]["linked"]:
         parts.append("MAX")
     return ",".join(parts) or "—"
+
+
+def _messengers_public(c: dict) -> dict[str, Any]:
+    """Публичный статус привязки к Telegram / MAX для UI."""
+    return customer_messenger_status(c)
+
+
+def _parse_customer_ids(raw: Any) -> list[int]:
+    """Из body/query: list, CSV или одно число → уникальные int id."""
+    if raw is None or raw == "":
+        return []
+    if isinstance(raw, list):
+        parts = raw
+    else:
+        parts = str(raw).replace(";", ",").split(",")
+    out: list[int] = []
+    seen: set[int] = set()
+    for p in parts:
+        try:
+            cid = int(str(p).strip())
+        except (TypeError, ValueError):
+            continue
+        if cid <= 0 or cid in seen:
+            continue
+        seen.add(cid)
+        out.append(cid)
+    return out
 
 
 def _segment_label(seg: str) -> str:
@@ -174,6 +196,7 @@ def _segment_label(seg: str) -> str:
         "regular": "Постоянный",
         "new": "Новый",
         "inactive": "Давно не заказывал",
+        "selected": "Выбранные клиенты",
     }.get(seg, seg)
 
 
@@ -806,6 +829,7 @@ async def handle_clients_list(request: web.Request) -> web.Response:
                 "segment": c["segment"],
                 "segment_label": _segment_label(c["segment"]),
                 "channels": _channel_for_customer(c),
+                "messengers": _messengers_public(c),
                 "tg_user_id": c.get("tg_user_id"),
                 "max_user_id": c.get("max_user_id"),
                 "last_order_at": c.get("last_order_at"),
@@ -841,6 +865,7 @@ async def handle_client_detail(request: web.Request) -> web.Response:
             "segment": c["segment"],
             "segment_label": _segment_label(c["segment"]),
             "channels": _channel_for_customer(c),
+            "messengers": _messengers_public(c),
             "tg_user_id": c.get("tg_user_id"),
             "max_user_id": c.get("max_user_id"),
             "notes": c.get("notes") or "",
@@ -1032,7 +1057,7 @@ async def handle_campaign_get(request: web.Request) -> web.Response:
 
 
 async def handle_mailing_preview(request: web.Request) -> web.Response:
-    """Превью сверки: сегмент × каналы × готовые аккаунты."""
+    """Превью сверки: сегмент/выбранные клиенты × каналы × готовые аккаунты."""
     err = await _require_admin(request)
     if err:
         return err
@@ -1042,10 +1067,17 @@ async def handle_mailing_preview(request: web.Request) -> web.Response:
         "Все клиенты": "all",
         "Новые": "new",
         "Давно не заказывали": "inactive",
+        "Выбранные клиенты": "selected",
+        "selected": "selected",
     }
     segment = seg_map.get(segment, segment)
     channels = str(request.query.get("channels") or "tg")
-    data = await preview_mailing_match(segment=segment, channels=channels)
+    customer_ids = _parse_customer_ids(request.query.get("customer_ids"))
+    data = await preview_mailing_match(
+        segment=segment,
+        channels=channels,
+        customer_ids=customer_ids or None,
+    )
     return _json(data)
 
 
@@ -1132,8 +1164,13 @@ async def handle_campaign_create(request: web.Request) -> web.Response:
         "Все клиенты": "all",
         "Новые": "new",
         "Давно не заказывали": "inactive",
+        "Выбранные клиенты": "selected",
+        "selected": "selected",
     }
     segment = seg_map.get(segment, segment)
+    customer_ids = _parse_customer_ids(body.get("customer_ids"))
+    if customer_ids:
+        segment = "selected"
     ch_list = parse_channels(body.get("channels") or "tg")
     channels = ",".join(ch_list)
     emoji = str(body.get("emoji") or "🌷")
@@ -1160,7 +1197,18 @@ async def handle_campaign_create(request: web.Request) -> web.Response:
         media_mime = str(body.get("media_mime") or "image/jpeg")
 
     # Сверка клиентов с аккаунтами до постановки в очередь
-    customers = await customers_for_segment(segment)
+    if customer_ids:
+        customers = await customers_by_ids(customer_ids)
+        if not customers:
+            return _json(
+                {
+                    "error": "customers_not_found",
+                    "message": "Выбранные клиенты не найдены в базе",
+                },
+                status=400,
+            )
+    else:
+        customers = await customers_for_segment(segment)
     tg_ready = await pick_ready_account("tg_userbot") if "tg" in ch_list else None
     max_userbot = await pick_ready_account("max_userbot") if "max" in ch_list else None
     max_ok = (

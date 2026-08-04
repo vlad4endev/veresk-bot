@@ -173,6 +173,36 @@ def customer_can_receive(
     return False, f"Неизвестный канал: {channel}"
 
 
+def customer_messenger_status(customer: dict[str, Any]) -> dict[str, Any]:
+    """
+    Сопоставление клиента с мессенджерами для UI.
+
+    linked=True — точно известен user id (карточка или max_profiles).
+    by_phone=True — можно попытаться доставить по телефону (TG ImportContacts /
+    MAX userbot), но id ещё не подтверждён.
+    """
+    tg_id = _parse_int(customer.get("tg_user_id"))
+    phone_ok = bool(phone_digits(customer.get("phone")))
+    max_id = resolve_max_user_id_sync(
+        max_user_id=customer.get("max_user_id"),
+        phone=customer.get("phone"),
+    )
+    return {
+        "tg": {
+            "linked": tg_id is not None,
+            "user_id": tg_id,
+            "by_phone": tg_id is None and phone_ok,
+            "reachable": tg_id is not None or phone_ok,
+        },
+        "max": {
+            "linked": max_id is not None,
+            "user_id": max_id,
+            "by_phone": max_id is None and phone_ok,
+            "reachable": max_id is not None,
+        },
+    }
+
+
 def build_recipients_for_customers(
     customers: list[dict[str, Any]],
     channels: list[str],
@@ -236,12 +266,23 @@ async def preview_mailing_match(
     *,
     segment: str,
     channels: str | list[str],
+    customer_ids: list[int] | None = None,
 ) -> dict[str, Any]:
-    """Превью: сколько клиентов сегмента реально получат через выбранные каналы."""
-    from mailing_db import customers_for_segment, list_send_accounts, pick_ready_account
+    """Превью: сколько клиентов сегмента (или выбранных id) реально получат сообщение."""
+    from mailing_db import (
+        customers_by_ids,
+        customers_for_segment,
+        list_send_accounts,
+        pick_ready_account,
+    )
     from senders.max_bot import is_max_configured
 
-    customers = await customers_for_segment(segment or "all")
+    if customer_ids:
+        customers = await customers_by_ids(customer_ids)
+        audience = "selected"
+    else:
+        customers = await customers_for_segment(segment or "all")
+        audience = segment or "all"
     accounts = await list_send_accounts()
     tg_ready = await pick_ready_account("tg_userbot")
     tg_count = sum(
@@ -265,8 +306,17 @@ async def preview_mailing_match(
         max_allow_phone=bool(max_userbot),
     )
     max_mode = "userbot" if max_userbot else ("bot" if max_bot_ok else "none")
+    selected = [
+        {
+            "id": int(c["id"]),
+            "name": c.get("name") or "",
+            "phone": c.get("phone") or "",
+            "messengers": customer_messenger_status(c),
+        }
+        for c in customers
+    ]
     return {
-        "segment": segment or "all",
+        "segment": audience,
         "segment_total": match["segment_total"],
         "channels": match["channels"],
         "accounts": {
@@ -289,4 +339,5 @@ async def preview_mailing_match(
         "skipped": match["skipped"],
         "skipped_samples": match["skipped_samples"],
         "will_send": match["reachable"]["total"],
+        "selected": selected if customer_ids else None,
     }
