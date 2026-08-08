@@ -89,7 +89,7 @@ MAX_WEBHOOK_SECRET = os.getenv("MAX_WEBHOOK_SECRET", "").strip()
 # База MAX Bot API
 MAX_API_BASE = os.getenv("MAX_API_BASE", "https://platform-api2.max.ru").strip()
 
-# ИИ для текстов рассылок (OpenAI / OpenRouter / YandexGPT / свой API)
+# ИИ для текстов рассылок (OpenAI / OpenRouter / DeepSeek / YandexGPT / свой API)
 # Удобнее задать в админке: Настройки → Сервисы → ИИ-редактор
 AI_PROVIDER = os.getenv("AI_PROVIDER", "openai").strip().lower() or "openai"
 AI_API_KEY = os.getenv("AI_API_KEY", os.getenv("OPENAI_API_KEY", "")).strip()

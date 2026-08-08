@@ -1,7 +1,7 @@
 """
 Генерация текстов рассылок через OpenAI-совместимый Chat Completions API.
 
-Провайдеры (операторы): openai | openrouter | yandexgpt | custom.
+Провайдеры (операторы): openai | openrouter | deepseek | yandexgpt | custom.
 Ключи и параметры: сначала из Настроек (runtime), иначе из .env.
 """
 
@@ -24,7 +24,7 @@ from config import (
 
 logger = logging.getLogger(__name__)
 
-PROVIDERS = ("openai", "openrouter", "yandexgpt", "custom")
+PROVIDERS = ("openai", "openrouter", "deepseek", "yandexgpt", "custom")
 
 PROVIDER_PRESETS: dict[str, dict[str, str]] = {
     "openai": {
@@ -38,6 +38,12 @@ PROVIDER_PRESETS: dict[str, dict[str, str]] = {
         "api_base": "https://openrouter.ai/api/v1",
         "model": "openai/gpt-4o-mini",
         "hint": "Ключ с openrouter.ai/keys · модель вида provider/model",
+    },
+    "deepseek": {
+        "label": "DeepSeek",
+        "api_base": "https://api.deepseek.com/v1",
+        "model": "deepseek-chat",
+        "hint": "Ключ с platform.deepseek.com · модели deepseek-chat / deepseek-reasoner",
     },
     "yandexgpt": {
         "label": "YandexGPT",

@@ -2709,6 +2709,14 @@
           needs_folder: false,
         },
         {
+          id: "deepseek",
+          label: "DeepSeek",
+          api_base: "https://api.deepseek.com/v1",
+          model: "deepseek-chat",
+          hint: "Ключ с platform.deepseek.com · deepseek-chat / deepseek-reasoner",
+          needs_folder: false,
+        },
+        {
           id: "yandexgpt",
           label: "YandexGPT",
           api_base: "https://llm.api.cloud.yandex.net/v1",
@@ -2897,7 +2905,7 @@
             }>Отключить</button>
             <button type="button" class="btn" onclick="go('aichat')">Открыть ИИ-чат</button>
           </div>
-          <p class="form-foot">OpenRouter: <code>openai/gpt-4o-mini</code>. YandexGPT: <code>yandexgpt-lite/latest</code>.</p>
+          <p class="form-foot">DeepSeek: <code>deepseek-chat</code>. OpenRouter: <code>openai/gpt-4o-mini</code>. YandexGPT: <code>yandexgpt-lite/latest</code>.</p>
         </div>
       </div>`;
 
