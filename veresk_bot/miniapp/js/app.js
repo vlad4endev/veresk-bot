@@ -3,7 +3,7 @@
 const tg = window.Telegram?.WebApp;
 window.tg = tg;
 
-const SCREEN_ORDER = ["home", "order", "status", "done"];
+const SCREEN_ORDER = ["home", "order", "status", "done", "wheel"];
 
 function hasTelegramAuth() {
   return Boolean(tg?.initData);
@@ -79,6 +79,9 @@ function goTo(screenName) {
   if (screenName === "home" && window.VereskStatus) {
     window.VereskStatus.refreshPreview();
   }
+  if (screenName === "wheel" && window.VereskFortuneWheel) {
+    window.VereskFortuneWheel.mount();
+  }
 }
 
 window.goTo = goTo;
@@ -88,5 +91,30 @@ document.getElementById("status-back")?.addEventListener("click", () => goTo("ho
 document.getElementById("btn-open-status")?.addEventListener("click", () => goTo("status"));
 document.getElementById("btn-go-home")?.addEventListener("click", () => goTo("home"));
 document.getElementById("btn-go-status")?.addEventListener("click", () => goTo("status"));
+
+// Старт с колесом: ?wheel=1, #wheel или Telegram start_param=wheel
+(function bootWheelDeepLink() {
+  try {
+    const params = new URLSearchParams(location.search);
+    const hash = (location.hash || "").replace(/^#/, "");
+    const startParam = String(tg?.initDataUnsafe?.start_param || "").toLowerCase();
+    const wantWheel =
+      params.get("wheel") === "1" ||
+      params.get("screen") === "wheel" ||
+      hash === "wheel" ||
+      startParam === "wheel" ||
+      startParam.startsWith("wheel_");
+    if (wantWheel) {
+      document.addEventListener("DOMContentLoaded", () => {
+        window.VereskFortuneWheel?.open?.();
+      });
+      if (document.readyState !== "loading") {
+        window.VereskFortuneWheel?.open?.();
+      }
+    }
+  } catch (e) {
+    console.warn("wheel deeplink", e);
+  }
+})();
 
 // Старт с order_id — в status.js после загрузки всех скриптов

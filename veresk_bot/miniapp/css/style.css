@@ -1207,6 +1207,18 @@ body:has(.tg-guard:not(.hidden)) #app {
   overflow-wrap: anywhere;
 }
 
+/* Fortune wheel screen */
+.wheel-screen-body {
+  display: flex;
+  justify-content: center;
+  padding-top: 8px;
+  padding-bottom: calc(24px + var(--v-safe-bottom));
+}
+
+.wheel-screen-body .vw-root {
+  max-width: 340px;
+}
+
 /* Motion preferences */
 @media (prefers-reduced-motion: reduce) {
   *,

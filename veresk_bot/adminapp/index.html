@@ -14,7 +14,8 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,500;9..144,600;9..144,700&family=Manrope:wght@400;500;600;700&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="css/admin.css?v=49">
+<link rel="stylesheet" href="css/admin.css?v=51">
+<link rel="stylesheet" href="css/wheel.css?v=1">
 <!-- Критичный CSS до paint: иначе логин мелькнёт, пока качается admin.css -->
 <style>
   #authBoot{display:none;position:fixed;inset:0;z-index:50;flex-direction:column;align-items:center;justify-content:center;gap:18px}
@@ -1146,6 +1147,61 @@
       </div>
     </section>
 
+    <!-- WHEEL (создание колеса фортуны — пока без пункта в меню) -->
+    <section class="panel" id="wheel">
+      <button type="button" class="back" id="wheelExit"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M15 18l-6-6 6-6"/></svg>Назад</button>
+      <div class="wheel-head">
+        <div>
+          <div class="page-title page-title-tight">Колесо фортуны</div>
+          <p class="page-desc">Редактируйте призы слева — справа живое превью как в Mini App бота.</p>
+        </div>
+        <div class="wheel-head-actions">
+          <button type="button" class="btn" id="wheelSpinDemo" title="Прокрутить превью">Крутить</button>
+          <button type="button" class="btn primary" id="wheelSave" title="Сохранение подключим позже">Сохранить</button>
+        </div>
+      </div>
+
+      <div class="wheel-layout">
+        <div class="wheel-editor">
+          <div class="wheel-block">
+            <label class="lbl" for="wheelTitle">Название</label>
+            <input class="wheel-inp" id="wheelTitle" type="text" maxlength="80" placeholder="Например: Весенний розыгрыш" autocomplete="off">
+          </div>
+          <div class="wheel-block">
+            <label class="lbl" for="wheelNote">Подпись для клиента</label>
+            <textarea class="wheel-inp wheel-ta" id="wheelNote" rows="2" maxlength="240" placeholder="Крутите колесо и получите подарок от Veresk"></textarea>
+          </div>
+
+          <div class="wheel-segs-head">
+            <h3 class="subh">Секторы · <span class="rcount" id="wheelSegCount">0</span></h3>
+            <button type="button" class="btn" id="wheelAddSeg">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M12 5v14M5 12h14"/></svg>
+              Добавить
+            </button>
+          </div>
+          <p class="wsub wheel-segs-hint">Вес влияет на шанс. Превью справа — тот же виджет, что в Mini App.</p>
+          <div class="wheel-segs" id="wheelSegs" role="list"></div>
+          <p class="msg-error" id="wheelError" hidden></p>
+        </div>
+
+        <aside class="wheel-preview-col" aria-label="Превью Mini App">
+          <div class="wheel-phone">
+            <div class="wheel-phone-bezel">
+              <div class="wheel-phone-island" aria-hidden="true"></div>
+              <div class="wheel-phone-screen">
+                <div class="wheel-phone-topbar">
+                  <span class="wheel-phone-brand">Veresk</span>
+                  <span class="wheel-phone-chip">Mini App</span>
+                </div>
+                <div class="wheel-phone-body" id="wheelWidgetMount"></div>
+              </div>
+            </div>
+          </div>
+          <ul class="wheel-legend" id="wheelLegend"></ul>
+        </aside>
+      </div>
+    </section>
+
     </div>
   </main>
 
@@ -1216,6 +1272,7 @@
 
 <script>window.__VERESK_BUILD__="auth-boot-v39";</script>
 <script src="js/api.js?v=35"></script>
-<script src="js/app.js?v=49"></script>
+<script src="js/wheel-widget.js?v=1"></script>
+<script src="js/app.js?v=51"></script>
 </body>
 </html>

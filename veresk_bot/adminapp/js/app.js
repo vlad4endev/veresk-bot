@@ -121,7 +121,7 @@
   function canAccess(section) {
     const perms = (authMe && authMe.permissions) || {};
     if (authMe && (authMe.source === "env" || authMe.role === "admin")) return true;
-    if (section === "compose" || section === "detail" || section === "personal") {
+    if (section === "compose" || section === "detail" || section === "personal" || section === "wheel") {
       return !!perms.home;
     }
     if (section === "client") return !!perms.clients;
@@ -167,18 +167,19 @@
     "client",
     "settings",
     "bots",
+    "wheel",
   ]);
 
   function go(tab) {
     if (tab === "accounts") tab = "settings";
     const gateTab =
-      ({ compose: "home", detail: "home", personal: "home", client: "clients" })[tab] || tab;
+      ({ compose: "home", detail: "home", personal: "home", client: "clients", wheel: "home" })[tab] || tab;
     if (!canAccess(gateTab === "settings" ? "settings" : gateTab) && !canAccess(tab)) {
       tab = firstAllowedTab();
     }
     panels.forEach((p) => p.classList.toggle("active", p.id === tab));
     const navKey =
-      ({ compose: "home", detail: "home", personal: "home", client: "clients" })[tab] ||
+      ({ compose: "home", detail: "home", personal: "home", client: "clients", wheel: "home" })[tab] ||
       tab;
     navItems.forEach((n) => n.classList.toggle("active", n.dataset.nav === navKey));
     document.body.classList.toggle("hide-bnav", HIDE_BNAV_TABS.has(tab));
@@ -207,6 +208,7 @@
       if (typeof resetComposeForm === "function") resetComposeForm();
       setStep(0);
     }
+    if (tab === "wheel" && typeof initWheelEditor === "function") initWheelEditor();
     if (tab === "home") loadHome();
     if (tab === "clients") loadClients();
     if (tab === "bots") loadBotsStatus();
@@ -2712,8 +2714,8 @@
           id: "deepseek",
           label: "DeepSeek",
           api_base: "https://api.deepseek.com/v1",
-          model: "deepseek-chat",
-          hint: "Ключ с platform.deepseek.com · deepseek-chat / deepseek-reasoner",
+          model: "deepseek-v4-pro",
+          hint: "Ключ с platform.deepseek.com · deepseek-v4-pro (умная) / deepseek-v4-flash",
           needs_folder: false,
         },
         {
@@ -2905,7 +2907,7 @@
             }>Отключить</button>
             <button type="button" class="btn" onclick="go('aichat')">Открыть ИИ-чат</button>
           </div>
-          <p class="form-foot">DeepSeek: <code>deepseek-chat</code>. OpenRouter: <code>openai/gpt-4o-mini</code>. YandexGPT: <code>yandexgpt-lite/latest</code>.</p>
+          <p class="form-foot">DeepSeek: <code>deepseek-v4-pro</code>. OpenRouter: <code>openai/gpt-4o-mini</code>. YandexGPT: <code>yandexgpt-lite/latest</code>.</p>
         </div>
       </div>`;
 
@@ -6778,6 +6780,255 @@
     }
   }
   window.openChatWithClient = openChatWithClient;
+
+  // ── Колесо фортуны (превью = тот же виджет, что в Mini App) ──────────────
+
+  const WHEEL_COLORS =
+    (window.VereskWheel && window.VereskWheel.DEFAULT_COLORS) ||
+    ["#d64593", "#3a2558", "#e86aad", "#5a3d7a", "#c43d86", "#7b4bd6", "#f47db9", "#241a38"];
+  const WHEEL_DEFAULT_SEGS = [
+    { id: "s1", label: "Скидка 10%", color: "#d64593", weight: 30 },
+    { id: "s2", label: "Скидка 15%", color: "#3a2558", weight: 18 },
+    { id: "s3", label: "Бесплатная доставка", color: "#e86aad", weight: 22 },
+    { id: "s4", label: "Попробуйте ещё", color: "#5a3d7a", weight: 20 },
+    { id: "s5", label: "Мини-букет", color: "#c43d86", weight: 10 },
+  ];
+
+  const wheelState = {
+    inited: false,
+    segs: [],
+    widget: null,
+  };
+
+  function uidWheelSeg() {
+    return "w" + Math.random().toString(36).slice(2, 9);
+  }
+
+  function wheelTotalWeight(segs) {
+    if (window.VereskWheel?.totalWeight) return window.VereskWheel.totalWeight(segs);
+    return segs.reduce((sum, s) => sum + Math.max(0, Number(s.weight) || 0), 0);
+  }
+
+  function wheelChancePct(seg, segs) {
+    const total = wheelTotalWeight(segs);
+    if (!total) return 0;
+    return Math.round((Math.max(0, Number(seg.weight) || 0) / total) * 1000) / 10;
+  }
+
+  function collectWheelPayload() {
+    return {
+      title: ($("#wheelTitle")?.value || "").trim(),
+      note: ($("#wheelNote")?.value || "").trim(),
+      segments: wheelState.segs.map((s, i) => ({
+        id: s.id,
+        label: String(s.label || "").trim(),
+        color: s.color,
+        weight: Math.max(0, Number(s.weight) || 0),
+        order: i,
+        chance_pct: wheelChancePct(s, wheelState.segs),
+      })),
+    };
+  }
+  window.collectWheelPayload = collectWheelPayload;
+
+  function validateWheelDraft() {
+    const payload = collectWheelPayload();
+    if (!payload.title) return "Укажите название колеса";
+    if (payload.segments.length < 2) return "Нужно минимум 2 сектора";
+    if (payload.segments.some((s) => !s.label)) return "У каждого сектора должно быть название";
+    if (wheelTotalWeight(payload.segments) <= 0) return "Сумма весов должна быть больше 0";
+    return "";
+  }
+
+  function ensureWheelWidget() {
+    const mount = $("#wheelWidgetMount");
+    if (!mount || !window.VereskWheel?.create) return null;
+    if (!wheelState.widget) {
+      wheelState.widget = window.VereskWheel.create(mount, {
+        title: "",
+        note: "",
+        segments: [],
+      });
+    }
+    return wheelState.widget;
+  }
+
+  function syncWheelWidget() {
+    const widget = ensureWheelWidget();
+    const payload = collectWheelPayload();
+    const countEl = $("#wheelSegCount");
+    const legend = $("#wheelLegend");
+    if (countEl) countEl.textContent = String(wheelState.segs.length);
+    if (widget) {
+      widget.setConfig({
+        title: payload.title || "Колесо фортуны",
+        note: payload.note || "Так увидит клиент в Mini App",
+        segments: payload.segments,
+      });
+    }
+    if (legend) {
+      legend.innerHTML = wheelState.segs
+        .map((s) => {
+          const pct = wheelChancePct(s, wheelState.segs);
+          return `<li><span class="wheel-legend-swatch" style="background:${esc(s.color)}"></span><span>${esc(s.label || "Без названия")}</span><b>${pct}%</b></li>`;
+        })
+        .join("");
+    }
+  }
+
+  function renderWheelSegs() {
+    const box = $("#wheelSegs");
+    if (!box) return;
+    if (!wheelState.segs.length) {
+      box.innerHTML =
+        '<div class="empty" style="padding:18px;text-align:center;color:var(--ink-3)">Пока нет секторов — нажмите «Добавить»</div>';
+      syncWheelWidget();
+      return;
+    }
+    box.innerHTML = wheelState.segs
+      .map((s, i) => {
+        const pct = wheelChancePct(s, wheelState.segs);
+        return `
+        <div class="wheel-seg" role="listitem" data-id="${esc(s.id)}">
+          <input class="wheel-seg-color" type="color" value="${esc(s.color)}" data-field="color" aria-label="Цвет сектора ${i + 1}">
+          <div class="wheel-seg-fields">
+            <div>
+              <label for="wheelSegLabel_${esc(s.id)}">Приз</label>
+              <input id="wheelSegLabel_${esc(s.id)}" type="text" maxlength="48" value="${esc(s.label)}" data-field="label" placeholder="Название приза">
+            </div>
+          </div>
+          <div class="wheel-seg-fields wheel-seg-weight">
+            <label for="wheelSegWeight_${esc(s.id)}">Вес</label>
+            <input id="wheelSegWeight_${esc(s.id)}" type="number" min="0" step="1" value="${esc(s.weight)}" data-field="weight">
+          </div>
+          <div class="wheel-seg-meta">
+            <span class="wheel-seg-chance">${pct}%</span>
+            <button type="button" class="wheel-seg-rm" data-rm="${esc(s.id)}" aria-label="Удалить сектор" title="Удалить">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M5 8h14M10 12v6M14 12v6M9 8V6a1 1 0 011-1h4a1 1 0 011 1v2M6 8l1 12a2 2 0 002 2h6a2 2 0 002-2l1-12"/></svg>
+            </button>
+          </div>
+        </div>`;
+      })
+      .join("");
+    syncWheelWidget();
+  }
+
+  function pickWheelColor(index) {
+    return WHEEL_COLORS[index % WHEEL_COLORS.length];
+  }
+
+  function addWheelSeg() {
+    const i = wheelState.segs.length;
+    wheelState.segs.push({
+      id: uidWheelSeg(),
+      label: `Приз ${i + 1}`,
+      color: pickWheelColor(i),
+      weight: 10,
+    });
+    renderWheelSegs();
+    const errEl = $("#wheelError");
+    if (errEl) errEl.hidden = true;
+  }
+
+  function removeWheelSeg(id) {
+    wheelState.segs = wheelState.segs.filter((s) => s.id !== id);
+    renderWheelSegs();
+  }
+
+  function updateWheelSeg(id, field, value) {
+    const seg = wheelState.segs.find((s) => s.id === id);
+    if (!seg) return;
+    if (field === "label") seg.label = value;
+    else if (field === "color") seg.color = value || pickWheelColor(0);
+    else if (field === "weight") seg.weight = Math.max(0, Number(value) || 0);
+
+    if (field === "color") {
+      renderWheelSegs();
+      return;
+    }
+
+    if (field === "weight") {
+      $$(".wheel-seg").forEach((el) => {
+        const s = wheelState.segs.find((x) => x.id === el.getAttribute("data-id"));
+        const badge = el.querySelector(".wheel-seg-chance");
+        if (s && badge) badge.textContent = `${wheelChancePct(s, wheelState.segs)}%`;
+      });
+    } else {
+      const row = $(`.wheel-seg[data-id="${CSS.escape(id)}"]`);
+      const chance = row?.querySelector(".wheel-seg-chance");
+      if (chance) chance.textContent = `${wheelChancePct(seg, wheelState.segs)}%`;
+    }
+    syncWheelWidget();
+  }
+
+  function spinWheelPreview() {
+    const errEl = $("#wheelError");
+    const widget = ensureWheelWidget();
+    if (!widget) return;
+    syncWheelWidget();
+    widget.spin().catch((err) => {
+      if (errEl && err && err.message === "need segments") {
+        errEl.textContent = "Для прокрутки нужно минимум 2 сектора с весом > 0";
+        errEl.hidden = false;
+      }
+    });
+    if (errEl) errEl.hidden = true;
+  }
+
+  function resetWheelEditor() {
+    wheelState.segs = WHEEL_DEFAULT_SEGS.map((s) => ({ ...s, id: uidWheelSeg() }));
+    const title = $("#wheelTitle");
+    const note = $("#wheelNote");
+    const err = $("#wheelError");
+    if (title) title.value = "Весенний розыгрыш";
+    if (note) note.value = "Крутите колесо — получите подарок от Veresk";
+    if (err) err.hidden = true;
+    ensureWheelWidget();
+    renderWheelSegs();
+  }
+
+  function initWheelEditor() {
+    if (!wheelState.inited) {
+      const segsBox = $("#wheelSegs");
+      segsBox?.addEventListener("input", (e) => {
+        const row = e.target.closest(".wheel-seg");
+        if (!row) return;
+        const field = e.target.getAttribute("data-field");
+        if (!field) return;
+        updateWheelSeg(row.getAttribute("data-id"), field, e.target.value);
+      });
+      segsBox?.addEventListener("click", (e) => {
+        const btn = e.target.closest("[data-rm]");
+        if (!btn) return;
+        removeWheelSeg(btn.getAttribute("data-rm"));
+      });
+      $("#wheelAddSeg")?.addEventListener("click", addWheelSeg);
+      $("#wheelSpinDemo")?.addEventListener("click", spinWheelPreview);
+      $("#wheelExit")?.addEventListener("click", () => go("home"));
+      $("#wheelTitle")?.addEventListener("input", syncWheelWidget);
+      $("#wheelNote")?.addEventListener("input", syncWheelWidget);
+      $("#wheelSave")?.addEventListener("click", () => {
+        const msg = validateWheelDraft();
+        const errEl = $("#wheelError");
+        if (msg) {
+          if (errEl) {
+            errEl.textContent = msg;
+            errEl.hidden = false;
+          }
+          return;
+        }
+        if (errEl) errEl.hidden = true;
+        console.info("[wheel] draft ready", collectWheelPayload());
+        alert("Черновик собран. Сохранение в API подключим при встраивании раздела.");
+      });
+      wheelState.inited = true;
+      resetWheelEditor();
+    } else {
+      ensureWheelWidget();
+      renderWheelSegs();
+    }
+  }
+  window.initWheelEditor = initWheelEditor;
 
   // boot
   tryAuth();
