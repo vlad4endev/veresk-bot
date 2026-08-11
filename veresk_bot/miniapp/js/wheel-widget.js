@@ -25,35 +25,7 @@
       .replace(/"/g, "&quot;");
   }
 
-  /** Чистый монограм Veresk (V-листья) — без текста и чёрного фона PNG. */
-  const HUB_MARK_SVG = `
-    <svg class="vw-hub-mark" viewBox="0 0 120 128" aria-hidden="true" focusable="false">
-      <g transform="translate(60 66)" fill="none">
-        <circle cx="0" cy="0" r="48" stroke="#F3C4DC" stroke-width="7"/>
-        <path d="M0 50 C -8 22 -18 -8 -24 -42" stroke="#F3C4DC" stroke-width="3.8" stroke-linecap="round"/>
-        <g fill="#F3C4DC">
-          <path d="M0 -9 C 6 -4.5 6 4.5 0 9 C -6 4.5 -6 -4.5 0 -9 Z" transform="translate(-24,-38) rotate(-32) scale(1.02)"/>
-          <path d="M0 -9 C 6 -4.5 6 4.5 0 9 C -6 4.5 -6 -4.5 0 -9 Z" transform="translate(-21,-22) rotate(-38) scale(1.02)"/>
-          <path d="M0 -9 C 6 -4.5 6 4.5 0 9 C -6 4.5 -6 -4.5 0 -9 Z" transform="translate(-18,-6) rotate(-44) scale(1.02)"/>
-          <path d="M0 -9 C 6 -4.5 6 4.5 0 9 C -6 4.5 -6 -4.5 0 -9 Z" transform="translate(-14,10) rotate(-52) scale(1.02)"/>
-          <path d="M0 -9 C 6 -4.5 6 4.5 0 9 C -6 4.5 -6 -4.5 0 -9 Z" transform="translate(-9,25) rotate(-60) scale(1.02)"/>
-          <path d="M0 -9 C 6 -4.5 6 4.5 0 9 C -6 4.5 -6 -4.5 0 -9 Z" transform="translate(-10,-16) rotate(20) scale(1.02)"/>
-          <path d="M0 -9 C 6 -4.5 6 4.5 0 9 C -6 4.5 -6 -4.5 0 -9 Z" transform="translate(-8,0) rotate(14) scale(1.02)"/>
-          <path d="M0 -9 C 6 -4.5 6 4.5 0 9 C -6 4.5 -6 -4.5 0 -9 Z" transform="translate(-6,16) rotate(8) scale(1.02)"/>
-        </g>
-        <path d="M0 50 C 8 22 18 -8 24 -42" stroke="#F3C4DC" stroke-width="3.8" stroke-linecap="round"/>
-        <g fill="#F3C4DC">
-          <path d="M0 -9 C 6 -4.5 6 4.5 0 9 C -6 4.5 -6 -4.5 0 -9 Z" transform="translate(24,-38) rotate(32) scale(1.02)"/>
-          <path d="M0 -9 C 6 -4.5 6 4.5 0 9 C -6 4.5 -6 -4.5 0 -9 Z" transform="translate(21,-22) rotate(38) scale(1.02)"/>
-          <path d="M0 -9 C 6 -4.5 6 4.5 0 9 C -6 4.5 -6 -4.5 0 -9 Z" transform="translate(18,-6) rotate(44) scale(1.02)"/>
-          <path d="M0 -9 C 6 -4.5 6 4.5 0 9 C -6 4.5 -6 -4.5 0 -9 Z" transform="translate(14,10) rotate(52) scale(1.02)"/>
-          <path d="M0 -9 C 6 -4.5 6 4.5 0 9 C -6 4.5 -6 -4.5 0 -9 Z" transform="translate(9,25) rotate(60) scale(1.02)"/>
-          <path d="M0 -9 C 6 -4.5 6 4.5 0 9 C -6 4.5 -6 -4.5 0 -9 Z" transform="translate(10,-16) rotate(-20) scale(1.02)"/>
-          <path d="M0 -9 C 6 -4.5 6 4.5 0 9 C -6 4.5 -6 -4.5 0 -9 Z" transform="translate(8,0) rotate(-14) scale(1.02)"/>
-          <path d="M0 -9 C 6 -4.5 6 4.5 0 9 C -6 4.5 -6 -4.5 0 -9 Z" transform="translate(6,16) rotate(-8) scale(1.02)"/>
-        </g>
-      </g>
-    </svg>`;
+  const DEFAULT_LOGO = "assets/logo-circle.png";
 
   function totalWeight(segs) {
     return segs.reduce((sum, s) => sum + Math.max(0, Number(s.weight) || 0), 0);
@@ -241,6 +213,10 @@
     let spinTimer = null;
     let revealTimers = [];
     let highlightIndex = -1;
+    const logoUrl =
+      options.logoUrl ||
+      root.getAttribute("data-logo") ||
+      DEFAULT_LOGO;
 
     root.classList.add("vw-root");
     root.innerHTML = `
@@ -255,7 +231,7 @@
         <div class="vw-pointer" aria-hidden="true"><span></span></div>
         <div class="vw-disc"></div>
         <button type="button" class="vw-hub" aria-label="Крутить колесо">
-          ${HUB_MARK_SVG}
+          <img class="vw-hub-logo" src="${esc(logoUrl)}" alt="Veresk" width="96" height="96" decoding="async">
         </button>
       </div>
       <div class="vw-result" hidden>
