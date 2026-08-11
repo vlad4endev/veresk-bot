@@ -293,8 +293,10 @@ def btn_open_app(
     btn: dict[str, Any] = {
         "type": "open_app",
         "text": str(text or "")[:64],
-        "web_app": str(web_app or "").strip(),
     }
+    web = str(web_app or "").strip().lstrip("@/")
+    if web:
+        btn["web_app"] = web
     if payload:
         # start_param для Mini App (см. MAX Bridge initDataUnsafe.start_param)
         btn["payload"] = str(payload)[:512]

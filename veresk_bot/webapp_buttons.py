@@ -46,6 +46,7 @@ def wheel_miniapp_url() -> str | None:
 
 
 _max_bot_username_cache: str | None = None
+_max_bot_user_id_cache: int | None = None
 
 
 def _normalize_max_bot_username(value: str) -> str:
@@ -61,6 +62,24 @@ def _is_valid_max_bot_username(value: str) -> bool:
     return bool(re.fullmatch(r"[A-Za-z0-9_]+", uname))
 
 
+def _parse_max_bot_user_id(*candidates: Any) -> int | None:
+    """user_id бота из get_me / idNNNN_…_bot."""
+    for raw in candidates:
+        if raw is None or raw is False:
+            continue
+        if isinstance(raw, bool):
+            continue
+        if isinstance(raw, int) and raw > 0:
+            return raw
+        text = str(raw).strip()
+        if text.isdigit():
+            return int(text)
+        m = re.fullmatch(r"id(\d+)(?:_\d+)?_bot", text, flags=re.I)
+        if m:
+            return int(m.group(1))
+    return None
+
+
 def max_wheel_deeplink(username: str, *, start_param: str = "wheel") -> str:
     """Диплинк Mini App внутри MAX: https://max.ru/{bot}?startapp=wheel."""
     uname = _normalize_max_bot_username(username)
@@ -72,13 +91,11 @@ def max_wheel_deeplink(username: str, *, start_param: str = "wheel") -> str:
     return f"https://max.ru/{uname}?startapp"
 
 
-async def resolve_max_bot_username() -> str | None:
-    """Username MAX-бота для open_app / диплинка (кэш на процесс)."""
-    global _max_bot_username_cache
-    if _max_bot_username_cache:
-        return _max_bot_username_cache
+async def resolve_max_bot_identity() -> tuple[str | None, int | None]:
+    """(username, user_id) MAX-бота для open_app / диплинка."""
+    global _max_bot_username_cache, _max_bot_user_id_cache
 
-    def _accept(raw: str, *, source: str) -> str | None:
+    def _accept_username(raw: str, *, source: str) -> str | None:
         uname = _normalize_max_bot_username(raw)
         if not uname:
             return None
@@ -92,102 +109,148 @@ async def resolve_max_bot_username() -> str | None:
             return None
         return uname
 
-    # 1) .env
-    try:
-        from config import MAX_BOT_USERNAME
+    username = _max_bot_username_cache
+    user_id = _max_bot_user_id_cache
 
-        accepted = _accept(MAX_BOT_USERNAME, source=".env MAX_BOT_USERNAME")
-        if accepted:
-            _max_bot_username_cache = accepted
-            return accepted
-    except Exception:
-        pass
+    if not username:
+        try:
+            from config import MAX_BOT_USERNAME
 
-    # 2) runtime_settings (админка)
-    try:
-        import runtime_settings
+            username = _accept_username(
+                MAX_BOT_USERNAME, source=".env MAX_BOT_USERNAME"
+            )
+        except Exception:
+            username = None
 
-        stored = str(runtime_settings.get("max_bot_username") or "").strip()
-        accepted = _accept(stored, source="runtime_settings")
-        if accepted:
-            _max_bot_username_cache = accepted
-            return accepted
-    except Exception:
-        pass
+    if not username:
+        try:
+            import runtime_settings
 
-    # 3) GET /me
+            username = _accept_username(
+                str(runtime_settings.get("max_bot_username") or ""),
+                source="runtime_settings",
+            )
+        except Exception:
+            pass
+
+    # Всегда тянем /me: нужен contact_id; username подтянем, если .env пустой
     try:
         from max_bot.api import MaxBotAPI
         from senders.max_bot import get_max_bot_token
 
         token = get_max_bot_token()
-        if not token:
-            logger.warning("MAX wheel: нет токена — не удалось узнать username бота")
-            return None
-        api = MaxBotAPI(token)
-        try:
-            me = await api.get_me()
-        finally:
-            await api.close()
-        candidates = [me]
-        if isinstance(me.get("user"), dict):
-            candidates.append(me["user"])
-        uname = ""
-        for obj in candidates:
-            for key in ("username", "user_name", "nick", "nickname"):
-                accepted = _accept(
-                    str((obj or {}).get(key) or ""),
-                    source=f"get_me.{key}",
-                )
-                if accepted:
-                    uname = accepted
-                    break
-            if uname:
-                break
-        if uname:
-            _max_bot_username_cache = uname
+        if token:
+            api = MaxBotAPI(token)
             try:
-                import runtime_settings
+                me = await api.get_me()
+            finally:
+                await api.close()
+            candidates = [me]
+            if isinstance(me.get("user"), dict):
+                candidates.append(me["user"])
 
-                runtime_settings.set_many({"max_bot_username": uname})
-            except Exception:
-                pass
-            logger.info("MAX wheel: username бота = @%s", uname)
-            return uname
-        display = ""
-        for obj in candidates:
-            display = str((obj or {}).get("name") or (obj or {}).get("first_name") or "")
-            if display:
-                break
-        logger.warning(
-            "MAX wheel: get_me без валидного username (name=%r, keys=%s). "
-            "Укажите MAX_BOT_USERNAME=ник из ссылки max.ru/Nick",
-            display[:80],
-            list((me or {}).keys()),
-        )
+            if not username:
+                for obj in candidates:
+                    for key in ("username", "user_name", "nick", "nickname"):
+                        accepted = _accept_username(
+                            str((obj or {}).get(key) or ""),
+                            source=f"get_me.{key}",
+                        )
+                        if accepted:
+                            username = accepted
+                            break
+                    if username:
+                        break
+
+            if user_id is None:
+                for obj in candidates:
+                    user_id = _parse_max_bot_user_id(
+                        (obj or {}).get("user_id"),
+                        (obj or {}).get("id"),
+                        (obj or {}).get("bot_id"),
+                        username,
+                    )
+                    if user_id is not None:
+                        break
+
+            if username and not _max_bot_username_cache:
+                try:
+                    import runtime_settings
+
+                    runtime_settings.set_many({"max_bot_username": username})
+                except Exception:
+                    pass
+                logger.info(
+                    "MAX wheel: bot identity username=%s user_id=%s",
+                    username,
+                    user_id,
+                )
+        elif not username:
+            logger.warning("MAX wheel: нет токена — не удалось узнать username бота")
     except Exception:
-        logger.exception("MAX wheel: не удалось получить username бота")
-    return None
+        logger.exception("MAX wheel: не удалось получить identity бота")
+
+    if user_id is None and username:
+        user_id = _parse_max_bot_user_id(username)
+
+    if username:
+        _max_bot_username_cache = username
+    if user_id is not None:
+        _max_bot_user_id_cache = user_id
+
+    if not username:
+        logger.warning(
+            "MAX wheel: нет валидного username. "
+            "Укажите MAX_BOT_USERNAME=ник из ссылки max.ru/Nick"
+        )
+    return username, user_id
+
+
+async def resolve_max_bot_username() -> str | None:
+    """Username MAX-бота для open_app / диплинка (кэш на процесс)."""
+    username, _user_id = await resolve_max_bot_identity()
+    return username
 
 
 async def max_wheel_keyboard() -> list[list[dict[str, Any]]] | None:
     """
     Кнопка колеса для MAX.
 
-    Важно: НЕ давать прямую HTTPS-ссылку на miniapp и не использовать type=link —
-    MAX откроет обычный браузер без initData (401 и баннер «откройте из MAX»).
-
-    Правильно: type=open_app, web_app=<username бота>, payload=wheel
-    (Mini App URL должен быть задан в кабинете партнёра MAX у этого бота).
+    Нужно: Mini App URL в кабинете партнёра MAX у этого бота.
+    Кнопка: open_app (username + contact_id) + запасной диплинк max.ru/?startapp.
     """
-    from max_bot.api import btn_open_app
+    from max_bot.api import btn_link, btn_open_app
 
-    username = await resolve_max_bot_username()
-    if not username:
+    username, bot_user_id = await resolve_max_bot_identity()
+    if not username and bot_user_id is None:
         return None
 
-    logger.info("MAX wheel button: open_app web_app=%s payload=wheel", username)
-    return [[btn_open_app(WHEEL_OPEN_LABEL, username, payload="wheel")]]
+    rows: list[list[dict[str, Any]]] = []
+    open_web_app = username or ""
+    if open_web_app or bot_user_id is not None:
+        rows.append(
+            [
+                btn_open_app(
+                    WHEEL_OPEN_LABEL,
+                    open_web_app,
+                    payload="wheel",
+                    contact_id=bot_user_id,
+                )
+            ]
+        )
+        logger.info(
+            "MAX wheel button: open_app web_app=%s contact_id=%s payload=wheel",
+            open_web_app or None,
+            bot_user_id,
+        )
+
+    # Диплинк max.ru открывает Mini App внутри клиента (не admin.* в браузере)
+    if username:
+        deep = max_wheel_deeplink(username, start_param="wheel")
+        if deep:
+            rows.append([btn_link("🎡 Открыть через MAX", deep)])
+
+    return rows or None
 
 
 def status_keyboard(order_id: str | None = None) -> InlineKeyboardMarkup | None:

@@ -194,6 +194,22 @@ def format_prize_label(prize_label: str, discount_pct: float | None = None) -> s
     return label
 
 
+def is_retry_prize(prize_label: str | None = None, prize_id: str | None = None) -> bool:
+    """Сектор «Попробуйте ещё» — без поздравления и без записи в карточку."""
+    label = str(prize_label or "").strip().lower().replace("ё", "е")
+    pid = str(prize_id or "").strip().lower()
+    if pid in {"s4", "retry", "try_again", "try-again"}:
+        return True
+    if not label:
+        return False
+    # «Попробуйте ещё» / «Попробуй ещё» / try again
+    if "попробуй" in label and "ещ" in label:
+        return True
+    if "try again" in label or "try_again" in label:
+        return True
+    return False
+
+
 def format_customer_prize_note(
     *,
     channel: str,
@@ -220,13 +236,11 @@ def format_prize_congrats_message(
             "🎉 *Поздравляем!*\n\n"
             f"Вам выпал приз: *{prize}*\n\n"
             "Приз уже закреплён за вашей карточкой клиента — "
-            "покажите это сообщение флористу при заказе 🌷\n\n"
-            "_Veresk · trail of happiness_"
+            "покажите это сообщение флористу при заказе 🌷"
         )
     return (
         "🎉 **Поздравляем!**\n\n"
         f"Вам выпал приз: **{prize}**\n\n"
         "Приз уже закреплён за вашей карточкой клиента — "
-        "покажите это сообщение флористу при заказе 🌷\n\n"
-        "_Veresk · trail of happiness_"
+        "покажите это сообщение флористу при заказе 🌷"
     )

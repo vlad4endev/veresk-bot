@@ -98,6 +98,7 @@ from fortune_wheel import (
     format_customer_prize_note,
     format_prize_congrats_message,
     get_config as get_wheel_config,
+    is_retry_prize,
     pick_winner as pick_wheel_winner,
     save_config as save_wheel_config,
 )
@@ -1096,7 +1097,11 @@ async def handle_mailing_preview(request: web.Request) -> web.Response:
         "Новые": "new",
         "Давно не заказывали": "inactive",
         "Выбранные клиенты": "selected",
+        "Подписчики канала": "channel_subscribers",
+        "Новые подписчики канала": "channel_subscribers_new",
         "selected": "selected",
+        "channel_subscribers": "channel_subscribers",
+        "channel_subscribers_new": "channel_subscribers_new",
     }
     segment = seg_map.get(segment, segment)
     channels = str(request.query.get("channels") or "tg")
@@ -1193,7 +1198,11 @@ async def handle_campaign_create(request: web.Request) -> web.Response:
         "Новые": "new",
         "Давно не заказывали": "inactive",
         "Выбранные клиенты": "selected",
+        "Подписчики канала": "channel_subscribers",
+        "Новые подписчики канала": "channel_subscribers_new",
         "selected": "selected",
+        "channel_subscribers": "channel_subscribers",
+        "channel_subscribers_new": "channel_subscribers_new",
     }
     segment = seg_map.get(segment, segment)
     customer_ids = _parse_customer_ids(body.get("customer_ids"))
@@ -4907,11 +4916,16 @@ async def handle_wheel_spin(request: web.Request) -> web.Response:
     if not created:
         return _json(_already_played_payload(play), status=409)
 
-    if customer and customer.get("id") is not None:
+    prize_label = str(seg.get("label") or "")
+    prize_id = str(seg.get("id") or "")
+    retry_prize = is_retry_prize(prize_label, prize_id)
+
+    # «Попробуйте ещё» — не пишем в карточку и не шлём поздравление в бот
+    if customer and customer.get("id") is not None and not retry_prize:
         try:
             note = format_customer_prize_note(
                 channel=channel,
-                prize_label=str(seg.get("label") or ""),
+                prize_label=prize_label,
                 discount_pct=picked.get("discount_pct"),
                 created_at=str(play.get("created_at") or ""),
             )
@@ -4919,13 +4933,14 @@ async def handle_wheel_spin(request: web.Request) -> web.Response:
         except Exception:
             logger.exception("Не удалось записать приз в карточку клиента id=%s", customer.get("id"))
 
-    await _notify_wheel_prize(
-        request,
-        channel=channel,
-        uid=uid,
-        prize_label=str(seg.get("label") or ""),
-        discount_pct=picked.get("discount_pct"),
-    )
+    if not retry_prize:
+        await _notify_wheel_prize(
+            request,
+            channel=channel,
+            uid=uid,
+            prize_label=prize_label,
+            discount_pct=picked.get("discount_pct"),
+        )
 
     return _json(
         {
