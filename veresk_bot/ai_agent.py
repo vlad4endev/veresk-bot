@@ -62,7 +62,8 @@ AGENT_TOOLS: list[dict[str, Any]] = [
         "function": {
             "name": "list_upcoming_events",
             "description": (
-                "Ближайшие ДР, годовщины и другие события клиентов на N дней вперёд."
+                "Ближайшие ДР, годовщины и другие события клиентов на N дней вперёд. "
+                "Включает auto_send и каналы — для акций автопоздравлений."
             ),
             "parameters": {
                 "type": "object",
@@ -173,16 +174,18 @@ AGENT_TOOLS: list[dict[str, Any]] = [
         "function": {
             "name": "analyze_promotions",
             "description": (
-                "ИИ-анализ CRM: предложить акции, скидки, идеи рассылок "
-                "и риски на ближайшие дни. Используй, когда спрашивают "
-                "«какие акции сделать», «что предложить клиентам»."
+                "ИИ-анализ CRM и событий клиентов: предложить акции для автопоздравлений "
+                "(birthday/anniversary), скидки и идеи рассылок. "
+                "Используй для «какие акции сделать», «автопоздравления», «ДР на неделю»."
             ),
             "parameters": {
                 "type": "object",
                 "properties": {
                     "focus": {
                         "type": "string",
-                        "description": "Фокус: inactive, ДР, весна и т.п.",
+                        "description": (
+                            "Фокус: автопоздравления, ДР, годовщины, inactive, весна…"
+                        ),
                     },
                     "horizon_days": {
                         "type": "integer",
@@ -532,6 +535,13 @@ async def tool_list_upcoming_events(args: dict[str, Any]) -> str:
     days = max(1, min(days, 90))
     limit = max(1, min(limit, 40))
 
+    try:
+        from promo_ai import list_events_for_agent
+
+        return await list_events_for_agent(days=days, limit=limit)
+    except Exception:
+        logger.debug("promo events helper failed, fallback", exc_info=True)
+
     events = await list_upcoming_events(days=days, limit=limit)
     if not events:
         return f"Событий на ближайшие {days} дн. нет"
@@ -543,9 +553,10 @@ async def tool_list_upcoming_events(args: dict[str, Any]) -> str:
         when = (ev.get("next_date") or ev.get("event_date") or "").strip()
         phone = (ev.get("customer_phone") or "").strip()
         cust_id = ev.get("cust_id") or ev.get("customer_id") or ""
+        auto = "auto✓" if ev.get("auto_send") else "auto✗"
         lines.append(
             f"• через {ev.get('days_until')}д ({when}): {name} — {title} "
-            f"id={cust_id} тел={phone or '—'}"
+            f"[{auto}] id={cust_id} тел={phone or '—'}"
         )
     return _clip("\n".join(lines))
 

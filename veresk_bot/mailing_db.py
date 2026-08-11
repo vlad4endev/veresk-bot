@@ -883,7 +883,8 @@ async def list_upcoming_events(days: int = 14, limit: int = 50) -> list[dict[str
             rows = db.execute(
                 """
                 SELECT e.*, c.name AS customer_name, c.phone AS customer_phone,
-                       c.tg_user_id, c.max_user_id, c.id AS cust_id
+                       c.tg_user_id, c.max_user_id, c.id AS cust_id,
+                       c.segment AS customer_segment
                 FROM customer_events e
                 JOIN customers c ON c.id = e.customer_id
                 """
@@ -911,11 +912,111 @@ async def list_upcoming_events(days: int = 14, limit: int = 50) -> list[dict[str
                 item = dict(row)
                 item["days_until"] = delta
                 item["next_date"] = this_year.isoformat()
+                item["auto_send"] = bool(int(item.get("auto_send") or 0))
                 result.append(item)
         result.sort(key=lambda x: x["days_until"])
         return result[:limit]
 
     return await _run_db(_list)
+
+
+async def events_overview(days: int = 30) -> dict[str, Any]:
+    """Сводка событий клиентов для ИИ-анализатора акций / автопоздравлений."""
+    horizon = max(1, min(int(days or 30), 90))
+    events = await list_upcoming_events(days=horizon, limit=200)
+
+    def _kind_bucket(kind: str) -> str:
+        k = (kind or "").strip().lower()
+        if k in ("bday", "birthday"):
+            return "birthday"
+        if k in ("anniv", "anniversary"):
+            return "anniversary"
+        return "other"
+
+    by_kind = {"birthday": 0, "anniversary": 0, "other": 0}
+    auto_on = 0
+    auto_off = 0
+    with_channel = 0
+    week = 0
+    today_n = 0
+    for ev in events:
+        bucket = _kind_bucket(str(ev.get("kind") or ""))
+        by_kind[bucket] = by_kind.get(bucket, 0) + 1
+        if ev.get("auto_send"):
+            auto_on += 1
+        else:
+            auto_off += 1
+        if ev.get("tg_user_id") or ev.get("max_user_id"):
+            with_channel += 1
+        days_until = int(ev.get("days_until") or 0)
+        if days_until == 0:
+            today_n += 1
+        if days_until <= 7:
+            week += 1
+
+    def _total_in_db() -> dict[str, int]:
+        with _connect() as db:
+            total = db.execute("SELECT COUNT(*) FROM customer_events").fetchone()[0]
+            auto = db.execute(
+                "SELECT COUNT(*) FROM customer_events WHERE auto_send = 1"
+            ).fetchone()[0]
+            bday = db.execute(
+                """
+                SELECT COUNT(*) FROM customer_events
+                WHERE lower(kind) IN ('bday', 'birthday')
+                """
+            ).fetchone()[0]
+            anniv = db.execute(
+                """
+                SELECT COUNT(*) FROM customer_events
+                WHERE lower(kind) IN ('anniv', 'anniversary')
+                """
+            ).fetchone()[0]
+        return {
+            "total_events": int(total),
+            "auto_send_enabled": int(auto),
+            "birthdays_total": int(bday),
+            "anniversaries_total": int(anniv),
+        }
+
+    db_totals = await _run_db(_total_in_db)
+
+    sample = []
+    for ev in events[:40]:
+        sample.append(
+            {
+                "id": ev.get("id"),
+                "customer_id": ev.get("cust_id") or ev.get("customer_id"),
+                "name": (ev.get("customer_name") or ev.get("name") or "—").strip(),
+                "kind": ev.get("kind"),
+                "kind_bucket": _kind_bucket(str(ev.get("kind") or "")),
+                "title": ev.get("title"),
+                "days_until": ev.get("days_until"),
+                "date": ev.get("next_date") or ev.get("date_from"),
+                "auto_send": bool(ev.get("auto_send")),
+                "segment": ev.get("customer_segment") or "all",
+                "has_tg": bool(ev.get("tg_user_id")),
+                "has_max": bool(ev.get("max_user_id")),
+            }
+        )
+
+    return {
+        "horizon_days": horizon,
+        "upcoming_total": len(events),
+        "today": today_n,
+        "week": week,
+        "by_kind": by_kind,
+        "auto_send_on": auto_on,
+        "auto_send_off": auto_off,
+        "with_messenger": with_channel,
+        "db": db_totals,
+        "sample": sample,
+        "needs_auto_promo": True,
+        "note": (
+            "Акции типа birthday/anniversary с use_in_auto_mail=true "
+            "подставляются в ежедневные автопоздравления."
+        ),
+    }
 
 
 async def set_event_auto_send(event_id: int, auto_send: bool) -> bool:

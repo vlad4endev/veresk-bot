@@ -9506,6 +9506,44 @@
         </div>`
       )
       .join("");
+    const ev = (result.context && result.context.events) || {};
+    const byKind = ev.by_kind || {};
+    const sample = ev.sample || [];
+    const eventsHtml = `
+      <div class="promos-ai-summary">
+        <h4>События клиентов</h4>
+        <p>
+          Горизонт ${esc(ev.horizon_days || "—")} дн.: ближайших ${esc(ev.upcoming_total ?? "—")},
+          сегодня ${esc(ev.today ?? "—")}, неделя ${esc(ev.week ?? "—")}.
+          ДР ${esc(byKind.birthday ?? 0)}, годовщины ${esc(byKind.anniversary ?? 0)}.
+          Автоотправка: on ${esc(ev.auto_send_on ?? "—")} / off ${esc(ev.auto_send_off ?? "—")}.
+        </p>
+        ${
+          sample.length
+            ? `<ul class="promos-events-list">${sample
+                .slice(0, 8)
+                .map((e) => {
+                  const auto = e.auto_send ? "auto✓" : "auto✗";
+                  return `<li><b>через ${esc(e.days_until)}д</b> ${esc(e.name || "—")} — ${esc(
+                    e.kind || e.title || "событие"
+                  )} <span class="promos-badge muted">${esc(auto)}</span></li>`;
+                })
+                .join("")}</ul>`
+            : "<p class=\"promos-suggest-meta\">Ближайших событий в выборке нет</p>"
+        }
+      </div>`;
+    const gap = (result.context && result.context.auto_greeting_gap) || {};
+    const gapHtml =
+      gap && (gap.has_live_birthday_promo === false || gap.has_live_anniversary_promo === false)
+        ? `<div class="promos-ai-summary">
+            <h4>Автопоздравления</h4>
+            <p>
+              Живая акция ДР: ${gap.has_live_birthday_promo ? "есть" : "нет"}.
+              Годовщина: ${gap.has_live_anniversary_promo ? "есть" : "нет"}.
+              Предложения ниже можно сразу сохранить в черновик с текстом для авторассылки.
+            </p>
+          </div>`
+        : "";
     const suggestions = (result.suggestions || [])
       .map((s, idx) => {
         const conf = Math.round((Number(s.confidence) || 0.7) * 100);
@@ -9516,10 +9554,15 @@
               <span class="promos-badge">${esc(PROMO_TYPE_LABELS[s.promo_type] || s.promo_type || "")}</span>
               <span class="promos-badge ok">${esc(disc)}</span>
               <span class="promos-badge muted">${esc(conf)}%</span>
+              ${
+                s.use_in_auto_mail
+                  ? '<span class="promos-badge warn">автопоздравление</span>'
+                  : ""
+              }
             </div>
             <div class="promos-suggest-meta">сегмент ${esc(s.segment || "all")}${
-              s.use_in_auto_mail ? " · автопоздравления" : ""
-            }${s.use_in_mailing ? " · {скидка}" : ""}</div>
+              s.use_in_mailing ? " · {скидка}" : ""
+            }</div>
             <div class="promos-suggest-why">${esc(s.rationale || s.description || "")}</div>
           </div>
           <div class="promos-suggest-actions">
@@ -9534,6 +9577,8 @@
         <h4>Сводка</h4>
         <p>${esc(result.summary || "—")}</p>
       </div>
+      ${eventsHtml}
+      ${gapHtml}
       ${
         insights
           ? `<div class="promos-ai-summary"><h4>Инсайты</h4><ul style="margin:0;padding-left:18px">${insights}</ul></div>`
@@ -9732,6 +9777,14 @@
         if (panel) panel.hidden = true;
       });
       $("#promoAiRun")?.addEventListener("click", () => runPromoAnalyze());
+      $("#promoAiPresets")?.addEventListener("click", (e) => {
+        const chip = e.target.closest("[data-focus]");
+        if (!chip) return;
+        setPromoVal("promoAiFocus", chip.getAttribute("data-focus") || "");
+        const panel = $("#promoAiPanel");
+        if (panel) panel.hidden = false;
+        runPromoAnalyze();
+      });
       $("#promoAiBody")?.addEventListener("click", (e) => {
         const apply = e.target.closest("[data-apply-suggest]");
         if (apply) {

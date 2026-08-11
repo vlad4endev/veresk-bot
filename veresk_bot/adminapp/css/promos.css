@@ -57,6 +57,36 @@
   gap:10px;
   margin-bottom:12px;
 }
+.promos-ai-presets{
+  display:flex;
+  flex-wrap:wrap;
+  gap:8px;
+  margin-bottom:12px;
+}
+.promos-chip{
+  border:1px solid var(--line);
+  background:rgba(255,255,255,.75);
+  color:var(--ink-2);
+  border-radius:999px;
+  padding:6px 12px;
+  font:inherit;
+  font-size:12.5px;
+  font-weight:650;
+  cursor:pointer;
+  transition:border-color .15s var(--ease),background .15s var(--ease),color .15s var(--ease);
+}
+.promos-chip:hover{
+  border-color:rgba(214,69,147,.35);
+  background:var(--accent-soft);
+  color:var(--accent);
+}
+.promos-events-list{
+  margin:10px 0 0;
+  padding-left:18px;
+  color:var(--ink-2);
+  font-size:13.5px;
+}
+.promos-events-list li{margin:4px 0}
 .promos-ai-body{display:flex;flex-direction:column;gap:12px}
 .promos-ai-empty,.promos-ai-loading{
   color:var(--ink-2);
