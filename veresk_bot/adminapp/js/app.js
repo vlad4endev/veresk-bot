@@ -3572,7 +3572,7 @@
     }
   }
 
-  async def scheduleTgQrPoll() {
+  async function scheduleTgQrPoll() {
     stopTgQrPoll();
     const tick = async () => {
       const loginId = state.tgQrLoginId;
