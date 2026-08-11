@@ -3724,9 +3724,7 @@
                 prompts.mailing.customized ? "свой текст" : "по умолчанию"
               }</span>
             </div>
-            <textarea id="aiPromptText" class="ai-prompt-area" rows="12" cols="72" spellcheck="true" aria-describedby="aiPromptHint">${esc(
-              prompts.mailing.text || ""
-            )}</textarea>
+            <textarea id="aiPromptText" class="ai-prompt-area" rows="12" cols="72" spellcheck="true" aria-describedby="aiPromptHint"></textarea>
             <div class="ai-prompts-foot">
               <p class="form-foot">Плейсхолдеры в текстах клиентам: <code>{имя}</code>, <code>{скидка}</code>.</p>
               <button type="button" class="btn primary" id="aiPromptsSave">Сохранить</button>
@@ -3753,6 +3751,32 @@
     };
     let activePromptKind = "mailing";
 
+    function collectPromptPayload() {
+      const ta = $("#aiPromptText");
+      if (ta) promptDrafts[activePromptKind] = ta.value;
+      return {
+        mailing: String(promptDrafts.mailing || "").replace(/\r\n/g, "\n").trim(),
+        personal: String(promptDrafts.personal || "").replace(/\r\n/g, "\n").trim(),
+        chat: String(promptDrafts.chat || "").replace(/\r\n/g, "\n").trim(),
+      };
+    }
+
+    function promptsSavedOk(res, payload) {
+      const got = res && res.prompts;
+      if (!got) return false;
+      return ["mailing", "personal", "chat"].every((kind) => {
+        const sent = String(payload[kind] || "").trim();
+        const def = String((promptDefaults[kind] || "")).replace(/\r\n/g, "\n").trim();
+        const expectCustom = !!(sent && sent !== def);
+        const row = got[kind] || {};
+        const gotText = String(row.text || "").replace(/\r\n/g, "\n").trim();
+        if (expectCustom) {
+          return !!row.customized && gotText === sent;
+        }
+        return !row.customized;
+      });
+    }
+
     function syncPromptEditor({ writeValue = true } = {}) {
       const ta = $("#aiPromptText");
       if (ta && writeValue) ta.value = promptDrafts[activePromptKind] || "";
@@ -3776,6 +3800,8 @@
         btn.classList.toggle("custom", !!(cur && cur !== def));
       });
     }
+
+    syncPromptEditor();
 
     let selectedProvider = ai.provider || "openai";
     const providersById = Object.fromEntries(
@@ -3866,11 +3892,13 @@
         btn.textContent = "Сохраняю…";
       }
       try {
+        const promptPayload = collectPromptPayload();
         const body = {
           provider: selectedProvider,
           api_key: ($("#aiApiKey")?.value || "").trim(),
           model: ($("#aiModel")?.value || "").trim(),
           folder_id: ($("#aiFolderId")?.value || "").trim(),
+          prompts: promptPayload,
         };
         // Базовый URL только для «Свой API». Иначе скрытое поле могло
         // утащить чужой endpoint (Yandex) в слот OpenRouter.
@@ -3888,12 +3916,18 @@
         ) {
           alert("Для YandexGPT укажите Folder ID");
         } else {
-          await AdminAPI.aiSaveSettings(body);
-          alert(
-            selHasKey && !body.api_key
-              ? "Активирован " + (selMeta.label || selectedProvider) + " (ключ сохранён ранее)"
-              : "Настройки ИИ сохранены для " + (selMeta.label || selectedProvider)
-          );
+          const res = await AdminAPI.aiSaveSettings(body);
+          if (!promptsSavedOk(res, promptPayload)) {
+            alert(
+              "Ключ сохранён, но промпты сервер не принял. Перезапустите бота (docker compose up -d --build) и сохраните промпты ещё раз."
+            );
+          } else {
+            alert(
+              selHasKey && !body.api_key
+                ? "Активирован " + (selMeta.label || selectedProvider) + " (ключ сохранён ранее)"
+                : "Настройки ИИ сохранены для " + (selMeta.label || selectedProvider)
+            );
+          }
           loadIntegrationsPane();
           return;
         }
@@ -3923,22 +3957,25 @@
 
     $("#aiPromptsSave")?.addEventListener("click", async () => {
       const btn = $("#aiPromptsSave");
-      const ta = $("#aiPromptText");
-      if (ta) promptDrafts[activePromptKind] = ta.value;
+      const promptPayload = collectPromptPayload();
       if (btn) {
         btn.disabled = true;
         btn.textContent = "Сохраняю…";
       }
       try {
-        await AdminAPI.aiSaveSettings({
+        const res = await AdminAPI.aiSaveSettings({
           prompts_only: true,
-          prompts: {
-            mailing: (promptDrafts.mailing || "").trim(),
-            personal: (promptDrafts.personal || "").trim(),
-            chat: (promptDrafts.chat || "").trim(),
-          },
+          prompts: promptPayload,
         });
-        alert("Промпты сохранены");
+        if (!res || !res.prompts) {
+          alert(
+            "Сервер не сохранил промпты (нет поддержки в API). Выполните на сервере: docker compose up -d --build"
+          );
+        } else if (!promptsSavedOk(res, promptPayload)) {
+          alert("Не удалось подтвердить сохранение промптов. Попробуйте ещё раз.");
+        } else {
+          alert("Промпты сохранены");
+        }
         loadIntegrationsPane();
         return;
       } catch (err) {

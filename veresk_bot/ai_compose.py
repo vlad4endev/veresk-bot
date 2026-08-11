@@ -613,13 +613,18 @@ def clear_ai_settings() -> None:
     )
 
 
+def _norm_prompt(text: str) -> str:
+    """Нормализация для сравнения/хранения: единый \\n, без краёв."""
+    return str(text or "").replace("\r\n", "\n").replace("\r", "\n").strip()
+
+
 def get_system_prompt(kind: str) -> str:
     """Системный промпт: из настроек панели или дефолт из кода."""
     key = PROMPT_SETTING_KEYS.get(kind)
     default = DEFAULT_PROMPTS.get(kind, "")
     if not key:
         return default
-    custom = str(runtime_settings.get(key) or "").strip()
+    custom = _norm_prompt(str(runtime_settings.get(key) or ""))
     return custom if custom else default
 
 
@@ -627,11 +632,12 @@ def prompts_public() -> dict[str, Any]:
     """Промпты для формы настроек: текущие тексты + флаги кастомизации."""
     out: dict[str, Any] = {}
     for kind, setting_key in PROMPT_SETTING_KEYS.items():
-        custom = str(runtime_settings.get(setting_key) or "").strip()
+        custom = _norm_prompt(str(runtime_settings.get(setting_key) or ""))
+        default = DEFAULT_PROMPTS[kind]
         out[kind] = {
-            "text": custom or DEFAULT_PROMPTS[kind],
+            "text": custom or default,
             "customized": bool(custom),
-            "default": DEFAULT_PROMPTS[kind],
+            "default": default,
         }
     return out
 
@@ -650,16 +656,21 @@ def save_ai_prompts(prompts: dict[str, Any] | None) -> dict[str, str]:
         if kind not in prompts:
             continue
         raw = prompts.get(kind)
-        text = str(raw if raw is not None else "").strip()
+        text = _norm_prompt(str(raw if raw is not None else ""))
         if len(text) > MAX_SYSTEM_PROMPT_CHARS:
             errors[kind] = f"Слишком длинный промпт (макс. {MAX_SYSTEM_PROMPT_CHARS})"
             continue
-        if not text or text == DEFAULT_PROMPTS[kind].strip():
+        default_n = _norm_prompt(DEFAULT_PROMPTS[kind])
+        if not text or text == default_n:
             clear_keys.append(setting_key)
         else:
             values[setting_key] = text
     if values:
         runtime_settings.set_many(values)
+        logger.info(
+            "AI prompts saved: %s",
+            ", ".join(k for k, sk in PROMPT_SETTING_KEYS.items() if sk in values),
+        )
     if clear_keys:
         runtime_settings.delete_keys(*clear_keys)
     return errors

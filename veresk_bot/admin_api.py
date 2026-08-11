@@ -3043,7 +3043,7 @@ async def handle_ai_settings_save(request: web.Request) -> web.Response:
         activate=True,
     )
 
-    return _json({"ok": True, **ai_settings_public()})
+    return _json({"ok": True, "prompts_saved": "prompts" in body, **ai_settings_public()})
 
 
 def _parse_iso(ts: str | None) -> datetime | None:
