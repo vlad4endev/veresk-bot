@@ -38,7 +38,9 @@ CREATE TABLE IF NOT EXISTS channel_subscriptions (
     left_at TEXT,
     first_seen_at TEXT NOT NULL,
     updated_at TEXT NOT NULL,
-    source TEXT NOT NULL DEFAULT 'event'
+    source TEXT NOT NULL DEFAULT 'event',
+    welcome_due_at TEXT,
+    welcome_sent_at TEXT
 );
 
 CREATE INDEX IF NOT EXISTS idx_channel_subs_status
@@ -49,7 +51,21 @@ CREATE INDEX IF NOT EXISTS idx_channel_subs_joined
 
 CREATE INDEX IF NOT EXISTS idx_channel_subs_name
     ON channel_subscriptions (first_name, last_name, username);
+
+CREATE INDEX IF NOT EXISTS idx_channel_subs_welcome_due
+    ON channel_subscriptions (welcome_due_at);
 """
+
+DEFAULT_WELCOME_TEXT = (
+    "Здравствуйте, {имя}!\n\n"
+    "Спасибо, что подписались на наш канал 🌷\n"
+    "Напишите нам — подберём букет к любому поводу.\n\n"
+    "Ваш Veresk"
+)
+
+_WELCOME_ENABLED_KEY = "channel_welcome_enabled"
+_WELCOME_TEXT_KEY = "channel_welcome_text"
+_WELCOME_DELAY_KEY = "channel_welcome_delay_minutes"
 
 
 def _now() -> str:
@@ -113,7 +129,60 @@ def get_channel_config() -> dict[str, Any]:
         "channel_title": title,
         "configured": bool(channel_id or username),
         "new_days": NEW_SUBSCRIBER_DAYS,
+        "welcome": get_welcome_config(),
     }
+
+
+def get_welcome_config() -> dict[str, Any]:
+    """Условие автосообщения новым подписчикам канала."""
+    enabled_raw = runtime_settings.get(_WELCOME_ENABLED_KEY)
+    enabled = False
+    if isinstance(enabled_raw, bool):
+        enabled = enabled_raw
+    elif enabled_raw is not None:
+        enabled = str(enabled_raw).strip().lower() in ("1", "true", "yes", "on")
+
+    text = str(runtime_settings.get(_WELCOME_TEXT_KEY) or "").strip()
+    if not text:
+        text = DEFAULT_WELCOME_TEXT
+
+    delay = 0
+    raw_delay = runtime_settings.get(_WELCOME_DELAY_KEY)
+    if raw_delay not in (None, ""):
+        try:
+            delay = max(0, min(7 * 24 * 60, int(raw_delay)))
+        except (TypeError, ValueError):
+            delay = 0
+
+    return {
+        "enabled": enabled,
+        "text": text,
+        "delay_minutes": delay,
+        "default_text": DEFAULT_WELCOME_TEXT,
+    }
+
+
+def save_welcome_config(
+    *,
+    enabled: bool | None = None,
+    text: str | None = None,
+    delay_minutes: int | None = None,
+) -> dict[str, Any]:
+    payload: dict[str, Any] = {}
+    if enabled is not None:
+        payload[_WELCOME_ENABLED_KEY] = bool(enabled)
+    if text is not None:
+        cleaned = str(text).strip()
+        payload[_WELCOME_TEXT_KEY] = cleaned or DEFAULT_WELCOME_TEXT
+    if delay_minutes is not None:
+        try:
+            delay = max(0, min(7 * 24 * 60, int(delay_minutes)))
+        except (TypeError, ValueError):
+            delay = 0
+        payload[_WELCOME_DELAY_KEY] = delay
+    if payload:
+        runtime_settings.set_many(payload)
+    return get_welcome_config()
 
 
 def save_channel_config(
@@ -201,11 +270,19 @@ async def _run_db(fn: Callable[[], T]) -> T:
     return await asyncio.to_thread(fn)
 
 
+def _ensure_column(db: sqlite3.Connection, table: str, column: str, typedef: str) -> None:
+    cols = {r[1] for r in db.execute(f"PRAGMA table_info({table})").fetchall()}
+    if column not in cols:
+        db.execute(f"ALTER TABLE {table} ADD COLUMN {column} {typedef}")
+
+
 async def init_channel_subscriptions() -> None:
     def _init() -> None:
         Path(DATABASE_PATH).parent.mkdir(parents=True, exist_ok=True)
         with _connect() as db:
             db.executescript(_SCHEMA)
+            _ensure_column(db, "channel_subscriptions", "welcome_due_at", "TEXT")
+            _ensure_column(db, "channel_subscriptions", "welcome_sent_at", "TEXT")
             db.commit()
 
     await _run_db(_init)
@@ -295,21 +372,25 @@ async def upsert_subscription(
     last_name: str = "",
     joined_at: str | None = None,
     source: str = "event",
-) -> None:
+) -> dict[str, Any]:
+    """Сохранить подписку. Возвращает {just_joined, status, tg_user_id}."""
     if not tg_user_id:
-        return
+        return {"just_joined": False, "tg_user_id": 0, "status": STATUS_LEFT}
     now = _now()
     status_norm = (status or "").strip().lower() or STATUS_LEFT
     is_active = status_norm in _ACTIVE
     stored_status = STATUS_MEMBER if is_active else STATUS_LEFT
 
-    def _upsert() -> None:
+    def _upsert() -> dict[str, Any]:
         with _connect() as db:
             db.executescript(_SCHEMA)
+            _ensure_column(db, "channel_subscriptions", "welcome_due_at", "TEXT")
+            _ensure_column(db, "channel_subscriptions", "welcome_sent_at", "TEXT")
             row = db.execute(
                 "SELECT * FROM channel_subscriptions WHERE tg_user_id = ?",
                 (int(tg_user_id),),
             ).fetchone()
+            just_joined = False
             if row:
                 prev = dict(row)
                 new_joined = prev.get("joined_at")
@@ -317,6 +398,7 @@ async def upsert_subscription(
                 if is_active:
                     if prev.get("status") != STATUS_MEMBER:
                         new_joined = joined_at or now
+                        just_joined = True
                     elif joined_at and not new_joined:
                         new_joined = joined_at
                     new_left = None
@@ -351,6 +433,7 @@ async def upsert_subscription(
                     ),
                 )
             else:
+                just_joined = is_active
                 db.execute(
                     """
                     INSERT INTO channel_subscriptions (
@@ -373,9 +456,14 @@ async def upsert_subscription(
                     ),
                 )
             db.commit()
+            return {
+                "just_joined": just_joined,
+                "tg_user_id": int(tg_user_id),
+                "status": stored_status,
+            }
 
     try:
-        await _run_db(_upsert)
+        return await _run_db(_upsert)
     except Exception:
         logger.debug(
             "Не удалось сохранить подписку channel=%s user=%s",
@@ -383,6 +471,11 @@ async def upsert_subscription(
             tg_user_id,
             exc_info=True,
         )
+        return {
+            "just_joined": False,
+            "tg_user_id": int(tg_user_id),
+            "status": stored_status,
+        }
 
 
 async def mark_missing_as_left(channel_id: int, present_ids: set[int]) -> int:
@@ -1053,3 +1146,112 @@ async def discover_channels_where_bot_is_admin(
         "channel": get_channel_config(),
         "need_pick": len(found) > 1 and not get_channel_config().get("configured"),
     }
+
+
+async def schedule_channel_welcome(tg_user_id: int) -> dict[str, Any]:
+    """Поставить welcome в очередь, если автосообщение включено и ещё не отправляли."""
+    tid = int(tg_user_id or 0)
+    if not tid:
+        return {"ok": False, "reason": "no_user"}
+
+    cfg = get_welcome_config()
+    if not cfg.get("enabled"):
+        return {"ok": False, "reason": "disabled"}
+
+    delay_min = int(cfg.get("delay_minutes") or 0)
+    due_at = (datetime.now() + timedelta(minutes=delay_min)).isoformat(timespec="seconds")
+
+    def _schedule() -> dict[str, Any]:
+        with _connect() as db:
+            db.executescript(_SCHEMA)
+            _ensure_column(db, "channel_subscriptions", "welcome_due_at", "TEXT")
+            _ensure_column(db, "channel_subscriptions", "welcome_sent_at", "TEXT")
+            row = db.execute(
+                "SELECT welcome_sent_at, welcome_due_at, status FROM channel_subscriptions WHERE tg_user_id = ?",
+                (tid,),
+            ).fetchone()
+            if not row:
+                return {"ok": False, "reason": "not_found"}
+            if row["welcome_sent_at"]:
+                return {"ok": False, "reason": "already_sent"}
+            if row["status"] != STATUS_MEMBER:
+                return {"ok": False, "reason": "not_member"}
+            if row["welcome_due_at"]:
+                return {"ok": True, "reason": "already_queued", "due_at": row["welcome_due_at"]}
+            db.execute(
+                """
+                UPDATE channel_subscriptions
+                SET welcome_due_at = ?, updated_at = ?
+                WHERE tg_user_id = ?
+                """,
+                (due_at, _now(), tid),
+            )
+            db.commit()
+            return {"ok": True, "reason": "queued", "due_at": due_at}
+
+    return await _run_db(_schedule)
+
+
+async def process_due_channel_welcomes(*, limit: int = 20) -> int:
+    """Создать personal_messages для подписчиков, у которых наступил welcome_due_at."""
+    cfg = get_welcome_config()
+    if not cfg.get("enabled"):
+        return 0
+
+    text = str(cfg.get("text") or DEFAULT_WELCOME_TEXT).strip() or DEFAULT_WELCOME_TEXT
+    now = _now()
+
+    def _due_ids() -> list[int]:
+        with _connect() as db:
+            db.executescript(_SCHEMA)
+            _ensure_column(db, "channel_subscriptions", "welcome_due_at", "TEXT")
+            _ensure_column(db, "channel_subscriptions", "welcome_sent_at", "TEXT")
+            rows = db.execute(
+                """
+                SELECT tg_user_id FROM channel_subscriptions
+                WHERE status = ?
+                  AND welcome_sent_at IS NULL
+                  AND welcome_due_at IS NOT NULL
+                  AND welcome_due_at <= ?
+                ORDER BY welcome_due_at ASC
+                LIMIT ?
+                """,
+                (STATUS_MEMBER, now, int(limit)),
+            ).fetchall()
+        return [int(r["tg_user_id"]) for r in rows]
+
+    ids = await _run_db(_due_ids)
+    if not ids:
+        return 0
+
+    from mailing_db import create_personal_message
+
+    created = 0
+    for tid in ids:
+        try:
+            cust = await ensure_customer_for_subscriber(tid)
+            if not cust or not cust.get("id"):
+                logger.info("Welcome: нет CRM-карточки для tg=%s", tid)
+                continue
+            await create_personal_message(int(cust["id"]), text, channel="tg")
+
+            def _mark_sent(user_id: int) -> None:
+                with _connect() as db:
+                    db.execute(
+                        """
+                        UPDATE channel_subscriptions
+                        SET welcome_sent_at = ?, welcome_due_at = NULL, updated_at = ?
+                        WHERE tg_user_id = ?
+                        """,
+                        (_now(), _now(), user_id),
+                    )
+                    db.commit()
+
+            await _run_db(lambda uid=tid: _mark_sent(uid))
+            created += 1
+        except Exception:
+            logger.exception("Welcome: не удалось поставить сообщение tg=%s", tid)
+
+    if created:
+        logger.info("Welcome новым подписчикам: поставлено %s сообщений", created)
+    return created

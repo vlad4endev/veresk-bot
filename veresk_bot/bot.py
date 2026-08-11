@@ -1271,6 +1271,7 @@ async def on_channel_chat_member(event: ChatMemberUpdated) -> None:
         get_channel_config,
         matches_configured_channel,
         save_channel_config,
+        schedule_channel_welcome,
         upsert_subscription,
     )
 
@@ -1295,7 +1296,7 @@ async def on_channel_chat_member(event: ChatMemberUpdated) -> None:
     if not user or user.is_bot:
         return
 
-    await upsert_subscription(
+    result = await upsert_subscription(
         tg_user_id=int(user.id),
         channel_id=int(chat.id),
         status=str(member.status),
@@ -1304,6 +1305,11 @@ async def on_channel_chat_member(event: ChatMemberUpdated) -> None:
         last_name=str(user.last_name or ""),
         source="event",
     )
+    if result.get("just_joined"):
+        try:
+            await schedule_channel_welcome(int(user.id))
+        except Exception:
+            logger.debug("Welcome-очередь не поставлена", exc_info=True)
 
 
 async def on_my_chat_member(event: ChatMemberUpdated) -> None:

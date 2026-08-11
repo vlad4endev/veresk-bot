@@ -14,7 +14,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,500;9..144,600;9..144,700&family=Manrope:wght@400;500;600;700&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="css/admin.css?v=63">
+<link rel="stylesheet" href="css/admin.css?v=65">
 <link rel="stylesheet" href="css/wheel.css?v=11">
 <!-- Критичный CSS до paint: иначе логин мелькнёт, пока качается admin.css -->
 <style>
@@ -281,6 +281,27 @@
             <button type="button" class="btn primary" id="btnSubsSaveChannel">Сохранить</button>
           </div>
           <p class="hint subs-setup-hint">Бот должен быть <b>админом</b> канала. Система сама находит такие каналы через подключённый Telegram-аккаунт и запоминает канал, когда бота назначают админом.</p>
+          <div class="subs-welcome" id="subsWelcome">
+            <div class="subs-welcome-head">
+              <label class="subs-welcome-toggle">
+                <input type="checkbox" id="subsWelcomeEnabled">
+                <span>Автосообщение новым подписчикам</span>
+              </label>
+              <span class="hint" id="subsWelcomeHint">при подписке на канал → личное сообщение в Telegram</span>
+            </div>
+            <label class="field subs-welcome-text">
+              <span>Текст сообщения</span>
+              <textarea id="subsWelcomeText" rows="5" placeholder="Здравствуйте, {имя}!…"></textarea>
+            </label>
+            <div class="subs-welcome-row">
+              <label class="field">
+                <span>Задержка (минуты)</span>
+                <input type="number" id="subsWelcomeDelay" min="0" max="10080" step="1" value="0">
+              </label>
+              <button type="button" class="btn primary" id="btnSubsWelcomeSave">Сохранить автосообщение</button>
+            </div>
+            <p class="hint">Плейсхолдер <code>{имя}</code>. Нужен подключённый Telegram-аккаунт в Настройках. Уже получившие welcome повторно не получают.</p>
+          </div>
         </div>
         <div class="clients-toolbar">
           <div class="seg" id="subsSeg">
@@ -305,15 +326,14 @@
           <button type="button" class="btn" id="btnSubsWrite" disabled>Написать</button>
           <button type="button" class="btn primary" id="btnSubsToMailing" disabled>В рассылку</button>
         </div>
-        <div class="tbl-wrap clients-tbl">
+        <div class="tbl-wrap clients-tbl subs-tbl">
           <table>
             <thead>
               <tr>
                 <th class="th-check"><span class="sr-only">Выбор</span></th>
                 <th>Подписчик</th>
-                <th>Теги</th>
-                <th class="hide-mob">Подписка</th>
-                <th>Действия</th>
+                <th class="hide-mob th-when">Подписка</th>
+                <th class="th-actions">Действия</th>
               </tr>
             </thead>
             <tbody id="subsBody"></tbody>
@@ -1408,6 +1428,6 @@
 <script src="js/qrcode.min.js?v=1"></script>
 <script src="js/api.js?v=40"></script>
 <script src="js/wheel-widget.js?v=13"></script>
-<script src="js/app.js?v=69"></script>
+<script src="js/app.js?v=71"></script>
 </body>
 </html>

@@ -395,10 +395,22 @@ async def _dispatcher_loop() -> None:
     while True:
         try:
             await process_auto_greetings()
+            try:
+                from channel_subscriptions import process_due_channel_welcomes
+
+                n_welcome = await process_due_channel_welcomes()
+            except Exception:
+                n_welcome = 0
+                logger.debug("Welcome-диспетчер: ошибка", exc_info=True)
             n1 = await process_campaign_batch()
             n2 = await process_personal_batch()
-            if n1 or n2:
-                logger.info("Диспетчер: кампании=%s, личные=%s", n1, n2)
+            if n1 or n2 or n_welcome:
+                logger.info(
+                    "Диспетчер: кампании=%s, личные=%s, welcome=%s",
+                    n1,
+                    n2,
+                    n_welcome,
+                )
         except Exception:
             logger.exception("Ошибка в диспетчере рассылок")
         await asyncio.sleep(max(2.0, MAILING_SEND_INTERVAL))

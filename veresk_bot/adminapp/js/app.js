@@ -1251,6 +1251,26 @@
         metaEl.textContent = "Нажмите «Определить автоматически» или назначьте бота админом канала";
       }
     }
+    applySubsWelcomeForm(ch.welcome || null);
+  }
+
+  function applySubsWelcomeForm(welcome) {
+    const w = welcome || {};
+    if ($("#subsWelcomeEnabled")) $("#subsWelcomeEnabled").checked = !!w.enabled;
+    if ($("#subsWelcomeText")) {
+      $("#subsWelcomeText").value = w.text || w.default_text || "";
+    }
+    if ($("#subsWelcomeDelay")) {
+      $("#subsWelcomeDelay").value = String(
+        Number.isFinite(+w.delay_minutes) ? Math.max(0, +w.delay_minutes) : 0
+      );
+    }
+    const hint = $("#subsWelcomeHint");
+    if (hint) {
+      hint.textContent = w.enabled
+        ? "включено — отправим при новой подписке"
+        : "выключено — включите и сохраните текст";
+    }
   }
 
   function renderSubsChannelPick(channels) {
@@ -1416,7 +1436,7 @@
       if (t.id === "no_survey" && s.has_survey) return false;
       return true;
     });
-    if (!filtered.length) return `<span class="muted">—</span>`;
+    if (!filtered.length) return "";
     return `<div class="subs-tags">${filtered
       .map(
         (t) =>
@@ -1474,7 +1494,7 @@
   async function loadSubscribers(opts = {}) {
     const box = $("#subsBody");
     if (!box) return;
-    box.innerHTML = '<tr><td colspan="5" class="loading">Загрузка…</td></tr>';
+    box.innerHTML = '<tr><td colspan="4" class="loading">Загрузка…</td></tr>';
     try {
       const params = { page_size: 200, filter: subsFilter || "member" };
       if (subsSearch) params.search = subsSearch;
@@ -1508,7 +1528,7 @@
           : data.channel?.configured
             ? "В этом фильтре пока пусто — смените фильтр или выгрузите подписчиков"
             : "Канал не определён — нажмите «Определить автоматически»";
-        box.innerHTML = `<tr><td colspan="5"><div class="empty-state"><div class="t">${emptyMsg}</div></div></td></tr>`;
+        box.innerHTML = `<tr><td colspan="4"><div class="empty-state"><div class="t">${emptyMsg}</div></div></td></tr>`;
         const members = data.stats?.members || 0;
         const neu = data.stats?.new || 0;
         $("#subsHint").textContent = data.channel?.configured
@@ -1526,20 +1546,23 @@
           const cardBtn = s.customer_id
             ? `<button type="button" class="mini-btn" data-customer="${s.customer_id}">Карточка</button>`
             : "";
+          const whenMob = s.joined_label
+            ? `<span class="subs-when-inline"> · ${esc(s.joined_label)}</span>`
+            : "";
           return `<tr${rowCls} data-tg="${s.tg_user_id}">
             <td class="td-check"><input type="checkbox" class="subs-check" data-tg="${s.tg_user_id}"${checked}></td>
-            <td>
+            <td class="subs-main">
               <div class="cl-who">
                 <span class="cl-who-av">${esc(initials(s.full_name))}</span>
                 <div class="cl-who-b">
                   <div class="nm">${esc(s.full_name)}</div>
-                  <span class="ph">${uname}</span>
+                  <span class="ph">${uname}${whenMob}</span>
+                  ${subsTagsHtml(s)}
                 </div>
               </div>
             </td>
-            <td>${subsTagsHtml(s)}</td>
-            <td class="hide-mob">${esc(s.joined_label || "—")}</td>
-            <td>
+            <td class="hide-mob subs-when-cell"><span class="subs-when">${esc(s.joined_label || "—")}</span></td>
+            <td class="subs-actions-cell">
               <div class="subs-actions">
                 <button type="button" class="mini-btn" data-write="${s.tg_user_id}">Написать</button>
                 ${cardBtn}
@@ -1581,7 +1604,7 @@
       syncSubsBulkUi();
     } catch (err) {
       if (err.status === 401) return showLogin();
-      box.innerHTML = '<tr><td colspan="5" class="empty-state">Ошибка загрузки</td></tr>';
+      box.innerHTML = '<tr><td colspan="4" class="empty-state">Ошибка загрузки</td></tr>';
     }
   }
 
@@ -1661,11 +1684,41 @@
         channel_id,
       });
       applySubsChannelForm(res.channel);
+      if (res.welcome) applySubsWelcomeForm(res.welcome);
       renderSubsChannelPick([]);
       alert(res.channel?.configured ? "Канал сохранён" : "Сохранено (канал пока не задан)");
       await loadSubscribers({ skipDiscover: true });
     } catch (err) {
       alert("Не удалось сохранить: " + (err.data?.error || err.message));
+    }
+  });
+
+  $("#btnSubsWelcomeSave")?.addEventListener("click", async () => {
+    const btn = $("#btnSubsWelcomeSave");
+    const enabled = !!$("#subsWelcomeEnabled")?.checked;
+    const text = ($("#subsWelcomeText")?.value || "").trim();
+    const delay = Math.max(0, Math.min(10080, Number($("#subsWelcomeDelay")?.value || 0) || 0));
+    if (enabled && !text) {
+      alert("Введите текст автосообщения");
+      $("#subsWelcomeText")?.focus();
+      return;
+    }
+    if (btn) btn.disabled = true;
+    try {
+      const res = await AdminAPI.saveChannelSubscribersSettings({
+        welcome: { enabled, text, delay_minutes: delay },
+      });
+      applySubsChannelForm(res.channel || {});
+      applySubsWelcomeForm(res.welcome || res.channel?.welcome);
+      alert(
+        enabled
+          ? "Автосообщение новым подписчикам включено"
+          : "Автосообщение выключено"
+      );
+    } catch (err) {
+      alert("Не удалось сохранить: " + (err.data?.detail || err.data?.error || err.message));
+    } finally {
+      if (btn) btn.disabled = false;
     }
   });
 
@@ -4703,6 +4756,8 @@
     new: "Новые",
     inactive: "Давно не заказывали",
     selected: "Выбранные клиенты",
+    channel_subscribers: "Подписчики канала",
+    channel_subscribers_new: "Новые подписчики канала",
   };
 
   const AI_CHIP_PROMPTS = {

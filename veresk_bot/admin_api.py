@@ -1020,7 +1020,12 @@ async def handle_channel_subscribers_settings(request: web.Request) -> web.Respo
     err = await _require_admin(request)
     if err:
         return err
-    from channel_subscriptions import get_channel_config, save_channel_config
+    from channel_subscriptions import (
+        get_channel_config,
+        get_welcome_config,
+        save_channel_config,
+        save_welcome_config,
+    )
 
     body: dict[str, Any] = {}
     if request.method != "GET":
@@ -1032,7 +1037,7 @@ async def handle_channel_subscribers_settings(request: web.Request) -> web.Respo
             body = {}
 
     if request.method == "GET":
-        return _json({"channel": get_channel_config()})
+        return _json({"channel": get_channel_config(), "welcome": get_welcome_config()})
 
     channel_id = body.get("channel_id")
     channel_username = body.get("channel_username")
@@ -1054,12 +1059,28 @@ async def handle_channel_subscribers_settings(request: web.Request) -> web.Respo
     if channel_title is not None:
         title = str(channel_title).strip()
 
-    cfg = save_channel_config(
-        channel_id=cid,
-        channel_username=uname,
-        channel_title=title,
-    )
-    return _json({"ok": True, "channel": cfg})
+    cfg = get_channel_config()
+    if any(k in body for k in ("channel_id", "channel_username", "channel_title")):
+        cfg = save_channel_config(
+            channel_id=cid,
+            channel_username=uname,
+            channel_title=title,
+        )
+
+    welcome = get_welcome_config()
+    welcome_body = body.get("welcome") if isinstance(body.get("welcome"), dict) else body
+    welcome_keys = ("enabled", "text", "delay_minutes", "welcome_enabled", "welcome_text", "welcome_delay_minutes")
+    if any(k in welcome_body for k in welcome_keys) or "welcome" in body:
+        enabled = welcome_body.get("enabled", welcome_body.get("welcome_enabled"))
+        text = welcome_body.get("text", welcome_body.get("welcome_text"))
+        delay = welcome_body.get("delay_minutes", welcome_body.get("welcome_delay_minutes"))
+        welcome = save_welcome_config(
+            enabled=None if enabled is None else bool(enabled),
+            text=None if text is None else str(text),
+            delay_minutes=None if delay is None else delay,
+        )
+
+    return _json({"ok": True, "channel": cfg, "welcome": welcome})
 
 
 async def _pick_tg_userbot_account() -> dict[str, Any] | None:
