@@ -38,9 +38,7 @@ CREATE TABLE IF NOT EXISTS channel_subscriptions (
     left_at TEXT,
     first_seen_at TEXT NOT NULL,
     updated_at TEXT NOT NULL,
-    source TEXT NOT NULL DEFAULT 'event',
-    welcome_due_at TEXT,
-    welcome_sent_at TEXT
+    source TEXT NOT NULL DEFAULT 'event'
 );
 
 CREATE INDEX IF NOT EXISTS idx_channel_subs_status
@@ -51,7 +49,9 @@ CREATE INDEX IF NOT EXISTS idx_channel_subs_joined
 
 CREATE INDEX IF NOT EXISTS idx_channel_subs_name
     ON channel_subscriptions (first_name, last_name, username);
+"""
 
+_SCHEMA_WELCOME_INDEX = """
 CREATE INDEX IF NOT EXISTS idx_channel_subs_welcome_due
     ON channel_subscriptions (welcome_due_at);
 """
@@ -276,13 +276,20 @@ def _ensure_column(db: sqlite3.Connection, table: str, column: str, typedef: str
         db.execute(f"ALTER TABLE {table} ADD COLUMN {column} {typedef}")
 
 
+def _ensure_channel_subscriptions_schema(db: sqlite3.Connection) -> None:
+    db.executescript(_SCHEMA)
+    # На старых БД CREATE TABLE IF NOT EXISTS не добавит welcome_*;
+    # индекс по ним раньше валил старт бота (502).
+    _ensure_column(db, "channel_subscriptions", "welcome_due_at", "TEXT")
+    _ensure_column(db, "channel_subscriptions", "welcome_sent_at", "TEXT")
+    db.executescript(_SCHEMA_WELCOME_INDEX)
+
+
 async def init_channel_subscriptions() -> None:
     def _init() -> None:
         Path(DATABASE_PATH).parent.mkdir(parents=True, exist_ok=True)
         with _connect() as db:
-            db.executescript(_SCHEMA)
-            _ensure_column(db, "channel_subscriptions", "welcome_due_at", "TEXT")
-            _ensure_column(db, "channel_subscriptions", "welcome_sent_at", "TEXT")
+            _ensure_channel_subscriptions_schema(db)
             db.commit()
 
     await _run_db(_init)
@@ -383,9 +390,7 @@ async def upsert_subscription(
 
     def _upsert() -> dict[str, Any]:
         with _connect() as db:
-            db.executescript(_SCHEMA)
-            _ensure_column(db, "channel_subscriptions", "welcome_due_at", "TEXT")
-            _ensure_column(db, "channel_subscriptions", "welcome_sent_at", "TEXT")
+            _ensure_channel_subscriptions_schema(db)
             row = db.execute(
                 "SELECT * FROM channel_subscriptions WHERE tg_user_id = ?",
                 (int(tg_user_id),),
@@ -484,7 +489,7 @@ async def mark_missing_as_left(channel_id: int, present_ids: set[int]) -> int:
 
     def _mark() -> int:
         with _connect() as db:
-            db.executescript(_SCHEMA)
+            _ensure_channel_subscriptions_schema(db)
             rows = db.execute(
                 """
                 SELECT tg_user_id FROM channel_subscriptions
@@ -560,7 +565,7 @@ async def list_subscribers(
 
     def _list() -> tuple[list[dict[str, Any]], int, dict[str, int]]:
         with _connect() as db:
-            db.executescript(_SCHEMA)
+            _ensure_channel_subscriptions_schema(db)
             # profiles может ещё не быть, если бот не инициализировал client_db
             db.execute(
                 """
@@ -712,7 +717,7 @@ async def list_member_tg_ids(*, only_new: bool = False) -> list[int]:
 
     def _ids() -> list[int]:
         with _connect() as db:
-            db.executescript(_SCHEMA)
+            _ensure_channel_subscriptions_schema(db)
             if only_new:
                 rows = db.execute(
                     """
@@ -739,7 +744,7 @@ async def list_member_tg_ids(*, only_new: bool = False) -> list[int]:
 async def get_subscription(tg_user_id: int) -> dict[str, Any] | None:
     def _get() -> dict[str, Any] | None:
         with _connect() as db:
-            db.executescript(_SCHEMA)
+            _ensure_channel_subscriptions_schema(db)
             row = db.execute(
                 "SELECT * FROM channel_subscriptions WHERE tg_user_id = ?",
                 (int(tg_user_id),),
@@ -1163,9 +1168,7 @@ async def schedule_channel_welcome(tg_user_id: int) -> dict[str, Any]:
 
     def _schedule() -> dict[str, Any]:
         with _connect() as db:
-            db.executescript(_SCHEMA)
-            _ensure_column(db, "channel_subscriptions", "welcome_due_at", "TEXT")
-            _ensure_column(db, "channel_subscriptions", "welcome_sent_at", "TEXT")
+            _ensure_channel_subscriptions_schema(db)
             row = db.execute(
                 "SELECT welcome_sent_at, welcome_due_at, status FROM channel_subscriptions WHERE tg_user_id = ?",
                 (tid,),
@@ -1203,9 +1206,7 @@ async def process_due_channel_welcomes(*, limit: int = 20) -> int:
 
     def _due_ids() -> list[int]:
         with _connect() as db:
-            db.executescript(_SCHEMA)
-            _ensure_column(db, "channel_subscriptions", "welcome_due_at", "TEXT")
-            _ensure_column(db, "channel_subscriptions", "welcome_sent_at", "TEXT")
+            _ensure_channel_subscriptions_schema(db)
             rows = db.execute(
                 """
                 SELECT tg_user_id FROM channel_subscriptions
