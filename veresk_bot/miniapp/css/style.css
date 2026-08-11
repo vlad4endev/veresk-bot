@@ -222,9 +222,9 @@ body:has(.tg-guard:not(.hidden)) #app {
   height: clamp(120px, 38vw, 156px);
   border-radius: 50%;
   padding: 10px;
-  background: rgba(46, 26, 72, 0.82);
-  border: 2px solid rgba(255, 255, 255, 0.35);
-  box-shadow: 0 10px 28px rgba(20, 8, 36, 0.4);
+  background: rgba(255, 245, 251, 0.96);
+  border: 2px solid rgba(255, 255, 255, 0.7);
+  box-shadow: 0 10px 28px rgba(20, 8, 36, 0.28);
 }
 
 .hero-logo {

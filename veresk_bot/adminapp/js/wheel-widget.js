@@ -25,7 +25,7 @@
       .replace(/"/g, "&quot;");
   }
 
-  const DEFAULT_LOGO = "assets/logo-circle.png";
+  const DEFAULT_LOGO = "assets/logo-circle.png?v=6";
 
   function totalWeight(segs) {
     return segs.reduce((sum, s) => sum + Math.max(0, Number(s.weight) || 0), 0);

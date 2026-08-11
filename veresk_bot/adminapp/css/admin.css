@@ -131,7 +131,7 @@
     transition:transform .35s var(--ease);
   }
   .side .logo:hover{transform:scale(1.04);}
-  .side .logo svg{width:100%;height:auto;display:block;}
+  .side .logo img,.side .logo svg{width:100%;height:auto;display:block;}
   .create-btn{
     width:100%;justify-content:center;margin-bottom:16px;
     border-radius:14px !important;
@@ -1112,7 +1112,7 @@
     width:96px;
     margin:0 auto 18px;
   }
-  .login-logo svg{width:100%;height:auto;display:block;}
+  .login-logo img,.login-logo svg{width:100%;height:auto;display:block;}
 
   .login-title{
     margin:0 0 6px;
@@ -1310,7 +1310,7 @@
   html.auth-pending #loginScreen{display:none !important;}
   html.auth-pending #authBoot{display:flex;}
   .auth-boot-logo{width:96px;opacity:.92;}
-  .auth-boot-logo svg{width:100%;height:auto;display:block;}
+  .auth-boot-logo img,.auth-boot-logo svg{width:100%;height:auto;display:block;}
   .auth-boot-spinner{
     width:28px;height:28px;
     border:2.5px solid rgba(64,44,96,.15);
