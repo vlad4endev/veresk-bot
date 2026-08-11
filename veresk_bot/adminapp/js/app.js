@@ -296,10 +296,23 @@
     $("#authBoot")?.classList.add("hidden");
   }
 
+  const TITLE_APP = "Veresk — рассылки клиентам";
+  const TITLE_LOGIN = "Вход · Панель рассылок Veresk";
+  const THEME_APP = "#402C60";
+  const THEME_LOGIN = "#FDF4F9";
+
+  function setChrome(mode) {
+    const login = mode === "login";
+    document.title = login ? TITLE_LOGIN : TITLE_APP;
+    const theme = document.querySelector('meta[name="theme-color"]');
+    if (theme) theme.setAttribute("content", login ? THEME_LOGIN : THEME_APP);
+  }
+
   async function showApp() {
     clearAuthPending();
     $("#loginScreen").classList.add("hidden");
     $("#appShell").classList.remove("hidden");
+    setChrome("app");
     startAdminKeepalive();
     await refreshSideUser();
     const start = firstAllowedTab();
@@ -312,6 +325,7 @@
     clearAuthPending();
     $("#appShell").classList.add("hidden");
     $("#loginScreen").classList.remove("hidden");
+    setChrome("login");
     setTimeout(focusLogin, 50);
   }
 
@@ -8621,15 +8635,18 @@
     archived: "Архив",
   };
 
+  function promoEl(id) {
+    return document.getElementById(id);
+  }
   function promoVal(id) {
-    return $(id)?.value ?? "";
+    return promoEl(id)?.value ?? "";
   }
   function setPromoVal(id, v) {
-    const el = $(id);
+    const el = promoEl(id);
     if (el) el.value = v == null ? "" : String(v);
   }
   function setPromoCheck(id, on) {
-    const el = $(id);
+    const el = promoEl(id);
     if (el) el.checked = !!on;
   }
 
@@ -8888,16 +8905,28 @@
   }
 
   async function deletePromo() {
-    const id = promoVal("promoId");
-    if (!id) return;
+    const id = promoVal("promoId") || promoState.selectedId;
+    if (!id) {
+      alert("Сначала выберите акцию в списке");
+      return;
+    }
     if (!confirm("Удалить эту акцию?")) return;
+    const btn = $("#promoDeleteBtn");
+    if (btn) btn.disabled = true;
     try {
       await AdminAPI.deletePromotion(id);
       promoState.selectedId = null;
       showPromoEditor(false);
       await loadPromos();
     } catch (err) {
-      alert(err.data?.detail || err.message || "Не удалось удалить");
+      alert(
+        err.data?.detail ||
+          err.data?.error ||
+          err.message ||
+          "Не удалось удалить"
+      );
+    } finally {
+      if (btn) btn.disabled = false;
     }
   }
 
@@ -9016,9 +9045,74 @@
     }
   }
 
+  function ensurePromoSuggestionFields(s) {
+    const src = { ...(s || {}) };
+    const disc =
+      (src.discount_text || "").trim() ||
+      (src.discount_pct != null && src.discount_pct !== ""
+        ? `${src.discount_pct}%`
+        : "15%");
+    if (!src.discount_text) src.discount_text = disc;
+    if (src.discount_pct == null || src.discount_pct === "") {
+      const m = String(disc).match(/(\d+(?:[.,]\d+)?)/);
+      if (m) src.discount_pct = Number(String(m[1]).replace(",", "."));
+    }
+    if (!(src.message_template || "").trim()) {
+      const title = (src.title || "специальное предложение").trim();
+      const kind = src.promo_type || "discount";
+      if (kind === "birthday") {
+        src.message_template =
+          `С днём рождения, {имя}! 🎂💐\n\n` +
+          `От всей души поздравляем и дарим скидку {скидка} на любой букет.\n\n` +
+          `Ваш Veresk 🌷`;
+      } else if (kind === "anniversary") {
+        src.message_template =
+          `{имя}, поздравляем с годовщиной! 💍\n\n` +
+          `Отметьте этот день красивым букетом — дарим скидку {скидка}.\n\n` +
+          `Ваш Veresk 🌷`;
+      } else if (kind === "reactivation") {
+        src.message_template =
+          `Здравствуйте, {имя}!\n\n` +
+          `Давно не виделись — соскучились по вам. Специально для вас: {скидка} на букет.\n\n` +
+          `Ваш Veresk 🌷`;
+      } else if (kind === "welcome") {
+        src.message_template =
+          `Здравствуйте, {имя}!\n\n` +
+          `Рады знакомству! В подарок — скидка {скидка} на первый букет.\n\n` +
+          `Ваш Veresk 🌷`;
+      } else {
+        src.message_template =
+          `Здравствуйте, {имя}!\n\n` +
+          `${title}: для вас скидка {скидка} на любой букет.\n\n` +
+          `Заказать: veresk.flowers\n\nВаш Veresk 🌷`;
+      }
+    }
+    if (!(src.description || "").trim()) {
+      src.description = (src.rationale || "").trim();
+    }
+    if (!(src.emoji || "").trim()) src.emoji = "🎁";
+    if (!src.segment) src.segment = "all";
+    if (!src.promo_type) src.promo_type = "discount";
+    src.use_in_auto_mail = src.use_in_auto_mail !== false;
+    src.use_in_mailing = src.use_in_mailing !== false;
+    src.status = src.status || "draft";
+    return src;
+  }
+
+  function setPromoStatusFilter(status) {
+    promoState.status = status || "all";
+    $$("#promoStatusTabs .promos-tab").forEach((el) => {
+      el.classList.toggle(
+        "active",
+        (el.getAttribute("data-status") || "all") === promoState.status
+      );
+    });
+  }
+
   async function applyPromoSuggestion(idx, { openOnly = false } = {}) {
-    const s = (promoState.aiResult?.suggestions || [])[idx];
-    if (!s) return;
+    const raw = (promoState.aiResult?.suggestions || [])[idx];
+    if (!raw) return;
+    const s = ensurePromoSuggestionFields(raw);
     if (openOnly) {
       openNewPromo({
         ...s,
@@ -9028,15 +9122,17 @@
       return;
     }
     try {
+      setPromoStatusFilter("draft");
       const res = await AdminAPI.applyPromoSuggestion({
         suggestion: s,
         status: "draft",
       });
       const item = res.item || res;
-      await loadPromos();
       promoState.selectedId = item.id;
+      await loadPromos();
       fillPromoForm(item);
       renderPromoList();
+      $("#promoForm")?.scrollIntoView?.({ behavior: "smooth", block: "start" });
     } catch (err) {
       alert(err.data?.detail || err.message || "Не удалось создать");
     }

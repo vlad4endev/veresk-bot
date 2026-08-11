@@ -32,6 +32,8 @@
   font-family:var(--v-login-font);color:var(--v-login-plum);background:var(--v-login-blush);
   -webkit-font-smoothing:antialiased;
 }
+/* display:grid выше иначе перекрыл бы .hidden без !important */
+#loginScreen.page.hidden{display:none!important}
 #loginScreen.page button{font-family:inherit;font-size:inherit;border:0;background:none;cursor:pointer}
 #loginScreen.page *{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
 
