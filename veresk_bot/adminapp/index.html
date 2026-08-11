@@ -436,7 +436,7 @@
                 </div>
                 <div id="tgConnectFields">
                   <div class="acct-form-title">Новый номер Telegram</div>
-                  <p class="form-lead">Введите телефон в международном формате. Код чаще приходит в приложение Telegram (чат «Telegram»), не в SMS.</p>
+                  <p class="form-lead">Введите телефон в формате +79001234567. Код придёт <strong>только в приложение Telegram</strong> (чат «Telegram») — SMS для входа через админку Telegram с 2023 года не отправляет.</p>
                   <label for="tgPhone">Телефон</label>
                   <input id="tgPhone" type="tel" placeholder="+79001234567" autocomplete="tel">
                   <div class="form-actions">
@@ -445,15 +445,15 @@
                   </div>
                   <div id="tgCodeStep" class="hidden connect-next">
                     <p class="form-lead" id="tgCodeHint" role="status"></p>
-                    <label for="tgCode">Код из Telegram / SMS</label>
-                    <input id="tgCode" type="text" inputmode="numeric" placeholder="код из Telegram" autocomplete="one-time-code">
+                    <label for="tgCode">Код из чата «Telegram»</label>
+                    <input id="tgCode" type="text" inputmode="numeric" placeholder="код из приложения Telegram" autocomplete="one-time-code">
                     <div id="tg2faWrap" class="hidden">
                       <label for="tg2fa">Пароль 2FA</label>
                       <input id="tg2fa" type="password" placeholder="Пароль облака Telegram" autocomplete="current-password">
                     </div>
                     <div class="form-actions">
                       <button type="button" class="btn primary" id="tgConfirm">Подтвердить</button>
-                      <button type="button" class="btn" id="tgResendCode" title="Часто переключает доставку на SMS">Прислать иначе</button>
+                      <button type="button" class="btn" id="tgResendCode" title="Повторный запрос кода (SMS всё равно недоступны)">Запросить код ещё раз</button>
                     </div>
                   </div>
                 </div>

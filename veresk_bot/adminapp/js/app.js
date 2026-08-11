@@ -1690,7 +1690,7 @@
       const hint = $("#tgHint");
       if (hint) {
         hint.textContent = configured
-          ? "Ключи заданы. Подключите номер: телефон → код из Telegram/SMS → коннект."
+          ? "Ключи заданы. Подключите номер: телефон → код из чата «Telegram» → коннект."
           : "Шаг 1: сохраните API-ключи. Шаг 2: подключите номер телефона.";
       }
       await loadTgApiStatus();
@@ -3522,7 +3522,7 @@
       const hint =
         res.code_hint ||
         res.detail ||
-        "Код отправлен. Проверьте приложение Telegram (чат «Telegram»), не SMS.";
+        "Код в приложении Telegram → чат «Telegram». SMS для входа через админку не приходят.";
       const hintEl = $("#tgCodeHint");
       if (hintEl) hintEl.textContent = hint;
       $("#tgCode")?.focus();
@@ -3552,7 +3552,7 @@
       const hint =
         res.code_hint ||
         res.detail ||
-        "Код отправлен повторно. Проверьте Telegram или SMS.";
+        "Код запрошен ещё раз. Смотрите чат «Telegram» в приложении — не SMS.";
       const hintEl = $("#tgCodeHint");
       if (hintEl) hintEl.textContent = hint;
       $("#tgCode")?.focus();
@@ -3562,7 +3562,7 @@
     } finally {
       if (btn) {
         btn.disabled = false;
-        btn.textContent = "Прислать иначе";
+        btn.textContent = "Запросить код ещё раз";
       }
     }
   });

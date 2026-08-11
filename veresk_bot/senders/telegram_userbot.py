@@ -152,28 +152,39 @@ async def start_telegram_login(phone: str) -> dict[str, Any]:
     }
 
 
-def _code_delivery_hint(code_type: str | None) -> str:
-    """Куда Telegram реально отправил код — App ≠ SMS."""
+def _code_delivery_hint(code_type: str | None, *, resent: bool = False) -> str:
+    """Куда Telegram реально отправил код.
+
+    С 18.02.2023 Telegram не шлёт SMS-коды в сторонние клиенты (Telethon) —
+    только в официальное приложение. force_sms / ResendCodeRequest это не обходят.
+    """
     name = (code_type or "").lower()
+    prefix = "Код отправлен повторно. " if resent else ""
     if "app" in name:
         return (
-            "Код отправлен в приложение Telegram на устройстве, где этот номер уже вошёл. "
-            "Откройте Telegram → чат «Telegram» (служебные сообщения). Это не SMS."
+            f"{prefix}"
+            "Откройте Telegram на телефоне → чат «Telegram» (служебные сообщения) — "
+            "код там. SMS для входа через админку Telegram больше не присылает "
+            "(политика API с 2023 года)."
         )
     if "sms" in name or "fragment" in name or "firebase" in name:
-        return "Код отправлен по SMS на этот номер. Проверьте SMS и папку «Спам»."
+        return f"{prefix}Код отправлен по SMS на этот номер. Проверьте SMS и папку «Спам»."
     if "call" in name or "flash" in name or "missed" in name:
-        return "Код придёт звонком / пропущенным вызовом — последние цифры номера и есть код."
+        return (
+            f"{prefix}"
+            "Код придёт звонком / пропущенным вызовом — последние цифры номера и есть код."
+        )
     if "email" in name:
-        return "Код отправлен на email, привязанный к аккаунту Telegram."
+        return f"{prefix}Код отправлен на email, привязанный к аккаунту Telegram."
     return (
-        "Код отправлен. Сначала проверьте приложение Telegram (чат «Telegram»), "
-        "не SMS. Если нет — нажмите «Получить код» ещё раз или «Прислать иначе»."
+        f"{prefix}"
+        "Откройте приложение Telegram → чат «Telegram». "
+        "SMS с кодом для сторонних клиентов (как эта админка) Telegram не отправляет."
     )
 
 
 async def resend_telegram_login_code(phone: str) -> dict[str, Any]:
-    """Повторная отправка кода (часто переключает App → SMS)."""
+    """Повторная отправка кода (Telegram сам выбирает канал; SMS в сторонние клиенты обычно недоступны)."""
     if not is_telethon_configured():
         return {
             "ok": False,
@@ -198,13 +209,20 @@ async def resend_telegram_login_code(phone: str) -> dict[str, Any]:
         sent = await client(ResendCodeRequest(phone_norm, phone_code_hash))
     except Exception as exc:
         logger.exception("Telethon ResendCodeRequest failed")
-        return {"ok": False, "error": _friendly_telethon_error(exc)}
+        err = _friendly_telethon_error(exc)
+        name = type(exc).__name__
+        if "SendCodeUnavailable" in name or "unavailable" in str(exc).lower():
+            err = (
+                "Другой способ доставки недоступен. Код уже должен быть в приложении "
+                "Telegram (чат «Telegram»). SMS для входа через админку Telegram не шлёт."
+            )
+        return {"ok": False, "error": err}
 
     new_hash = getattr(sent, "phone_code_hash", None) or phone_code_hash
     code_type = type(getattr(sent, "type", None)).__name__ if sent else None
     pending["phone_code_hash"] = new_hash
     pending["code_type"] = code_type
-    hint = _code_delivery_hint(code_type)
+    hint = _code_delivery_hint(code_type, resent=True)
     logger.info("Telegram login code resent for %s via %s", phone_norm, code_type)
     return {
         "ok": True,
@@ -222,8 +240,8 @@ def _friendly_telethon_error(exc: BaseException) -> str:
     msg = str(exc)
     if "PhoneCodeInvalid" in name or "phone code entered was invalid" in msg.lower():
         return (
-            "Неверный код. Запросите новый код кнопкой «Получить код» "
-            "и введите свежий код из Telegram (не из SMS, если пришло в приложение)."
+            "Неверный код. Запросите новый кнопкой «Получить код» "
+            "и введите свежий код из чата «Telegram» в приложении."
         )
     if "PhoneCodeExpired" in name or "expired" in msg.lower():
         return "Код устарел. Нажмите «Получить код» ещё раз и введите новый."
