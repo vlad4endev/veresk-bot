@@ -412,12 +412,26 @@
       });
     }
 
-    function onSpinClick() {
-      spin().catch((err) => {
+    async function onSpinClick() {
+      try {
+        if (typeof options.resolveWinner === "function") {
+          const resolved = await options.resolveWinner();
+          if (!resolved || resolved.winnerIndex == null) return;
+          await spin({
+            winnerIndex: resolved.winnerIndex,
+            turns: resolved.turns,
+            durationMs: resolved.durationMs,
+          });
+          return;
+        }
+        await spin();
+      } catch (err) {
         if (err && err.message === "need segments" && resultEl) {
           setResultState("Нужно больше секторов", "Минимум 2", "is-tease");
+        } else if (err && err.message !== "already spinning") {
+          console.warn("[wheel] spin failed", err);
         }
-      });
+      }
     }
 
     hubBtn.addEventListener("click", onSpinClick);

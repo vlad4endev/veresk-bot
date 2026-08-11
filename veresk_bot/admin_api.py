@@ -81,9 +81,17 @@ from mailing_db import (
     ADMIN_SESSION_HOURS,
     ADMIN_USER_ROLES,
     normalize_phone_db,
-)
+
+    get_fortune_play,
+    list_fortune_plays,
+    record_fortune_play,
+    get_customer_by_max_user_id,)
 import runtime_settings
-from fortune_wheel import get_config as get_wheel_config, save_config as save_wheel_config
+from fortune_wheel import (
+    get_config as get_wheel_config,
+    pick_winner as pick_wheel_winner,
+    save_config as save_wheel_config,
+)
 from bot_metrics import get_bot_metrics, init_bot_metrics
 from posiflora_sync import last_sync_info, sync_from_posiflora
 from senders.matching import (
@@ -4474,6 +4482,218 @@ async def handle_wheel_public_get(_request: web.Request) -> web.Response:
     """Публичный конфиг для Mini App — без авторизации."""
     return _json(get_wheel_config())
 
+
+def _serialize_fortune_play(row: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "id": row.get("id"),
+        "channel": row.get("channel"),
+        "user_id": str(row.get("user_id") or ""),
+        "first_name": row.get("first_name") or "",
+        "last_name": row.get("last_name") or "",
+        "username": row.get("username") or "",
+        "full_name": row.get("full_name") or "",
+        "prize_id": row.get("prize_id") or "",
+        "prize_label": row.get("prize_label") or "",
+        "discount_pct": row.get("discount_pct"),
+        "customer_id": row.get("customer_id"),
+        "tg_user_id": row.get("tg_user_id"),
+        "max_user_id": row.get("max_user_id"),
+        "created_at": row.get("created_at"),
+    }
+
+
+async def handle_wheel_plays_list(request: web.Request) -> web.Response:
+    err = await _require_perm(request, "wheel")
+    if err:
+        return err
+    try:
+        limit = int(request.query.get("limit") or 100)
+    except ValueError:
+        limit = 100
+    try:
+        offset = int(request.query.get("offset") or 0)
+    except ValueError:
+        offset = 0
+    data = await list_fortune_plays(limit=limit, offset=offset)
+    return _json(
+        {
+            "total": data["total"],
+            "telegram": data["telegram"],
+            "max": data["max"],
+            "limit": data["limit"],
+            "offset": data["offset"],
+            "items": [_serialize_fortune_play(x) for x in data["items"]],
+        }
+    )
+
+
+async def _resolve_wheel_player(
+    request: web.Request, *, body: dict[str, Any] | None = None
+) -> tuple[dict[str, Any] | None, web.Response | None]:
+    """Определить игрока по Telegram/MAX initData. (player, error_response)."""
+    from senders.max_bot import get_max_bot_token
+    from telegram_auth import user_from_init_data
+
+    tg_init = (
+        request.headers.get("X-Telegram-Init-Data")
+        or request.query.get("initData")
+        or ""
+    ).strip()
+    max_init = (
+        request.headers.get("X-Max-Init-Data")
+        or request.headers.get("X-Max-WebApp-Init-Data")
+        or request.query.get("maxInitData")
+        or ""
+    ).strip()
+
+    if body is None:
+        if request.method.upper() in ("POST", "PUT", "PATCH"):
+            try:
+                body = await request.json()
+            except Exception:
+                body = {}
+        else:
+            body = {}
+    if not isinstance(body, dict):
+        body = {}
+
+    channel_hint = str(
+        body.get("channel") or request.query.get("channel") or ""
+    ).strip().lower()
+
+    # Prefer explicit channel if init data matches
+    if channel_hint == "max" or (max_init and not tg_init):
+        token = get_max_bot_token()
+        user = user_from_init_data(max_init, token) if max_init and token else None
+        if not user:
+            return None, _json(
+                {"error": "unauthorized", "detail": "Нужна авторизация MAX Mini App"},
+                status=401,
+            )
+        return {
+            "channel": "max",
+            "user": user,
+            "body": body,
+        }, None
+
+    token = BOT_TOKEN
+    user = user_from_init_data(tg_init, token) if tg_init and token else None
+    if not user:
+        # fallback: try max if telegram failed
+        token_m = get_max_bot_token()
+        user_m = user_from_init_data(max_init, token_m) if max_init and token_m else None
+        if user_m:
+            return {"channel": "max", "user": user_m, "body": body}, None
+        return None, _json(
+            {"error": "unauthorized", "detail": "Нужна авторизация Telegram или MAX"},
+            status=401,
+        )
+    return {"channel": "telegram", "user": user, "body": body}, None
+
+
+async def handle_wheel_spin(request: web.Request) -> web.Response:
+    """POST /api/wheel/spin — серверный розыгрыш + запись участника (1 раз)."""
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    player, err = await _resolve_wheel_player(request, body=body if isinstance(body, dict) else {})
+    if err:
+        return err
+    assert player is not None
+    channel = player["channel"]
+    user = player["user"]
+    uid = str(user.get("id"))
+    first = str(user.get("first_name") or "")
+    last = str(user.get("last_name") or "")
+    username = str(user.get("username") or "")
+
+    existing = await get_fortune_play(channel, uid)
+    cfg = get_wheel_config()
+    segments = cfg.get("segments") or []
+
+    if existing:
+        # map prize to index if possible
+        winner_index = 0
+        prize_id = str(existing.get("prize_id") or "")
+        for i, s in enumerate(segments):
+            if str(s.get("id")) == prize_id or str(s.get("label")) == str(existing.get("prize_label") or ""):
+                winner_index = i
+                break
+        return _json(
+            {
+                "ok": True,
+                "already_played": True,
+                "winner_index": winner_index,
+                "segment": {
+                    "id": existing.get("prize_id") or "",
+                    "label": existing.get("prize_label") or "",
+                },
+                "discount_pct": existing.get("discount_pct"),
+                "play": _serialize_fortune_play(existing),
+                "config": cfg,
+            }
+        )
+
+    picked = pick_wheel_winner(segments)
+    seg = picked["segment"]
+    customer = None
+    if channel == "telegram":
+        try:
+            customer = await get_customer_by_tg_user_id(int(uid))
+        except Exception:
+            customer = None
+    else:
+        try:
+            customer = await get_customer_by_max_user_id(int(uid))
+        except Exception:
+            customer = None
+
+    # Enrich name from CRM if Mini App user has empty names
+    if customer and customer.get("name"):
+        crm_name = str(customer.get("name") or "").strip()
+        if crm_name and not (first or last):
+            parts = crm_name.split(None, 1)
+            first = parts[0] if parts else first
+            last = parts[1] if len(parts) > 1 else last
+
+    play = await record_fortune_play(
+        channel=channel,
+        user_id=uid,
+        first_name=first,
+        last_name=last,
+        username=username,
+        prize_id=str(seg.get("id") or ""),
+        prize_label=str(seg.get("label") or ""),
+        discount_pct=picked.get("discount_pct"),
+        customer_id=int(customer["id"]) if customer and customer.get("id") is not None else None,
+        tg_user_id=int(uid) if channel == "telegram" else None,
+        max_user_id=uid if channel == "max" else None,
+    )
+    return _json(
+        {
+            "ok": True,
+            "already_played": False,
+            "winner_index": picked["index"],
+            "segment": seg,
+            "discount_pct": picked.get("discount_pct"),
+            "play": _serialize_fortune_play(play),
+            "config": cfg,
+        }
+    )
+
+
+async def handle_wheel_my_play(request: web.Request) -> web.Response:
+    player, err = await _resolve_wheel_player(request, body={})
+    if err:
+        return err
+    assert player is not None
+    uid = str(player["user"].get("id"))
+    play = await get_fortune_play(player["channel"], uid)
+    if not play:
+        return _json({"played": False, "play": None})
+    return _json({"played": True, "play": _serialize_fortune_play(play)})
+
 def setup_admin_routes(app: web.Application) -> None:
     routes = [
         ("/api/admin/login", handle_login, "POST"),
@@ -4545,7 +4765,10 @@ def setup_admin_routes(app: web.Application) -> None:
         ("/api/admin/ai/settings", handle_ai_settings_save, "POST"),
         ("/api/admin/wheel", handle_wheel_get, "GET"),
         ("/api/admin/wheel", handle_wheel_save, "POST"),
+        ("/api/admin/wheel/plays", handle_wheel_plays_list, "GET"),
         ("/api/wheel", handle_wheel_public_get, "GET"),
+        ("/api/wheel/spin", handle_wheel_spin, "POST"),
+        ("/api/wheel/me", handle_wheel_my_play, "GET"),
     ]
     options_done: set[str] = set()
     for path, handler, method in routes:

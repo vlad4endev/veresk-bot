@@ -24,7 +24,7 @@ INIT_DATA_HEADER = "X-Telegram-Init-Data"
 def _cors_headers() -> dict[str, str]:
     return {
         "Access-Control-Allow-Origin": "*",
-        "Access-Control-Allow-Headers": f"Content-Type, {INIT_DATA_HEADER}",
+        "Access-Control-Allow-Headers": f"Content-Type, {INIT_DATA_HEADER}, X-Max-Init-Data, X-Max-WebApp-Init-Data",
         "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
     }
 
@@ -280,6 +280,9 @@ def create_api_app(redis, bot=None) -> web.Application:
     app.router.add_route("OPTIONS", "/api/order/submit", handle_options)
     app.router.add_route("OPTIONS", "/api/client/me", handle_options)
     app.router.add_route("OPTIONS", "/api/client/orders", handle_options)
+    app.router.add_route("OPTIONS", "/api/wheel", handle_options)
+    app.router.add_route("OPTIONS", "/api/wheel/spin", handle_options)
+    app.router.add_route("OPTIONS", "/api/wheel/me", handle_options)
 
     app.router.add_get("/api/order-status/{order_id}", handle_order_status)
     app.router.add_get("/api/order/active", handle_order_active)

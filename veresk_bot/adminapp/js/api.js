@@ -259,6 +259,10 @@ const AdminAPI = (() => {
         method: "POST",
         body: JSON.stringify(body),
       }),
+    wheelPlays: (params = {}) => {
+      const q = new URLSearchParams(params).toString();
+      return request("/api/admin/wheel/plays" + (q ? "?" + q : ""));
+    },
     chatAccounts: () => request("/api/admin/chats/accounts"),
     chatDialogs: (params = {}) => {
       const q = new URLSearchParams(params).toString();

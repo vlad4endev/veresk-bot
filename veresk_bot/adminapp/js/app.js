@@ -7026,6 +7026,102 @@
         errEl.hidden = false;
       }
     }
+    loadWheelPlays();
+  }
+
+  function wheelInitials(name) {
+    const parts = String(name || "")
+      .trim()
+      .split(/\s+/)
+      .filter(Boolean);
+    if (!parts.length) return "V";
+    if (parts.length === 1) return parts[0].slice(0, 2).toUpperCase();
+    return (parts[0][0] + parts[1][0]).toUpperCase();
+  }
+
+  function formatWheelWhen(iso) {
+    if (!iso) return "";
+    try {
+      const d = new Date(iso);
+      if (Number.isNaN(d.getTime())) return String(iso);
+      return d.toLocaleString("ru-RU", {
+        day: "2-digit",
+        month: "short",
+        hour: "2-digit",
+        minute: "2-digit",
+      });
+    } catch (_) {
+      return String(iso);
+    }
+  }
+
+  function renderWheelPlays(data) {
+    const box = $("#wheelPlaysList");
+    const stats = $("#wheelPlaysStats");
+    if (!box) return;
+    const items = Array.isArray(data?.items) ? data.items : [];
+    if (stats) {
+      stats.hidden = false;
+      stats.innerHTML = `
+        <span class="wheel-plays-pill">Всего <b>${esc(data?.total ?? items.length)}</b></span>
+        <span class="wheel-plays-pill">Telegram <b>${esc(data?.telegram ?? 0)}</b></span>
+        <span class="wheel-plays-pill">MAX <b>${esc(data?.max ?? 0)}</b></span>
+      `;
+    }
+    if (!items.length) {
+      box.innerHTML = '<div class="wheel-plays-empty">Пока никто не крутил колесо</div>';
+      return;
+    }
+    box.innerHTML = items
+      .map((p) => {
+        const channel = p.channel === "max" ? "max" : "telegram";
+        const channelLabel = channel === "max" ? "MAX" : "Telegram";
+        const name = p.full_name || [p.first_name, p.last_name].filter(Boolean).join(" ") || "Без имени";
+        const disc =
+          p.discount_pct != null && p.discount_pct !== ""
+            ? `<span class="wheel-play-discount">−${esc(p.discount_pct)}%</span>`
+            : "";
+        const tgId = p.tg_user_id != null ? p.tg_user_id : channel === "telegram" ? p.user_id : "";
+        const maxId = p.max_user_id != null ? p.max_user_id : channel === "max" ? p.user_id : "";
+        const uname = p.username ? `@${p.username}` : "";
+        return `
+          <article class="wheel-play">
+            <div class="wheel-play-avatar" aria-hidden="true">${esc(wheelInitials(name))}</div>
+            <div class="wheel-play-main">
+              <div class="wheel-play-name">${esc(name)}</div>
+              <div class="wheel-play-meta">
+                <span class="wheel-play-channel is-${channel === "max" ? "max" : "tg"}">${channelLabel}</span>
+                ${uname ? `<span>${esc(uname)}</span>` : ""}
+                <span class="wheel-play-time">${esc(formatWheelWhen(p.created_at))}</span>
+              </div>
+            </div>
+            <div class="wheel-play-ids">
+              ${tgId !== "" && tgId != null ? `<span><b>TG ID</b>${esc(tgId)}</span>` : ""}
+              ${maxId !== "" && maxId != null ? `<span><b>MAX ID</b>${esc(maxId)}</span>` : ""}
+              ${!tgId && !maxId ? `<span><b>ID</b>${esc(p.user_id || "—")}</span>` : ""}
+            </div>
+            <div class="wheel-play-prize">
+              <div class="wheel-play-prize-label">${esc(p.prize_label || "Приз")}</div>
+              ${disc}
+            </div>
+          </article>
+        `;
+      })
+      .join("");
+  }
+
+  async function loadWheelPlays() {
+    const box = $("#wheelPlaysList");
+    if (!box) return;
+    box.innerHTML = '<div class="wheel-plays-empty">Загрузка участников…</div>';
+    try {
+      const data = await AdminAPI.wheelPlays({ limit: 200 });
+      renderWheelPlays(data);
+    } catch (err) {
+      console.warn("[wheel] plays", err);
+      box.innerHTML =
+        '<div class="wheel-plays-empty">Не удалось загрузить участников</div>';
+    }
   }
 
   async function saveWheelEditor() {
@@ -7088,6 +7184,7 @@
       $("#wheelSave")?.addEventListener("click", () => {
         saveWheelEditor();
       });
+      $("#wheelPlaysRefresh")?.addEventListener("click", () => loadWheelPlays());
       wheelState.inited = true;
       loadWheelEditor();
     } else {

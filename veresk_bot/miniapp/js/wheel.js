@@ -18,6 +18,24 @@
   let cachedConfig = null;
   let loading = null;
 
+  function detectChannel() {
+    const maxApp = window.WebApp;
+    if (maxApp?.initData && !window.Telegram?.WebApp?.initData) return "max";
+    if (window.Telegram?.WebApp?.initData) return "telegram";
+    if (maxApp?.initData) return "max";
+    return "telegram";
+  }
+
+  function authHeaders() {
+    const channel = detectChannel();
+    const headers = { "Content-Type": "application/json" };
+    const tgInit = window.Telegram?.WebApp?.initData || "";
+    const maxInit = window.WebApp?.initData || "";
+    if (tgInit) headers["X-Telegram-Init-Data"] = tgInit;
+    if (maxInit) headers["X-Max-Init-Data"] = maxInit;
+    return { channel, headers };
+  }
+
   async function fetchWheelConfig(force) {
     if (!force && cachedConfig) return cachedConfig;
     if (loading) return loading;
@@ -42,20 +60,57 @@
     return loading;
   }
 
+  async function requestSpin() {
+    const { channel, headers } = authHeaders();
+    const resp = await fetch("/api/wheel/spin", {
+      method: "POST",
+      credentials: "same-origin",
+      headers,
+      body: JSON.stringify({ channel }),
+    });
+    const data = await resp.json().catch(() => ({}));
+    if (!resp.ok) {
+      const err = new Error(data.detail || data.error || "spin_failed");
+      err.status = resp.status;
+      err.data = data;
+      throw err;
+    }
+    return data;
+  }
+
   function mountWheel(config) {
     const root = document.getElementById("miniWheelMount");
     if (!root || !window.VereskWheel?.create) return null;
     const cfg = config || cachedConfig || DEFAULT_CONFIG;
     if (widget) {
-      widget.setConfig(cfg);
-      return widget;
+      widget.destroy?.();
+      widget = null;
+      root.innerHTML = "";
     }
     widget = window.VereskWheel.create(root, {
       ...cfg,
+      async resolveWinner() {
+        try {
+          const result = await requestSpin();
+          if (result.config) {
+            cachedConfig = result.config;
+            widget.setConfig(result.config);
+          }
+          return { winnerIndex: result.winner_index };
+        } catch (err) {
+          const msg =
+            err.status === 401
+              ? "Откройте колесо из Telegram или MAX"
+              : err.data?.detail || err.message || "Не удалось крутить";
+          alert(msg);
+          throw err;
+        }
+      },
       onSpinEnd(segment) {
         lastPrize = segment;
         try {
           window.tg?.HapticFeedback?.notificationOccurred?.("success");
+          window.WebApp?.HapticFeedback?.notificationOccurred?.("success");
         } catch (_) {
           /* ignore */
         }

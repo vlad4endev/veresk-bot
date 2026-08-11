@@ -58,3 +58,12 @@ def tg_user_id_from_init(init_data: str, bot_token: str) -> int | None:
     if isinstance(user, dict) and "id" in user:
         return int(user["id"])
     return None
+
+
+def user_from_init_data(init_data: str, bot_token: str) -> dict | None:
+    """Вернуть объект user из валидного initData или None."""
+    validated = validate_init_data(init_data, bot_token)
+    if not validated:
+        return None
+    user = validated.get("user")
+    return user if isinstance(user, dict) and user.get("id") is not None else None

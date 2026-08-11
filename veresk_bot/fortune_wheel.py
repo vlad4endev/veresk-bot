@@ -142,3 +142,41 @@ def save_config(raw: Any) -> dict[str, Any]:
     # chance_pct — производное, в файл можно не класть, но оставляем для удобства
     runtime_settings.set_many({SETTINGS_KEY: cfg})
     return cfg
+
+
+def extract_discount_pct(label: str) -> float | None:
+    m = re.search(r"(\d+(?:[.,]\d+)?)\s*%", str(label or ""))
+    if not m:
+        return None
+    try:
+        return float(m.group(1).replace(",", "."))
+    except ValueError:
+        return None
+
+
+def pick_winner(segments: list[dict[str, Any]] | None = None) -> dict[str, Any]:
+    """Взвешенный выбор сектора. Возвращает {index, segment}."""
+    import random
+
+    segs = list(segments or get_config()["segments"])
+    if not segs:
+        raise ValueError("Нет секторов")
+    weights = [max(0.0, float(s.get("weight") or 0)) for s in segs]
+    total = sum(weights)
+    if total <= 0:
+        idx = random.randrange(len(segs))
+    else:
+        r = random.uniform(0, total)
+        acc = 0.0
+        idx = len(segs) - 1
+        for i, w in enumerate(weights):
+            acc += w
+            if r <= acc:
+                idx = i
+                break
+    seg = dict(segs[idx])
+    return {
+        "index": idx,
+        "segment": seg,
+        "discount_pct": extract_discount_pct(str(seg.get("label") or "")),
+    }

@@ -168,6 +168,29 @@ CREATE TABLE IF NOT EXISTS personal_messages (
     created_at TEXT NOT NULL,
     FOREIGN KEY (customer_id) REFERENCES customers (id) ON DELETE CASCADE
 );
+
+CREATE TABLE IF NOT EXISTS fortune_plays (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    channel TEXT NOT NULL,
+    user_id TEXT NOT NULL,
+    first_name TEXT NOT NULL DEFAULT '',
+    last_name TEXT NOT NULL DEFAULT '',
+    username TEXT NOT NULL DEFAULT '',
+    full_name TEXT NOT NULL DEFAULT '',
+    prize_id TEXT NOT NULL DEFAULT '',
+    prize_label TEXT NOT NULL DEFAULT '',
+    discount_pct REAL,
+    customer_id INTEGER,
+    tg_user_id INTEGER,
+    max_user_id TEXT,
+    created_at TEXT NOT NULL,
+    UNIQUE (channel, user_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_fortune_plays_created
+    ON fortune_plays (created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_fortune_plays_channel
+    ON fortune_plays (channel, created_at DESC);
 """
 
 
@@ -2081,5 +2104,159 @@ async def customers_by_ids(customer_ids: list[int]) -> list[dict[str, Any]]:
             ).fetchall()
         by_id = {int(r["id"]): dict(r) for r in rows}
         return [by_id[cid] for cid in ordered if cid in by_id]
+
+    return await _run_db(_list)
+
+# ── fortune wheel plays ────────────────────────────────────────────────────
+
+
+def _fortune_full_name(first_name: str, last_name: str, username: str) -> str:
+    parts = [str(first_name or "").strip(), str(last_name or "").strip()]
+    name = " ".join(p for p in parts if p).strip()
+    if name:
+        return name
+    un = str(username or "").strip().lstrip("@")
+    return f"@{un}" if un else "Без имени"
+
+
+async def get_fortune_play(channel: str, user_id: str) -> dict[str, Any] | None:
+    ch = str(channel or "").strip().lower()
+    uid = str(user_id or "").strip()
+    if not ch or not uid:
+        return None
+
+    def _get() -> dict[str, Any] | None:
+        with _connect() as db:
+            row = db.execute(
+                "SELECT * FROM fortune_plays WHERE channel = ? AND user_id = ?",
+                (ch, uid),
+            ).fetchone()
+        return dict(row) if row else None
+
+    return await _run_db(_get)
+
+
+async def record_fortune_play(
+    *,
+    channel: str,
+    user_id: str,
+    first_name: str = "",
+    last_name: str = "",
+    username: str = "",
+    prize_id: str = "",
+    prize_label: str = "",
+    discount_pct: float | None = None,
+    customer_id: int | None = None,
+    tg_user_id: int | None = None,
+    max_user_id: str | None = None,
+) -> dict[str, Any]:
+    """Записать прохождение (один раз на channel+user_id). Если уже есть — вернуть старое."""
+    ch = str(channel or "").strip().lower()
+    uid = str(user_id or "").strip()
+    if ch not in ("telegram", "max"):
+        raise ValueError("channel must be telegram or max")
+    if not uid:
+        raise ValueError("user_id required")
+
+    first = str(first_name or "").strip()[:80]
+    last = str(last_name or "").strip()[:80]
+    uname = str(username or "").strip().lstrip("@")[:80]
+    full = _fortune_full_name(first, last, uname)
+    prize_id_s = str(prize_id or "").strip()[:64]
+    prize_label_s = str(prize_label or "").strip()[:120]
+    max_id = str(max_user_id).strip() if max_user_id is not None else (
+        uid if ch == "max" else None
+    )
+    tg_id = int(tg_user_id) if tg_user_id is not None else (
+        int(uid) if ch == "telegram" and uid.isdigit() else None
+    )
+    now = _now()
+
+    def _upsert() -> dict[str, Any]:
+        with _connect() as db:
+            existing = db.execute(
+                "SELECT * FROM fortune_plays WHERE channel = ? AND user_id = ?",
+                (ch, uid),
+            ).fetchone()
+            if existing:
+                return dict(existing)
+            cur = db.execute(
+                """
+                INSERT INTO fortune_plays (
+                    channel, user_id, first_name, last_name, username, full_name,
+                    prize_id, prize_label, discount_pct, customer_id,
+                    tg_user_id, max_user_id, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    ch,
+                    uid,
+                    first,
+                    last,
+                    uname,
+                    full,
+                    prize_id_s,
+                    prize_label_s,
+                    discount_pct,
+                    customer_id,
+                    tg_id,
+                    max_id,
+                    now,
+                ),
+            )
+            db.commit()
+            row = db.execute(
+                "SELECT * FROM fortune_plays WHERE id = ?",
+                (cur.lastrowid,),
+            ).fetchone()
+            return dict(row) if row else {
+                "id": cur.lastrowid,
+                "channel": ch,
+                "user_id": uid,
+                "first_name": first,
+                "last_name": last,
+                "username": uname,
+                "full_name": full,
+                "prize_id": prize_id_s,
+                "prize_label": prize_label_s,
+                "discount_pct": discount_pct,
+                "customer_id": customer_id,
+                "tg_user_id": tg_id,
+                "max_user_id": max_id,
+                "created_at": now,
+            }
+
+    return await _run_db(_upsert)
+
+
+async def list_fortune_plays(*, limit: int = 100, offset: int = 0) -> dict[str, Any]:
+    lim = max(1, min(int(limit or 100), 500))
+    off = max(0, int(offset or 0))
+
+    def _list() -> dict[str, Any]:
+        with _connect() as db:
+            total = db.execute("SELECT COUNT(*) FROM fortune_plays").fetchone()[0]
+            tg_n = db.execute(
+                "SELECT COUNT(*) FROM fortune_plays WHERE channel = 'telegram'"
+            ).fetchone()[0]
+            max_n = db.execute(
+                "SELECT COUNT(*) FROM fortune_plays WHERE channel = 'max'"
+            ).fetchone()[0]
+            rows = db.execute(
+                """
+                SELECT * FROM fortune_plays
+                ORDER BY datetime(created_at) DESC, id DESC
+                LIMIT ? OFFSET ?
+                """,
+                (lim, off),
+            ).fetchall()
+        return {
+            "total": int(total),
+            "telegram": int(tg_n),
+            "max": int(max_n),
+            "items": [dict(r) for r in rows],
+            "limit": lim,
+            "offset": off,
+        }
 
     return await _run_db(_list)
