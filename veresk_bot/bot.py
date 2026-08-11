@@ -10,7 +10,7 @@ from typing import Any
 from aiogram import Bot, Dispatcher, F
 from aiogram.client.session.aiohttp import AiohttpSession
 from aiogram.exceptions import TelegramNetworkError, TelegramUnauthorizedError
-from aiogram.filters import Command, CommandStart
+from aiogram.filters import Command, CommandObject, CommandStart
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.fsm.storage.memory import MemoryStorage
@@ -652,7 +652,7 @@ async def _send_tracker_invite(
     )
 
 
-async def cmd_start(message: Message, state: FSMContext) -> None:
+async def cmd_start(message: Message, state: FSMContext, command: CommandObject) -> None:
     try:
         from bot_metrics import PLATFORM_TELEGRAM, record_bot_start
 
@@ -661,16 +661,38 @@ async def cmd_start(message: Message, state: FSMContext) -> None:
     except Exception:
         logger.debug("Не удалось записать запуск Telegram-бота", exc_info=True)
 
+    payload = str(command.args or "").strip().lower()
+    ticket_intent = payload in {
+        "open_ticket",
+        "ticket",
+        "wheel_promo",
+        "promo",
+        "sealed",
+    }
+
     await state.clear()
-    await state.update_data(events=[])
+    await state.update_data(events=[], ticket_intent=ticket_intent)
+
+    if ticket_intent:
+        intro = (
+            "🎫 *Билет получен — приз запечатан*\n\n"
+            "Пройдите короткую анкету, и мы *откроем* ваш приз из колеса фортуны.\n"
+            "Повторно крутить колесо не нужно — выигрыш уже ваш.\n\n"
+            "Как вас зовут?"
+        )
+    else:
+        intro = (
+            "🩷 *Добро пожаловать в Veresk*\n"
+            "_флористический салон · trail of happiness_\n\n"
+            "Пройдите короткую анкету — и откроется *колесо фортуны* "
+            "с гарантированным призом 🎡\n\n"
+            "Анкета поможет нам подобрать идеальный букет, "
+            "а после неё вы сразу сможете крутить колесо и забрать подарок.\n\n"
+            "Как вас зовут?"
+        )
+
     await message.answer(
-        "🩷 *Добро пожаловать в Veresk*\n"
-        "_флористический салон · trail of happiness_\n\n"
-        "Пройдите короткую анкету — и откроется *колесо фортуны* "
-        "с гарантированным призом 🎡\n\n"
-        "Анкета поможет нам подобрать идеальный букет, "
-        "а после неё вы сразу сможете крутить колесо и забрать подарок.\n\n"
-        "Как вас зовут?",
+        intro,
         parse_mode=PARSE_MODE,
         reply_markup=ReplyKeyboardRemove(),
     )
@@ -1002,18 +1024,41 @@ async def _finish_survey(message: Message, state: FSMContext) -> None:
         await message.answer(final_text, parse_mode=PARSE_MODE)
 
     already_played = False
+    sealed_revealed = False
     try:
-        from fortune_wheel import is_retry_prize
+        from fortune_reveal import (
+            congrats_text_for_play,
+            reveal_sealed_ticket_after_survey,
+        )
+        from fortune_wheel import is_retry_prize, is_sealed_play
         from mailing_db import get_fortune_play
 
         play = await get_fortune_play("telegram", str(tg_id))
-        already_played = bool(play) and not is_retry_prize(
-            play.get("prize_label"), play.get("prize_id")
-        )
+        if play and is_sealed_play(play):
+            revealed = await reveal_sealed_ticket_after_survey(
+                channel="telegram",
+                user_id=tg_id,
+                profile=profile,
+            )
+            if revealed:
+                sealed_revealed = True
+                await message.answer(
+                    "🎫 *Билет открыт!*\n\n"
+                    + congrats_text_for_play(revealed, markdown=True),
+                    parse_mode=PARSE_MODE,
+                )
+            already_played = True
+        else:
+            already_played = bool(play) and not is_retry_prize(
+                play.get("prize_label") if play else None,
+                play.get("prize_id") if play else None,
+            )
     except Exception:
-        logger.debug("Не удалось проверить fortune_plays", exc_info=True)
+        logger.debug("Не удалось проверить/раскрыть fortune_plays", exc_info=True)
 
-    if not already_played:
+    if sealed_revealed:
+        pass
+    elif not already_played:
         wheel_kb = wheel_keyboard()
         wheel_text = (
             "🎡 *Колесо фортуны разблокировано!*\n\n"

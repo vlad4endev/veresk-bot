@@ -1,4 +1,4 @@
-/* Mini App — экран колеса фортуны (1 спин после анкеты → окно с призом) */
+/* Mini App — колесо фортуны: обычный спин или промо с запечатанным билетом */
 
 (function () {
   const DEFAULT_CONFIG = {
@@ -21,6 +21,8 @@
   let cachedPlay = null;
   let loading = null;
   let mounting = null;
+  let promoMode = detectPromoMode();
+  let pendingSealed = false;
 
   function esc(s) {
     return String(s ?? "")
@@ -28,6 +30,23 @@
       .replace(/</g, "&lt;")
       .replace(/>/g, "&gt;")
       .replace(/"/g, "&quot;");
+  }
+
+  function detectPromoMode() {
+    try {
+      const params = new URLSearchParams(location.search);
+      const startParam = String(
+        window.Telegram?.WebApp?.initDataUnsafe?.start_param ||
+          window.WebApp?.initDataUnsafe?.start_param ||
+          params.get("WebAppStartParam") ||
+          ""
+      ).toLowerCase();
+      if (params.get("promo") === "1") return true;
+      if (startParam === "wheel_promo" || startParam.includes("promo")) return true;
+      return false;
+    } catch (_) {
+      return false;
+    }
   }
 
   function detectChannel() {
@@ -74,11 +93,31 @@
     return false;
   }
 
+  function isSealedPayload(data) {
+    return Boolean(
+      data?.sealed ||
+        data?.ticket ||
+        data?.status === "sealed" ||
+        data?.play?.status === "sealed" ||
+        data?.play?.ticket
+    );
+  }
+
+  function promoLinks() {
+    const p = cachedConfig?.promo || {};
+    return {
+      telegram: String(p.telegram_url || "").trim(),
+      max: String(p.max_url || "").trim(),
+    };
+  }
+
   function setWheelHeader(mode) {
     const screen = document.getElementById("screen-wheel");
     const header = document.querySelector("#screen-wheel .screen-header");
-    if (screen) screen.classList.toggle("is-prize", mode === "prize");
-    /* шапка экрана скрыта — брендовый UI внутри виджета */
+    if (screen) {
+      screen.classList.toggle("is-prize", mode === "prize" || mode === "ticket");
+      screen.classList.toggle("is-ticket", mode === "ticket");
+    }
     if (header) header.hidden = true;
   }
 
@@ -97,7 +136,61 @@
     return document.getElementById("miniWheelMount");
   }
 
+  function showTicketPanel() {
+    const root = mountRoot();
+    if (!root) return;
+    destroyWidget();
+    pendingSealed = false;
+    setWheelHeader("ticket");
+
+    const links = promoLinks();
+    const channel = detectChannel();
+    let primary = "";
+    let secondary = "";
+    if (channel === "max") {
+      primary = links.max
+        ? `<a class="vw-ticket-btn" href="${esc(links.max)}" target="_blank" rel="noopener">Открыть в MAX</a>`
+        : "";
+      secondary = links.telegram
+        ? `<a class="vw-ticket-link" href="${esc(links.telegram)}" target="_blank" rel="noopener">Или в Telegram</a>`
+        : "";
+    } else {
+      primary = links.telegram
+        ? `<a class="vw-ticket-btn" href="${esc(links.telegram)}" target="_blank" rel="noopener">Открыть в Telegram</a>`
+        : "";
+      secondary = links.max
+        ? `<a class="vw-ticket-link" href="${esc(links.max)}" target="_blank" rel="noopener">Или в MAX</a>`
+        : "";
+    }
+    if (!primary && !secondary) {
+      primary =
+        `<p class="vw-prize-note">Напишите боту /start open_ticket и пройдите анкету</p>`;
+    }
+
+    root.innerHTML = `
+      <div class="vw-prize-panel vw-ticket-panel" role="status" aria-live="polite">
+        <div class="vw-prize-hero">
+          <div class="vw-prize-logo-wrap">
+            <img class="vw-prize-logo" src="${esc(LOGO_SRC)}" alt="Veresk" width="88" height="88" decoding="async">
+          </div>
+        </div>
+        <p class="vw-prize-hi">Билет получен</p>
+        <h2 class="vw-prize-name">Приз запечатан</h2>
+        <p class="vw-prize-note">Откроете его после короткой анкеты в боте. Крутить колесо снова не нужно.</p>
+        <div class="vw-ticket-actions">
+          ${primary}
+          ${secondary}
+        </div>
+        <p class="vw-prize-brand">trail of happiness</p>
+      </div>
+    `;
+  }
+
   function showPrizePanel(play, opts) {
+    if (isSealedPayload(play) || isSealedPayload(opts) || pendingSealed) {
+      showTicketPanel();
+      return;
+    }
     const root = mountRoot();
     if (!root) return;
     destroyWidget();
@@ -156,7 +249,7 @@
   async function fetchMyPlay() {
     const { channel, headers } = authHeaders();
     if (!headers["X-Telegram-Init-Data"] && !headers["X-Max-Init-Data"]) {
-      return { played: false, play: null, unauthorized: true };
+      return { played: false, play: null, unauthorized: true, sealed: false };
     }
     try {
       const resp = await fetch(`/api/wheel/me?channel=${encodeURIComponent(channel)}`, {
@@ -165,7 +258,7 @@
       });
       const data = await resp.json().catch(() => ({}));
       if (resp.status === 401) {
-        return { played: false, play: null, unauthorized: true };
+        return { played: false, play: null, unauthorized: true, sealed: false };
       }
       if (!resp.ok) {
         throw new Error(data.detail || data.error || "me_failed");
@@ -173,21 +266,24 @@
       return {
         played: Boolean(data.played),
         play: data.play || null,
+        sealed: isSealedPayload(data),
         unauthorized: false,
       };
     } catch (err) {
       console.warn("[wheel] me", err);
-      return { played: false, play: null, unauthorized: false };
+      return { played: false, play: null, sealed: false, unauthorized: false };
     }
   }
 
   async function requestSpin() {
     const { channel, headers } = authHeaders();
+    const body = { channel };
+    if (promoMode) body.source = "promo";
     const resp = await fetch("/api/wheel/spin", {
       method: "POST",
       credentials: "same-origin",
       headers,
-      body: JSON.stringify({ channel }),
+      body: JSON.stringify(body),
     });
     const data = await resp.json().catch(() => ({}));
     if (resp.status === 409 || data.already_played) {
@@ -228,18 +324,26 @@
     destroyWidget();
     root.innerHTML = "";
     setWheelHeader("wheel");
+    pendingSealed = false;
+
+    const note = promoMode
+      ? "Крутите колесо — приз откроется после анкеты в боте"
+      : cfg.note;
 
     widget = window.VereskWheel.create(root, {
       ...cfg,
+      note,
       once: true,
       async resolveWinner() {
         try {
           const result = await requestSpin();
           if (result.config) {
-            cachedConfig = result.config;
+            cachedConfig = { ...cachedConfig, ...result.config };
             widget.setConfig(result.config);
           }
           const retry = Boolean(result.retry) || isRetryPrize(result.segment);
+          const sealed = !retry && isSealedPayload(result);
+          pendingSealed = sealed;
           if (retry) {
             cachedPlay = null;
           } else {
@@ -248,6 +352,10 @@
           return { winnerIndex: result.winner_index, retry };
         } catch (err) {
           if (err.code === "already_played" || err.status === 409) {
+            if (isSealedPayload(err.data)) {
+              showTicketPanel();
+              return null;
+            }
             const play = err.data?.play || {
               prize_label: err.data?.segment?.label,
               prize_id: err.data?.segment?.id,
@@ -279,17 +387,25 @@
         lastPrize = segment;
         const retry = Boolean(meta?.retry) || isRetryPrize(segment);
         try {
-          window.tg?.HapticFeedback?.notificationOccurred?.(retry ? "warning" : "success");
-          window.WebApp?.HapticFeedback?.notificationOccurred?.(retry ? "warning" : "success");
+          window.tg?.HapticFeedback?.notificationOccurred?.(
+            retry ? "warning" : "success"
+          );
+          window.WebApp?.HapticFeedback?.notificationOccurred?.(
+            retry ? "warning" : "success"
+          );
         } catch (_) {
           /* ignore */
         }
         if (retry) {
           cachedPlay = null;
+          pendingSealed = false;
           return;
         }
-        // После анимации — окно с призом и поздравление в боте
         window.setTimeout(() => {
+          if (pendingSealed || isSealedPayload(cachedPlay)) {
+            showTicketPanel();
+            return;
+          }
           showPrizePanel(
             cachedPlay || {
               prize_id: segment?.id,
@@ -308,10 +424,12 @@
   async function mountScreen(config, force) {
     if (mounting) return mounting;
     mounting = (async () => {
+      promoMode = detectPromoMode() || promoMode;
       const cfg = config || (await fetchWheelConfig(Boolean(force)));
       const me = await fetchMyPlay();
       if (me.played && me.play) {
-        showPrizePanel(me.play);
+        if (me.sealed) showTicketPanel();
+        else showPrizePanel(me.play);
         return null;
       }
       return mountWheel(cfg);
@@ -336,6 +454,10 @@
     DEFAULT_CONFIG,
     mount: async (config) => mountScreen(config, false),
     open: openWheelScreen,
+    setPromoMode: (v) => {
+      promoMode = Boolean(v);
+    },
+    isPromoMode: () => promoMode,
     getWidget: () => widget,
     getLastPrize: () => lastPrize,
     getPlay: () => cachedPlay,

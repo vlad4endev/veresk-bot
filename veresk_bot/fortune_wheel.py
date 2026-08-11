@@ -210,6 +210,25 @@ def is_retry_prize(prize_label: str | None = None, prize_id: str | None = None) 
     return False
 
 
+def play_status(play: dict[str, Any] | None) -> str:
+    """Статус билета: sealed | revealed. Пустой/старый → revealed."""
+    if not play:
+        return "revealed"
+    status = str(play.get("status") or "").strip().lower()
+    if status == "sealed":
+        return "sealed"
+    return "revealed"
+
+
+def is_sealed_play(play: dict[str, Any] | None) -> bool:
+    return play_status(play) == "sealed"
+
+
+def is_promo_source(source: str | None) -> bool:
+    s = str(source or "").strip().lower()
+    return s in {"promo", "channel", "wheel_promo", "channel_promo"}
+
+
 def format_customer_prize_note(
     *,
     channel: str,

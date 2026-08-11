@@ -42,6 +42,8 @@ FLORIST_NOTIFICATIONS_ENABLED = _env_bool("FLORIST_NOTIFICATIONS_ENABLED", False
 # Можно задать в админке: Клиенты → Подписчики.
 TELEGRAM_CHANNEL_ID = int(os.getenv("TELEGRAM_CHANNEL_ID", "0") or "0")
 TELEGRAM_CHANNEL_USERNAME = os.getenv("TELEGRAM_CHANNEL_USERNAME", "").strip().lstrip("@")
+# Публичный @username Telegram-бота (без @) — ссылки «открыть билет» из Mini App
+TELEGRAM_BOT_USERNAME = os.getenv("TELEGRAM_BOT_USERNAME", "").strip().lstrip("@")
 POSIFLORA_USERNAME = _require("POSIFLORA_USERNAME")
 POSIFLORA_PASSWORD = _require("POSIFLORA_PASSWORD")
 POSIFLORA_STORE_ID = _require("POSIFLORA_STORE_ID")

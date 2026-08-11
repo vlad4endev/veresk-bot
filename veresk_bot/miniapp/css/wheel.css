@@ -428,6 +428,35 @@
   opacity:.75;
 }
 
+.vw-ticket-actions{
+  display:flex;
+  flex-direction:column;
+  align-items:center;
+  gap:12px;
+  margin-top:8px;
+  margin-bottom:16px;
+}
+.vw-ticket-btn{
+  display:inline-flex;
+  align-items:center;
+  justify-content:center;
+  min-width:min(260px, 86%);
+  padding:14px 22px;
+  border-radius:999px;
+  background:#FF92CE;
+  color:#241738;
+  font-weight:700;
+  font-size:15px;
+  text-decoration:none;
+  box-shadow:0 10px 28px rgba(255,146,206,.28);
+}
+.vw-ticket-link{
+  color:rgba(255,255,255,.78);
+  font-size:13px;
+  text-decoration:underline;
+  text-underline-offset:3px;
+}
+
 @media (max-height:660px){
   .vw-mark{width:96px;margin-bottom:10px}
   .vw-title{font-size:21px}

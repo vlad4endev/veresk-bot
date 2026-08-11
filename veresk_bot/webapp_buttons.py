@@ -45,6 +45,48 @@ def wheel_miniapp_url() -> str | None:
     )
 
 
+def wheel_promo_miniapp_url() -> str | None:
+    """Ссылка для канала: колесо в режиме запечатанного билета."""
+    if not MINIAPP_URL:
+        return None
+    parts = urlsplit(MINIAPP_URL)
+    query = dict(parse_qsl(parts.query, keep_blank_values=True))
+    query["wheel"] = "1"
+    query["promo"] = "1"
+    return urlunsplit(
+        (parts.scheme, parts.netloc, parts.path, urlencode(query), "wheel")
+    )
+
+
+def telegram_bot_start_url(payload: str = "open_ticket") -> str:
+    """https://t.me/<bot>?start=open_ticket — анкета → раскрытие билета."""
+    try:
+        from config import TELEGRAM_BOT_USERNAME
+
+        nick = str(TELEGRAM_BOT_USERNAME or "").strip().lstrip("@")
+    except Exception:
+        nick = ""
+    if not nick:
+        return ""
+    arg = str(payload or "open_ticket").strip() or "open_ticket"
+    return f"https://t.me/{nick}?start={arg}"
+
+
+def promo_bot_links() -> dict[str, str]:
+    """Ссылки на ботов для экрана запечатанного билета."""
+    tg = telegram_bot_start_url("open_ticket")
+    max_url = ""
+    try:
+        from config import MAX_BOT_USERNAME
+
+        nick = str(MAX_BOT_USERNAME or "").strip().lstrip("@/")
+        if nick:
+            max_url = f"https://max.ru/{nick}"
+    except Exception:
+        max_url = ""
+    return {"telegram_url": tg, "max_url": max_url}
+
+
 _max_bot_username_cache: str | None = None
 _max_bot_user_id_cache: int | None = None
 

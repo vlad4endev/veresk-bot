@@ -92,6 +92,7 @@ from mailing_db import (
     claim_fortune_play_notified,
     list_fortune_plays,
     record_fortune_play,
+    reveal_fortune_play,
     append_customer_notes,
     get_fortune_plays_for_customer,
     get_customer_by_max_user_id,)
@@ -100,8 +101,11 @@ from fortune_wheel import (
     format_customer_prize_note,
     format_prize_congrats_message,
     get_config as get_wheel_config,
+    is_promo_source,
     is_retry_prize,
+    is_sealed_play,
     pick_winner as pick_wheel_winner,
+    play_status,
     save_config as save_wheel_config,
 )
 from bot_metrics import get_bot_metrics, init_bot_metrics
@@ -4949,10 +4953,22 @@ async def handle_wheel_save(request: web.Request) -> web.Response:
 
 async def handle_wheel_public_get(_request: web.Request) -> web.Response:
     """Публичный конфиг для Mini App — без авторизации."""
-    return _json(get_wheel_config())
+    cfg = dict(get_wheel_config())
+    try:
+        from webapp_buttons import promo_bot_links
+
+        cfg["promo"] = promo_bot_links()
+    except Exception:
+        cfg["promo"] = {"telegram_url": "", "max_url": ""}
+    return _json(cfg)
 
 
-def _serialize_fortune_play(row: dict[str, Any]) -> dict[str, Any]:
+def _serialize_fortune_play(
+    row: dict[str, Any], *, hide_prize: bool = False
+) -> dict[str, Any]:
+    status = play_status(row)
+    sealed = status == "sealed"
+    hide = hide_prize or sealed
     return {
         "id": row.get("id"),
         "channel": row.get("channel"),
@@ -4961,13 +4977,17 @@ def _serialize_fortune_play(row: dict[str, Any]) -> dict[str, Any]:
         "last_name": row.get("last_name") or "",
         "username": row.get("username") or "",
         "full_name": row.get("full_name") or "",
-        "prize_id": row.get("prize_id") or "",
-        "prize_label": row.get("prize_label") or "",
-        "discount_pct": row.get("discount_pct"),
+        "prize_id": "" if hide else (row.get("prize_id") or ""),
+        "prize_label": "" if hide else (row.get("prize_label") or ""),
+        "discount_pct": None if hide else row.get("discount_pct"),
         "customer_id": row.get("customer_id"),
         "tg_user_id": row.get("tg_user_id"),
         "max_user_id": row.get("max_user_id"),
         "created_at": row.get("created_at"),
+        "status": status,
+        "source": row.get("source") or "",
+        "revealed_at": row.get("revealed_at"),
+        "ticket": sealed,
     }
 
 
@@ -5118,6 +5138,8 @@ async def _notify_wheel_prize(
     play = await claim_fortune_play_notified(channel, uid)
     if not play:
         return False
+    if is_sealed_play(play):
+        return False
     label = str(prize_label or play.get("prize_label") or "")
     if is_retry_prize(label, play.get("prize_id")):
         return False
@@ -5187,12 +5209,17 @@ async def _schedule_wheel_prize_fallback(
 
 
 async def handle_wheel_spin(request: web.Request) -> web.Response:
-    """POST /api/wheel/spin — серверный розыгрыш + запись участника (1 раз)."""
+    """POST /api/wheel/spin — серверный розыгрыш + запись участника (1 раз).
+
+    source=promo — каналный спин без анкеты: билет sealed, приз скрыт.
+    """
     try:
         body = await request.json()
     except Exception:
         body = {}
-    player, err = await _resolve_wheel_player(request, body=body if isinstance(body, dict) else {})
+    if not isinstance(body, dict):
+        body = {}
+    player, err = await _resolve_wheel_player(request, body=body)
     if err:
         return err
     assert player is not None
@@ -5202,12 +5229,14 @@ async def handle_wheel_spin(request: web.Request) -> web.Response:
     first = str(user.get("first_name") or "")
     last = str(user.get("last_name") or "")
     username = str(user.get("username") or "")
+    promo = is_promo_source(body.get("source"))
 
     existing = await get_fortune_play(channel, uid)
     cfg = get_wheel_config()
     segments = cfg.get("segments") or []
 
     def _already_played_payload(play_row: dict[str, Any]) -> dict[str, Any]:
+        sealed = is_sealed_play(play_row)
         winner_index = 0
         prize_id = str(play_row.get("prize_id") or "")
         for i, s in enumerate(segments):
@@ -5216,35 +5245,44 @@ async def handle_wheel_spin(request: web.Request) -> web.Response:
             ):
                 winner_index = i
                 break
+        segment: dict[str, Any]
+        if sealed:
+            segment = {"id": "", "label": ""}
+        else:
+            segment = {
+                "id": play_row.get("prize_id") or "",
+                "label": play_row.get("prize_label") or "",
+            }
         return {
             "ok": True,
             "already_played": True,
+            "sealed": sealed,
+            "ticket": sealed,
             "error": "already_played",
-            "detail": "Вы уже крутили колесо после анкеты — приз закреплён",
-            "winner_index": winner_index,
-            "segment": {
-                "id": play_row.get("prize_id") or "",
-                "label": play_row.get("prize_label") or "",
-            },
-            "discount_pct": play_row.get("discount_pct"),
-            "play": _serialize_fortune_play(play_row),
+            "detail": (
+                "У вас уже есть запечатанный билет — откройте приз после анкеты в боте"
+                if sealed
+                else "Вы уже крутили колесо — приз закреплён"
+            ),
+            "winner_index": winner_index if not sealed else 0,
+            "segment": segment,
+            "discount_pct": None if sealed else play_row.get("discount_pct"),
+            "play": _serialize_fortune_play(play_row, hide_prize=sealed),
             "config": cfg,
         }
 
     if existing and not is_retry_prize(
         existing.get("prize_label"), existing.get("prize_id")
     ):
-        # Финальный приз уже есть — повторно не крутим
         return _json(_already_played_payload(existing), status=409)
     if existing:
-        # Запись «Попробуйте ещё» не должна блокировать следующий спин
         try:
             await delete_fortune_play(channel, uid)
         except Exception:
             logger.debug("delete retry fortune_play failed", exc_info=True)
 
     profile = await _survey_profile_for_wheel(channel, uid)
-    if not profile:
+    if not promo and not profile:
         return _json(
             {
                 "error": "survey_required",
@@ -5258,10 +5296,13 @@ async def handle_wheel_spin(request: web.Request) -> web.Response:
     prize_label = str(seg.get("label") or "")
     prize_id = str(seg.get("id") or "")
     retry_prize = is_retry_prize(prize_label, prize_id)
-    customer = await _resolve_customer_for_wheel(channel, uid, profile)
+    customer = (
+        await _resolve_customer_for_wheel(channel, uid, profile or {})
+        if profile
+        else None
+    )
 
-    # Enrich name from CRM / survey if Mini App user has empty names
-    if not (first or last):
+    if profile and not (first or last):
         crm_name = ""
         if customer and customer.get("name"):
             crm_name = str(customer.get("name") or "").strip()
@@ -5272,13 +5313,14 @@ async def handle_wheel_spin(request: web.Request) -> web.Response:
             first = parts[0] if parts else first
             last = parts[1] if len(parts) > 1 else last
 
-    # «Попробуйте ещё» — не фиксируем спин, можно крутить снова
     if retry_prize:
         return _json(
             {
                 "ok": True,
                 "already_played": False,
                 "retry": True,
+                "sealed": False,
+                "ticket": False,
                 "winner_index": picked["index"],
                 "segment": seg,
                 "discount_pct": picked.get("discount_pct"),
@@ -5287,6 +5329,8 @@ async def handle_wheel_spin(request: web.Request) -> web.Response:
             }
         )
 
+    status = "sealed" if promo else "revealed"
+    source = "promo" if promo else "survey"
     play, created = await record_fortune_play(
         channel=channel,
         user_id=uid,
@@ -5299,9 +5343,28 @@ async def handle_wheel_spin(request: web.Request) -> web.Response:
         customer_id=int(customer["id"]) if customer and customer.get("id") is not None else None,
         tg_user_id=int(uid) if channel == "telegram" else None,
         max_user_id=uid if channel == "max" else None,
+        status=status,
+        source=source,
     )
     if not created:
         return _json(_already_played_payload(play), status=409)
+
+    # Промо: билет sealed — без CRM и без поздравления
+    if promo:
+        return _json(
+            {
+                "ok": True,
+                "already_played": False,
+                "retry": False,
+                "sealed": True,
+                "ticket": True,
+                "winner_index": picked["index"],
+                "segment": {"id": "", "label": ""},
+                "discount_pct": None,
+                "play": _serialize_fortune_play(play, hide_prize=True),
+                "config": cfg,
+            }
+        )
 
     if customer and customer.get("id") is not None:
         try:
@@ -5325,8 +5388,6 @@ async def handle_wheel_spin(request: web.Request) -> web.Response:
         except Exception:
             logger.exception("Не удалось записать приз в карточку клиента id=%s", customer.get("id"))
 
-    # Поздравление — после анимации колеса (POST /api/wheel/notify),
-    # с запасной отправкой через ~14с если клиент не вызвал notify.
     await _schedule_wheel_prize_fallback(request.app, channel=channel, uid=uid)
 
     return _json(
@@ -5334,6 +5395,8 @@ async def handle_wheel_spin(request: web.Request) -> web.Response:
             "ok": True,
             "already_played": False,
             "retry": False,
+            "sealed": False,
+            "ticket": False,
             "winner_index": picked["index"],
             "segment": seg,
             "discount_pct": picked.get("discount_pct"),
@@ -5362,6 +5425,8 @@ async def handle_wheel_notify(request: web.Request) -> web.Response:
         return _json({"ok": False, "sent": False, "error": "no_play"}, status=404)
     if is_retry_prize(play.get("prize_label"), play.get("prize_id")):
         return _json({"ok": True, "sent": False, "retry": True})
+    if is_sealed_play(play):
+        return _json({"ok": True, "sent": False, "sealed": True, "ticket": True})
     sent = await _notify_wheel_prize(request.app, channel=channel, uid=uid)
     return _json({"ok": True, "sent": sent})
 
@@ -5375,15 +5440,32 @@ async def handle_wheel_my_play(request: web.Request) -> web.Response:
     uid = str(player["user"].get("id"))
     play = await get_fortune_play(channel, uid)
     if not play:
-        return _json({"played": False, "play": None})
+        return _json({"played": False, "status": None, "play": None, "ticket": False})
     if is_retry_prize(play.get("prize_label"), play.get("prize_id")):
         try:
             await delete_fortune_play(channel, uid)
         except Exception:
             logger.debug("cleanup retry fortune_play on /me failed", exc_info=True)
-        return _json({"played": False, "play": None, "retry_cleared": True})
-    return _json({"played": True, "play": _serialize_fortune_play(play)})
-
+        return _json(
+            {
+                "played": False,
+                "status": None,
+                "play": None,
+                "ticket": False,
+                "retry_cleared": True,
+            }
+        )
+    status = play_status(play)
+    sealed = status == "sealed"
+    return _json(
+        {
+            "played": True,
+            "status": status,
+            "ticket": sealed,
+            "sealed": sealed,
+            "play": _serialize_fortune_play(play, hide_prize=sealed),
+        }
+    )
 def setup_admin_routes(app: web.Application) -> None:
     routes = [
         ("/api/admin/login", handle_login, "POST"),

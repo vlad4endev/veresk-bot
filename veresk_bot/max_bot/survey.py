@@ -200,7 +200,20 @@ class SurveyBot:
             await self._index_dialog(update, last_text="Начал диалог с ботом")
             user_id = (update.get("user") or {}).get("user_id")
             if user_id:
-                await self.cmd_start(int(user_id))
+                payload = str(
+                    update.get("payload")
+                    or update.get("start_payload")
+                    or (update.get("user") or {}).get("payload")
+                    or ""
+                ).strip().lower()
+                ticket_intent = payload in {
+                    "open_ticket",
+                    "ticket",
+                    "wheel_promo",
+                    "promo",
+                    "sealed",
+                }
+                await self.cmd_start(int(user_id), ticket_intent=ticket_intent)
             return
 
         if update_type == "message_callback":
@@ -228,8 +241,17 @@ class SurveyBot:
 
         # Команды
         lowered = text.lower()
-        if lowered in ("/start", "start", "начать"):
-            await self.cmd_start(user_id)
+        if lowered.startswith("/start") or lowered in ("start", "начать"):
+            parts = lowered.split(None, 1)
+            payload = parts[1].strip() if len(parts) > 1 else ""
+            ticket_intent = payload in {
+                "open_ticket",
+                "ticket",
+                "wheel_promo",
+                "promo",
+                "sealed",
+            }
+            await self.cmd_start(user_id, ticket_intent=ticket_intent)
             return
         if lowered in ("/cancel", "отмена"):
             await self.cmd_cancel(user_id)
@@ -322,7 +344,7 @@ class SurveyBot:
 
     # ── Шаги анкеты ───────────────────────────────────────────
 
-    async def cmd_start(self, user_id: int) -> None:
+    async def cmd_start(self, user_id: int, *, ticket_intent: bool = False) -> None:
         try:
             from bot_metrics import PLATFORM_MAX, record_bot_start
 
@@ -330,18 +352,39 @@ class SurveyBot:
         except Exception:
             logger.debug("Не удалось записать запуск MAX-бота", exc_info=True)
 
+        has_sealed = False
+        try:
+            from fortune_wheel import is_sealed_play
+            from mailing_db import get_fortune_play
+
+            play = await get_fortune_play("max", str(user_id))
+            has_sealed = bool(play) and is_sealed_play(play)
+        except Exception:
+            logger.debug("Не удалось проверить sealed-билет MAX", exc_info=True)
+
         _reset(user_id)
-        _session(user_id)["state"] = STATE_NAME
-        await self._send(
-            user_id,
-            "🩷 **Добро пожаловать в Veresk**\n"
-            "_флористический салон · trail of happiness_\n\n"
-            "Пройдите короткую анкету — и откроется **колесо фортуны** "
-            "с гарантированным призом 🎡\n\n"
-            "Анкета поможет нам подобрать идеальный букет, "
-            "а после неё вы сразу сможете крутить колесо и забрать подарок.\n\n"
-            "Как вас зовут?",
-        )
+        session = _session(user_id)
+        session["state"] = STATE_NAME
+        session["data"]["ticket_intent"] = bool(ticket_intent or has_sealed)
+
+        if ticket_intent or has_sealed:
+            text = (
+                "🎫 **Билет получен — приз запечатан**\n\n"
+                "Пройдите короткую анкету, и мы **откроем** ваш приз из колеса фортуны.\n"
+                "Повторно крутить колесо не нужно — выигрыш уже ваш.\n\n"
+                "Как вас зовут?"
+            )
+        else:
+            text = (
+                "🩷 **Добро пожаловать в Veresk**\n"
+                "_флористический салон · trail of happiness_\n\n"
+                "Пройдите короткую анкету — и откроется **колесо фортуны** "
+                "с гарантированным призом 🎡\n\n"
+                "Анкета поможет нам подобрать идеальный букет, "
+                "а после неё вы сразу сможете крутить колесо и забрать подарок.\n\n"
+                "Как вас зовут?"
+            )
+        await self._send(user_id, text)
 
     async def cmd_cancel(self, user_id: int) -> None:
         session = _session(user_id)
@@ -716,18 +759,41 @@ class SurveyBot:
         )
 
         already_played = False
+        sealed_revealed = False
         try:
-            from fortune_wheel import is_retry_prize
+            from fortune_reveal import (
+                congrats_text_for_play,
+                reveal_sealed_ticket_after_survey,
+            )
+            from fortune_wheel import is_retry_prize, is_sealed_play
             from mailing_db import get_fortune_play
 
             play = await get_fortune_play("max", str(user_id))
-            already_played = bool(play) and not is_retry_prize(
-                play.get("prize_label"), play.get("prize_id")
-            )
+            if play and is_sealed_play(play):
+                revealed = await reveal_sealed_ticket_after_survey(
+                    channel="max",
+                    user_id=user_id,
+                    profile=profile,
+                )
+                if revealed:
+                    sealed_revealed = True
+                    await self._send(
+                        user_id,
+                        "🎫 **Билет открыт!**\n\n"
+                        + congrats_text_for_play(revealed, markdown=False),
+                    )
+                already_played = True
+            else:
+                already_played = bool(play) and not is_retry_prize(
+                    play.get("prize_label") if play else None,
+                    play.get("prize_id") if play else None,
+                )
         except Exception:
-            logger.debug("Не удалось проверить fortune_plays (MAX)", exc_info=True)
+            logger.debug("Не удалось проверить/раскрыть fortune_plays (MAX)", exc_info=True)
 
-        if not already_played:
+        if sealed_revealed:
+            pass
+        elif not already_played:
             wheel_kb = None
             try:
                 from webapp_buttons import max_wheel_keyboard

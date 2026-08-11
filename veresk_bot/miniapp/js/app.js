@@ -146,7 +146,7 @@ document.getElementById("btn-open-status")?.addEventListener("click", () => goTo
 document.getElementById("btn-go-home")?.addEventListener("click", () => goTo("home"));
 document.getElementById("btn-go-status")?.addEventListener("click", () => goTo("status"));
 
-// Старт с колесом: ?wheel=1, #wheel, Telegram/MAX start_param=wheel
+// Старт с колесом: ?wheel=1, #wheel, Telegram/MAX start_param=wheel / wheel_promo
 (function bootWheelDeepLink() {
   try {
     const params = new URLSearchParams(location.search);
@@ -163,9 +163,19 @@ document.getElementById("btn-go-status")?.addEventListener("click", () => goTo("
       hash === "wheel" ||
       startParam === "wheel" ||
       startParam.startsWith("wheel_");
+    const wantPromo =
+      params.get("promo") === "1" ||
+      startParam === "wheel_promo" ||
+      startParam.includes("promo");
     if (wantWheel) {
       document.documentElement.classList.add("is-wheel-host");
-      const open = () => window.VereskFortuneWheel?.open?.();
+      if (wantPromo) {
+        document.documentElement.classList.add("is-wheel-promo");
+      }
+      const open = () => {
+        if (wantPromo) window.VereskFortuneWheel?.setPromoMode?.(true);
+        window.VereskFortuneWheel?.open?.();
+      };
       document.addEventListener("DOMContentLoaded", open);
       if (document.readyState !== "loading") open();
     }

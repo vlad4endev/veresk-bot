@@ -261,7 +261,13 @@ async def init_mailing_db() -> None:
                 _ensure_column(db, "admin_sessions", col, typedef)
             _ensure_column(db, "admin_users", "permissions", "TEXT DEFAULT ''")
             _ensure_column(db, "customer_events", "last_auto_sent_on", "TEXT")
-            _ensure_column(db, "fortune_plays", "notified_at", "TEXT")
+            for col, typedef in (
+                ("notified_at", "TEXT"),
+                ("status", "TEXT DEFAULT ''"),
+                ("source", "TEXT DEFAULT ''"),
+                ("revealed_at", "TEXT"),
+            ):
+                _ensure_column(db, "fortune_plays", col, typedef)
             for col, typedef in (
                 ("media_path", "TEXT"),
                 ("media_kind", "TEXT"),
@@ -2229,8 +2235,12 @@ async def record_fortune_play(
     customer_id: int | None = None,
     tg_user_id: int | None = None,
     max_user_id: str | None = None,
+    status: str = "revealed",
+    source: str = "survey",
 ) -> tuple[dict[str, Any], bool]:
     """Записать прохождение (один раз на channel+user_id).
+
+    status: sealed (промо, приз скрыт) | revealed (показан / после анкеты).
 
     Returns:
         (play, created) — created=False если розыгрыш уже был (или гонка UNIQUE).
@@ -2248,6 +2258,10 @@ async def record_fortune_play(
     full = _fortune_full_name(first, last, uname)
     prize_id_s = str(prize_id or "").strip()[:64]
     prize_label_s = str(prize_label or "").strip()[:120]
+    status_s = str(status or "revealed").strip().lower() or "revealed"
+    if status_s not in ("sealed", "revealed"):
+        status_s = "revealed"
+    source_s = str(source or "").strip().lower()[:40]
     max_id = str(max_user_id).strip() if max_user_id is not None else (
         uid if ch == "max" else None
     )
@@ -2255,9 +2269,17 @@ async def record_fortune_play(
         int(uid) if ch == "telegram" and uid.isdigit() else None
     )
     now = _now()
+    revealed_at = now if status_s == "revealed" else None
 
     def _upsert() -> tuple[dict[str, Any], bool]:
         with _connect() as db:
+            for col, typedef in (
+                ("status", "TEXT DEFAULT ''"),
+                ("source", "TEXT DEFAULT ''"),
+                ("revealed_at", "TEXT"),
+                ("notified_at", "TEXT"),
+            ):
+                _ensure_column(db, "fortune_plays", col, typedef)
             existing = db.execute(
                 "SELECT * FROM fortune_plays WHERE channel = ? AND user_id = ?",
                 (ch, uid),
@@ -2270,8 +2292,9 @@ async def record_fortune_play(
                     INSERT INTO fortune_plays (
                         channel, user_id, first_name, last_name, username, full_name,
                         prize_id, prize_label, discount_pct, customer_id,
-                        tg_user_id, max_user_id, created_at
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        tg_user_id, max_user_id, created_at,
+                        status, source, revealed_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         ch,
@@ -2287,6 +2310,9 @@ async def record_fortune_play(
                         tg_id,
                         max_id,
                         now,
+                        status_s,
+                        source_s,
+                        revealed_at,
                     ),
                 )
                 db.commit()
@@ -2317,10 +2343,69 @@ async def record_fortune_play(
                 "tg_user_id": tg_id,
                 "max_user_id": max_id,
                 "created_at": now,
+                "status": status_s,
+                "source": source_s,
+                "revealed_at": revealed_at,
             }
             return play, True
 
     return await _run_db(_upsert)
+
+
+async def reveal_fortune_play(
+    channel: str,
+    user_id: str,
+    *,
+    customer_id: int | None = None,
+) -> dict[str, Any] | None:
+    """Раскрыть sealed-билет после анкеты. None если билета нет или уже revealed."""
+    ch = str(channel or "").strip().lower()
+    uid = str(user_id or "").strip()
+    if not ch or not uid:
+        return None
+    now = _now()
+
+    def _reveal() -> dict[str, Any] | None:
+        with _connect() as db:
+            for col, typedef in (
+                ("status", "TEXT DEFAULT ''"),
+                ("source", "TEXT DEFAULT ''"),
+                ("revealed_at", "TEXT"),
+            ):
+                _ensure_column(db, "fortune_plays", col, typedef)
+            row = db.execute(
+                "SELECT * FROM fortune_plays WHERE channel = ? AND user_id = ?",
+                (ch, uid),
+            ).fetchone()
+            if not row:
+                return None
+            status = str(row["status"] or "").strip().lower()
+            # Старые записи без status считаем уже раскрытыми
+            if status and status != "sealed":
+                return None
+            if not status:
+                return None
+            sets = ["status = ?", "revealed_at = ?"]
+            args: list[Any] = ["revealed", now]
+            if customer_id is not None and row["customer_id"] is None:
+                sets.append("customer_id = ?")
+                args.append(int(customer_id))
+            args.extend([ch, uid])
+            db.execute(
+                f"UPDATE fortune_plays SET {', '.join(sets)} "
+                "WHERE channel = ? AND user_id = ? AND status = 'sealed'",
+                tuple(args),
+            )
+            db.commit()
+            updated = db.execute(
+                "SELECT * FROM fortune_plays WHERE channel = ? AND user_id = ?",
+                (ch, uid),
+            ).fetchone()
+            if not updated or str(updated["status"] or "") != "revealed":
+                return None
+            return dict(updated)
+
+    return await _run_db(_reveal)
 
 
 async def append_customer_notes(customer_id: int, note: str) -> None:
