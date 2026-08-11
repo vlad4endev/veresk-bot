@@ -354,6 +354,7 @@
     let spinning = false;
     let spinTimer = null;
     let highlightIndex = -1;
+    let destroyed = false;
     const reduce =
       typeof matchMedia === "function" && matchMedia("(prefers-reduced-motion: reduce)").matches;
 
@@ -394,6 +395,7 @@
     const pointerEl = root.querySelector(".vw-pointer");
 
     function paint() {
+      if (destroyed) return;
       if (eyebrowEl) eyebrowEl.textContent = title || "Розыгрыш";
       if (noteEl) noteEl.textContent = note || "Крутите один раз и забирайте подарок.";
       if (discEl) {
@@ -404,7 +406,7 @@
     }
 
     function setConfig(cfg) {
-      if (!cfg) return;
+      if (destroyed || !cfg) return;
       if (cfg.title != null) title = String(cfg.title);
       if (cfg.note != null) note = String(cfg.note);
       if (cfg.segments) segments = normalizeSegments(cfg.segments);
@@ -420,6 +422,7 @@
     }
 
     function setBusy(busy, label) {
+      if (destroyed || !hubBtn || !spinBtn) return;
       hubBtn.disabled = busy || Boolean(options.once && label === "done");
       spinBtn.disabled = busy || Boolean(options.once && label === "done");
       if (label === "spinning") {
@@ -438,6 +441,7 @@
     }
 
     function revealPrize(picked) {
+      if (destroyed || !discEl) return Promise.resolve();
       highlightIndex = picked.index;
       const path = discEl.querySelector(`[data-seg="${picked.index}"]`);
       if (path) path.style.filter = "brightness(1.12) saturate(1.08)";
@@ -446,6 +450,7 @@
 
     function spin(spinOpts) {
       const so = spinOpts || {};
+      if (destroyed) return Promise.reject(new Error("destroyed"));
       if (spinning) return Promise.reject(new Error("already spinning"));
       if (segments.length < 2 || totalWeight(segments) <= 0) {
         return Promise.reject(new Error("need segments"));
@@ -482,7 +487,7 @@
 
       spinning = true;
       root.classList.add("is-spinning");
-      discEl.classList.add("is-spinning");
+      if (discEl) discEl.classList.add("is-spinning");
       setBusy(true, "spinning");
       highlightIndex = -1;
       paint();
@@ -492,8 +497,13 @@
       let last = from;
       let t0 = null;
 
-      return new Promise((resolve) => {
+      return new Promise((resolve, reject) => {
         const step = (ts) => {
+          if (destroyed || !discEl) {
+            spinning = false;
+            reject(new Error("destroyed"));
+            return;
+          }
           if (t0 === null) t0 = ts;
           const t = Math.min(1, (ts - t0) / duration);
           rotation = from + delta * easeOut(t);
@@ -518,7 +528,7 @@
               const isRetry = Boolean(so.retry);
               if (options.once && !isRetry) setBusy(false, "done");
               else setBusy(false, isRetry ? "retry" : "idle");
-              if (typeof options.onSpinEnd === "function") {
+              if (!destroyed && typeof options.onSpinEnd === "function") {
                 options.onSpinEnd(picked.segment, picked.index, { retry: isRetry });
               }
               resolve({
@@ -535,10 +545,11 @@
     }
 
     async function onSpinClick() {
+      if (destroyed) return;
       try {
         if (typeof options.resolveWinner === "function") {
           const resolved = await options.resolveWinner();
-          if (!resolved || resolved.winnerIndex == null) return;
+          if (destroyed || !resolved || resolved.winnerIndex == null) return;
           await spin({
             winnerIndex: resolved.winnerIndex,
             turns: resolved.turns,
@@ -550,7 +561,7 @@
         await spin();
       } catch (err) {
         setBusy(false, "idle");
-        if (err && err.message !== "already spinning") {
+        if (err && err.message !== "already spinning" && err.message !== "destroyed") {
           console.warn("[wheel] spin failed", err);
         }
       }
@@ -560,15 +571,17 @@
     spinBtn.addEventListener("click", onSpinClick);
     paint();
 
-    if (!reduce) {
+    if (!reduce && discEl) {
       discEl.style.transition = "transform 1.1s cubic-bezier(.19,1,.22,1), opacity .8s";
       discEl.style.opacity = "0";
       discEl.style.transform = "rotate(-24deg) scale(.9)";
       requestAnimationFrame(() => {
         requestAnimationFrame(() => {
+          if (destroyed || !discEl) return;
           discEl.style.opacity = "1";
           discEl.style.transform = "rotate(0deg) scale(1)";
           setTimeout(() => {
+            if (destroyed || !discEl) return;
             discEl.style.transition = "none";
             rotation = 0;
           }, 1200);
@@ -582,9 +595,15 @@
       spin,
       paint,
       destroy() {
+        destroyed = true;
+        spinning = false;
         if (spinTimer) clearTimeout(spinTimer);
-        hubBtn.removeEventListener("click", onSpinClick);
-        spinBtn.removeEventListener("click", onSpinClick);
+        try {
+          hubBtn?.removeEventListener("click", onSpinClick);
+          spinBtn?.removeEventListener("click", onSpinClick);
+        } catch (_) {
+          /* ignore */
+        }
         root.innerHTML = "";
         root.classList.remove("vw-root", "is-spinning");
       },

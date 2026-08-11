@@ -330,7 +330,7 @@
       ? "Крутите колесо — приз откроется после анкеты в боте"
       : cfg.note;
 
-    widget = window.VereskWheel.create(root, {
+    const instance = window.VereskWheel.create(root, {
       ...cfg,
       note,
       once: true,
@@ -339,7 +339,8 @@
           const result = await requestSpin();
           if (result.config) {
             cachedConfig = { ...cachedConfig, ...result.config };
-            widget.setConfig(result.config);
+            // Module `widget` can be null if prize/ticket panel remounted mid-flight.
+            instance?.setConfig?.(result.config);
           }
           const retry = Boolean(result.retry) || isRetryPrize(result.segment);
           const sealed = !retry && isSealedPayload(result);
@@ -402,6 +403,7 @@
           return;
         }
         window.setTimeout(() => {
+          if (widget !== instance) return;
           if (pendingSealed || isSealedPayload(cachedPlay)) {
             showTicketPanel();
             return;
@@ -418,20 +420,37 @@
         }, 900);
       },
     });
+    widget = instance;
     return widget;
+  }
+
+  function hasLiveWheel() {
+    return Boolean(widget && mountRoot()?.querySelector(".vw-root"));
+  }
+
+  function hasPrizeOrTicketPanel() {
+    return Boolean(mountRoot()?.querySelector(".vw-prize-panel"));
   }
 
   async function mountScreen(config, force) {
     if (mounting) return mounting;
+    // Повторный goTo("wheel") / mount во время «Попробуйте ещё» убивал виджет
+    // до setConfig на втором спине — отсюда null is not an object.
+    if (!force && hasLiveWheel()) return widget;
+    if (!force && hasPrizeOrTicketPanel()) return null;
     mounting = (async () => {
       promoMode = detectPromoMode() || promoMode;
       const cfg = config || (await fetchWheelConfig(Boolean(force)));
+      if (!force && hasLiveWheel()) return widget;
+      if (!force && hasPrizeOrTicketPanel()) return null;
       const me = await fetchMyPlay();
+      if (!force && hasLiveWheel()) return widget;
       if (me.played && me.play) {
         if (me.sealed) showTicketPanel();
         else showPrizePanel(me.play);
         return null;
       }
+      if (!force && hasLiveWheel()) return widget;
       return mountWheel(cfg);
     })();
     try {
