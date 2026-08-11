@@ -1082,15 +1082,38 @@ async def handle_channel_subscribers_settings(request: web.Request) -> web.Respo
 
     welcome = get_welcome_config()
     welcome_body = body.get("welcome") if isinstance(body.get("welcome"), dict) else body
-    welcome_keys = ("enabled", "text", "delay_minutes", "welcome_enabled", "welcome_text", "welcome_delay_minutes")
+    welcome_keys = (
+        "enabled",
+        "text",
+        "delay_minutes",
+        "text_source",
+        "promo_id",
+        "welcome_enabled",
+        "welcome_text",
+        "welcome_delay_minutes",
+        "welcome_text_source",
+        "welcome_promo_id",
+    )
     if any(k in welcome_body for k in welcome_keys) or "welcome" in body:
         enabled = welcome_body.get("enabled", welcome_body.get("welcome_enabled"))
         text = welcome_body.get("text", welcome_body.get("welcome_text"))
         delay = welcome_body.get("delay_minutes", welcome_body.get("welcome_delay_minutes"))
+        text_source = welcome_body.get(
+            "text_source", welcome_body.get("welcome_text_source")
+        )
+        promo_raw = welcome_body.get("promo_id", welcome_body.get("welcome_promo_id"))
+        promo_id: int | None = None
+        if promo_raw is not None:
+            try:
+                promo_id = max(0, int(promo_raw or 0))
+            except (TypeError, ValueError):
+                promo_id = 0
         welcome = save_welcome_config(
             enabled=None if enabled is None else bool(enabled),
             text=None if text is None else str(text),
             delay_minutes=None if delay is None else delay,
+            text_source=None if text_source is None else str(text_source),
+            promo_id=promo_id,
         )
 
     return _json({"ok": True, "channel": cfg, "welcome": welcome})

@@ -1348,23 +1348,130 @@
         Number.isFinite(+w.delay_minutes) ? Math.max(0, +w.delay_minutes) : 0
       );
     }
+    const source = w.text_source === "promo" ? "promo" : "custom";
+    if ($("#subsWelcomeSource")) $("#subsWelcomeSource").value = source;
+    syncSubsWelcomeSourceUi();
+    const wantPromoId = w.promo_id != null && w.promo_id !== "" ? String(w.promo_id) : "";
+    loadSubsWelcomePromos(wantPromoId);
     const hint = $("#subsWelcomeHint");
     if (hint) {
-      hint.textContent = w.enabled
-        ? "включено — отправим при новой подписке"
-        : "выключено";
+      if (!w.enabled) hint.textContent = "выключено";
+      else if (source === "promo")
+        hint.textContent = "включено — текст из Акций при новой подписке";
+      else hint.textContent = "включено — отправим при новой подписке";
     }
     const pill = $("#subsWelcomePill");
     if (pill) {
       const on = !!w.enabled;
       pill.dataset.on = on ? "1" : "0";
       const delay = Number(w.delay_minutes) || 0;
-      pill.textContent = on
-        ? delay > 0
-          ? `Автосообщение · ${delay} мин`
-          : "Автосообщение вкл"
-        : "Автосообщение выкл";
+      if (!on) pill.textContent = "Автосообщение выкл";
+      else if (source === "promo")
+        pill.textContent =
+          delay > 0 ? `Акция · ${delay} мин` : "Автосообщение · из акции";
+      else
+        pill.textContent =
+          delay > 0 ? `Автосообщение · ${delay} мин` : "Автосообщение вкл";
     }
+  }
+
+  function syncSubsWelcomeSourceUi() {
+    const source = $("#subsWelcomeSource")?.value === "promo" ? "promo" : "custom";
+    const wrap = $("#subsWelcomePromoWrap");
+    const promoHint = $("#subsWelcomePromoHint");
+    const label = $("#subsWelcomeTextLabel");
+    if (wrap) wrap.hidden = source !== "promo";
+    if (promoHint) promoHint.hidden = source !== "promo";
+    if (label) label.textContent = source === "promo" ? "Запасной текст" : "Текст";
+  }
+
+  let _subsWelcomePromosCache = [];
+
+  async function loadSubsWelcomePromos(selectedId) {
+    const sel = $("#subsWelcomePromo");
+    if (!sel || typeof AdminAPI.promotions !== "function") return;
+    const keep = selectedId != null ? String(selectedId) : String(sel.value || "");
+    try {
+      const res = await AdminAPI.promotions({ limit: 100 });
+      const items = Array.isArray(res?.items) ? res.items : Array.isArray(res) ? res : [];
+      _subsWelcomePromosCache = items;
+      const ranked = [...items].sort((a, b) => {
+        const score = (p) =>
+          (p.is_live ? 4 : 0) +
+          (p.promo_type === "welcome" ? 2 : 0) +
+          (p.use_in_auto_mail !== false ? 1 : 0);
+        return score(b) - score(a);
+      });
+      sel.innerHTML =
+        `<option value="">Авто · живая «Приветственная»</option>` +
+        ranked
+          .map((p) => {
+            const live = p.is_live ? "live" : p.status || "draft";
+            const type = p.promo_type === "welcome" ? "приветствие" : p.promo_type || "";
+            const title = p.title || "Без названия";
+            return `<option value="${esc(String(p.id))}">${esc(
+              `${p.emoji || "🎁"} ${title}`
+            )} · ${esc(live)}${type ? " · " + esc(type) : ""}</option>`;
+          })
+          .join("");
+      if (keep && [...sel.options].some((o) => o.value === keep)) sel.value = keep;
+      else sel.value = "";
+    } catch (err) {
+      console.warn("welcome promos load failed", err);
+    }
+  }
+
+  function promoTemplateForWelcome(p) {
+    if (!p) return "";
+    let text = String(p.message_template || "").trim();
+    if (!text) text = String(p.description || "").trim() || String(p.title || "").trim();
+    const disc =
+      String(p.discount_display || p.discount_text || "").trim() ||
+      (p.discount_pct != null && p.discount_pct !== ""
+        ? String(p.discount_pct).replace(/%?$/, "") + "%"
+        : "");
+    if (disc && text) {
+      text = text.split("{скидка}").join(disc).split("{Скидка}").join(disc);
+    }
+    return text;
+  }
+
+  async function pullSubsWelcomeFromPromo() {
+    const sel = $("#subsWelcomePromo");
+    const ta = $("#subsWelcomeText");
+    if (!ta) return;
+    let promo = null;
+    const id = Number(sel?.value || 0);
+    if (id) {
+      promo = _subsWelcomePromosCache.find((p) => Number(p.id) === id) || null;
+      if (!promo && typeof AdminAPI.promotion === "function") {
+        try {
+          promo = await AdminAPI.promotion(id);
+        } catch (_) {
+          promo = null;
+        }
+      }
+    } else {
+      promo =
+        _subsWelcomePromosCache.find(
+          (p) => p.is_live && p.promo_type === "welcome" && p.use_in_auto_mail !== false
+        ) ||
+        _subsWelcomePromosCache.find((p) => p.is_live && p.promo_type === "welcome") ||
+        _subsWelcomePromosCache.find((p) => p.is_live && p.use_in_auto_mail !== false) ||
+        _subsWelcomePromosCache.find((p) => p.is_live) ||
+        null;
+    }
+    const text = promoTemplateForWelcome(promo);
+    if (!text) {
+      alert(
+        promo
+          ? "У акции нет текста шаблона — заполните «Текст сообщения» в разделе Акции."
+          : "Нет подходящей акции. Создайте акцию типа «Приветственная» в разделе Акции."
+      );
+      return;
+    }
+    ta.value = text;
+    ta.focus();
   }
 
   function renderSubsChannelPick(channels) {
@@ -1799,24 +1906,34 @@
   $("#btnSubsWelcomeSave")?.addEventListener("click", async () => {
     const btn = $("#btnSubsWelcomeSave");
     const enabled = !!$("#subsWelcomeEnabled")?.checked;
+    const textSource = $("#subsWelcomeSource")?.value === "promo" ? "promo" : "custom";
     const text = ($("#subsWelcomeText")?.value || "").trim();
+    const promoId = Number($("#subsWelcomePromo")?.value || 0) || 0;
     const delay = Math.max(0, Math.min(10080, Number($("#subsWelcomeDelay")?.value || 0) || 0));
-    if (enabled && !text) {
-      alert("Введите текст автосообщения");
+    if (enabled && textSource === "custom" && !text) {
+      alert("Введите текст автосообщения или выберите источник «Из раздела Акции»");
       $("#subsWelcomeText")?.focus();
       return;
     }
     if (btn) btn.disabled = true;
     try {
       const res = await AdminAPI.saveChannelSubscribersSettings({
-        welcome: { enabled, text, delay_minutes: delay },
+        welcome: {
+          enabled,
+          text,
+          delay_minutes: delay,
+          text_source: textSource,
+          promo_id: promoId,
+        },
       });
       applySubsChannelForm(res.channel || {});
       applySubsWelcomeForm(res.welcome || res.channel?.welcome);
       setSubsSettingsOpen(false);
       alert(
         enabled
-          ? "Автосообщение новым подписчикам включено"
+          ? textSource === "promo"
+            ? "Автосообщение включено — текст из Акций"
+            : "Автосообщение новым подписчикам включено"
           : "Автосообщение выключено"
       );
     } catch (err) {
@@ -1824,6 +1941,14 @@
     } finally {
       if (btn) btn.disabled = false;
     }
+  });
+
+  $("#subsWelcomeSource")?.addEventListener("change", () => {
+    syncSubsWelcomeSourceUi();
+    if ($("#subsWelcomeSource")?.value === "promo") loadSubsWelcomePromos();
+  });
+  $("#btnSubsWelcomePullPromo")?.addEventListener("click", () => {
+    pullSubsWelcomeFromPromo();
   });
 
   $("#btnSubsSync")?.addEventListener("click", async () => {

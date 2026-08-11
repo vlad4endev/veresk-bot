@@ -3189,13 +3189,15 @@ async def get_active_discount_text(
 
 
 async def pick_auto_mail_promo(kind: str | None = None) -> dict[str, Any] | None:
-    """Подобрать акцию для автопоздравления (ДР / годовщина / общее)."""
+    """Подобрать акцию для автопоздравления (ДР / годовщина / welcome / общее)."""
     kind_l = (kind or "").strip().lower()
     type_map = {
         "bday": "birthday",
         "birthday": "birthday",
         "anniv": "anniversary",
         "anniversary": "anniversary",
+        "welcome": "welcome",
+        "channel_welcome": "welcome",
     }
     preferred_type = type_map.get(kind_l)
 
@@ -3215,6 +3217,8 @@ async def pick_auto_mail_promo(kind: str | None = None) -> dict[str, Any] | None
         "birthday": ("birthday", "bday", "др", "день рождения"),
         "anniv": ("anniversary", "anniv", "годовщина"),
         "anniversary": ("anniversary", "anniv", "годовщина"),
+        "welcome": ("welcome", "привет", "подпис", "канал", "новый"),
+        "channel_welcome": ("welcome", "привет", "подпис", "канал", "новый"),
     }
     hints = tag_hints.get(kind_l) or ()
     if hints:
@@ -3225,7 +3229,7 @@ async def pick_auto_mail_promo(kind: str | None = None) -> dict[str, Any] | None
                 return p
 
     for p in all_live:
-        if p.get("promo_type") in ("discount", "seasonal", "gift", "other"):
+        if p.get("promo_type") in ("discount", "seasonal", "gift", "welcome", "other"):
             return p
     return all_live[0]
 

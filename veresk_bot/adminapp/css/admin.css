@@ -783,6 +783,18 @@
     color:var(--ink);cursor:pointer;
   }
   .subs-welcome-toggle input{width:16px;height:16px;accent-color:var(--accent);}
+  .subs-welcome-source-row{
+    display:flex;flex-wrap:wrap;gap:10px;align-items:flex-end;margin:4px 0 10px;
+  }
+  .subs-welcome-source-row .field{min-width:160px;flex:1;}
+  .subs-welcome-source-row select{
+    width:100%;border:1.5px solid var(--line);border-radius:11px;padding:8px 10px;
+    background:var(--surface-2);color:var(--ink);font:inherit;font-size:13.5px;
+  }
+  .subs-welcome-promo-pick{
+    display:flex;flex-wrap:wrap;gap:8px;align-items:flex-end;flex:2;min-width:220px;
+  }
+  .subs-welcome-promo-pick .field{flex:1;min-width:180px;}
   .subs-welcome-text textarea{
     width:100%;min-height:96px;resize:vertical;font:inherit;font-size:13.5px;
     padding:10px 11px;border-radius:11px;border:1.5px solid var(--line);

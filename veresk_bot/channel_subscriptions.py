@@ -66,6 +66,9 @@ DEFAULT_WELCOME_TEXT = (
 _WELCOME_ENABLED_KEY = "channel_welcome_enabled"
 _WELCOME_TEXT_KEY = "channel_welcome_text"
 _WELCOME_DELAY_KEY = "channel_welcome_delay_minutes"
+_WELCOME_SOURCE_KEY = "channel_welcome_text_source"
+_WELCOME_PROMO_ID_KEY = "channel_welcome_promo_id"
+_WELCOME_SOURCES = frozenset({"custom", "promo"})
 
 
 def _now() -> str:
@@ -154,11 +157,25 @@ def get_welcome_config() -> dict[str, Any]:
         except (TypeError, ValueError):
             delay = 0
 
+    source = str(runtime_settings.get(_WELCOME_SOURCE_KEY) or "custom").strip().lower()
+    if source not in _WELCOME_SOURCES:
+        source = "custom"
+
+    promo_id = 0
+    raw_promo = runtime_settings.get(_WELCOME_PROMO_ID_KEY)
+    if raw_promo not in (None, ""):
+        try:
+            promo_id = max(0, int(raw_promo))
+        except (TypeError, ValueError):
+            promo_id = 0
+
     return {
         "enabled": enabled,
         "text": text,
         "delay_minutes": delay,
         "default_text": DEFAULT_WELCOME_TEXT,
+        "text_source": source,
+        "promo_id": promo_id or None,
     }
 
 
@@ -167,22 +184,108 @@ def save_welcome_config(
     enabled: bool | None = None,
     text: str | None = None,
     delay_minutes: int | None = None,
+    text_source: str | None = None,
+    promo_id: int | None = None,
 ) -> dict[str, Any]:
     payload: dict[str, Any] = {}
     if enabled is not None:
         payload[_WELCOME_ENABLED_KEY] = bool(enabled)
     if text is not None:
         cleaned = str(text).strip()
-        payload[_WELCOME_TEXT_KEY] = cleaned or DEFAULT_WELCOME_TEXT
+        src = (
+            str(text_source).strip().lower()
+            if text_source is not None
+            else str(runtime_settings.get(_WELCOME_SOURCE_KEY) or "custom").strip().lower()
+        )
+        if cleaned:
+            payload[_WELCOME_TEXT_KEY] = cleaned
+        elif src == "promo":
+            # При источнике «акция» свой текст — запасной; пустой ок
+            payload[_WELCOME_TEXT_KEY] = cleaned
+        else:
+            payload[_WELCOME_TEXT_KEY] = DEFAULT_WELCOME_TEXT
     if delay_minutes is not None:
         try:
             delay = max(0, min(7 * 24 * 60, int(delay_minutes)))
         except (TypeError, ValueError):
             delay = 0
         payload[_WELCOME_DELAY_KEY] = delay
+    if text_source is not None:
+        src = str(text_source).strip().lower()
+        payload[_WELCOME_SOURCE_KEY] = src if src in _WELCOME_SOURCES else "custom"
+    if promo_id is not None:
+        try:
+            payload[_WELCOME_PROMO_ID_KEY] = max(0, int(promo_id))
+        except (TypeError, ValueError):
+            payload[_WELCOME_PROMO_ID_KEY] = 0
     if payload:
         runtime_settings.set_many(payload)
     return get_welcome_config()
+
+
+async def resolve_welcome_message_text(
+    cfg: dict[str, Any] | None = None,
+) -> tuple[str, dict[str, Any] | None]:
+    """Текст автосообщения: свой или шаблон из раздела Акции.
+
+    Returns:
+        (text, promo_or_none)
+    """
+    welcome = cfg or get_welcome_config()
+    fallback = (
+        str(welcome.get("text") or "").strip()
+        or DEFAULT_WELCOME_TEXT
+    )
+    if str(welcome.get("text_source") or "custom").strip().lower() != "promo":
+        return fallback, None
+
+    promo: dict[str, Any] | None = None
+    try:
+        from mailing_db import get_promotion, pick_auto_mail_promo
+
+        pid = welcome.get("promo_id")
+        if pid:
+            promo = await get_promotion(int(pid))
+            # Если выбранная акция выключена/закончилась — fallback на живую welcome
+            if promo and not promo.get("is_live"):
+                logger.info(
+                    "Welcome: акция #%s не live — берём актуальную welcome/live",
+                    pid,
+                )
+                promo = await pick_auto_mail_promo("welcome")
+        else:
+            promo = await pick_auto_mail_promo("welcome")
+    except Exception:
+        logger.debug("Welcome: не удалось взять акцию", exc_info=True)
+        promo = None
+
+    if not promo:
+        return fallback, None
+
+    template = str(promo.get("message_template") or "").strip()
+    if not template:
+        # Нет шаблона — description или title как запасной текст
+        template = (
+            str(promo.get("description") or "").strip()
+            or str(promo.get("title") or "").strip()
+        )
+    if not template:
+        return fallback, promo
+
+    discount = (
+        str(promo.get("discount_display") or "").strip()
+        or str(promo.get("discount_text") or "").strip()
+    )
+    if not discount and promo.get("discount_pct") is not None:
+        try:
+            discount = f"{int(promo['discount_pct'])}%"
+        except (TypeError, ValueError):
+            discount = str(promo.get("discount_pct") or "")
+    if discount:
+        template = (
+            template.replace("{скидка}", discount).replace("{Скидка}", discount)
+        )
+    return template, promo
 
 
 def save_channel_config(
@@ -1221,7 +1324,14 @@ async def process_due_channel_welcomes(*, limit: int = 20) -> int:
     if not cfg.get("enabled"):
         return 0
 
-    text = str(cfg.get("text") or DEFAULT_WELCOME_TEXT).strip() or DEFAULT_WELCOME_TEXT
+    text, promo = await resolve_welcome_message_text(cfg)
+    text = (text or "").strip() or DEFAULT_WELCOME_TEXT
+    if promo:
+        logger.debug(
+            "Welcome: текст из акции #%s «%s»",
+            promo.get("id"),
+            promo.get("title"),
+        )
     now = _now()
 
     def _due_ids() -> list[int]:
