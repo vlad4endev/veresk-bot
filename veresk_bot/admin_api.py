@@ -4833,28 +4833,33 @@ async def handle_wheel_spin(request: web.Request) -> web.Response:
     cfg = get_wheel_config()
     segments = cfg.get("segments") or []
 
-    if existing:
-        # map prize to index if possible
+    def _already_played_payload(play_row: dict[str, Any]) -> dict[str, Any]:
         winner_index = 0
-        prize_id = str(existing.get("prize_id") or "")
+        prize_id = str(play_row.get("prize_id") or "")
         for i, s in enumerate(segments):
-            if str(s.get("id")) == prize_id or str(s.get("label")) == str(existing.get("prize_label") or ""):
+            if str(s.get("id")) == prize_id or str(s.get("label")) == str(
+                play_row.get("prize_label") or ""
+            ):
                 winner_index = i
                 break
-        return _json(
-            {
-                "ok": True,
-                "already_played": True,
-                "winner_index": winner_index,
-                "segment": {
-                    "id": existing.get("prize_id") or "",
-                    "label": existing.get("prize_label") or "",
-                },
-                "discount_pct": existing.get("discount_pct"),
-                "play": _serialize_fortune_play(existing),
-                "config": cfg,
-            }
-        )
+        return {
+            "ok": True,
+            "already_played": True,
+            "error": "already_played",
+            "detail": "Вы уже крутили колесо после анкеты — приз закреплён",
+            "winner_index": winner_index,
+            "segment": {
+                "id": play_row.get("prize_id") or "",
+                "label": play_row.get("prize_label") or "",
+            },
+            "discount_pct": play_row.get("discount_pct"),
+            "play": _serialize_fortune_play(play_row),
+            "config": cfg,
+        }
+
+    if existing:
+        # Один спин на анкету: повторно не крутим, отдаём сохранённый приз
+        return _json(_already_played_payload(existing), status=409)
 
     profile = await _survey_profile_for_wheel(channel, uid)
     if not profile:
@@ -4882,7 +4887,7 @@ async def handle_wheel_spin(request: web.Request) -> web.Response:
             first = parts[0] if parts else first
             last = parts[1] if len(parts) > 1 else last
 
-    play = await record_fortune_play(
+    play, created = await record_fortune_play(
         channel=channel,
         user_id=uid,
         first_name=first,
@@ -4895,6 +4900,8 @@ async def handle_wheel_spin(request: web.Request) -> web.Response:
         tg_user_id=int(uid) if channel == "telegram" else None,
         max_user_id=uid if channel == "max" else None,
     )
+    if not created:
+        return _json(_already_played_payload(play), status=409)
 
     if customer and customer.get("id") is not None:
         try:

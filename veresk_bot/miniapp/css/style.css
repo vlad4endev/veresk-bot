@@ -1207,16 +1207,81 @@ body:has(.tg-guard:not(.hidden)) #app {
   overflow-wrap: anywhere;
 }
 
-/* Fortune wheel screen */
-.wheel-screen-body {
-  display: flex;
-  justify-content: center;
-  padding-top: 8px;
-  padding-bottom: calc(24px + var(--v-safe-bottom));
+/* Fortune wheel screen — фирменный стиль Veresk */
+#screen-wheel.active {
+  background:
+    url("assets/leaf-burst.svg") center 42% / min(120vw, 640px) no-repeat,
+    #FFFFFF;
 }
 
-.wheel-screen-body .vw-root {
-  max-width: 340px;
+#screen-wheel .screen-header {
+  background: rgba(255, 255, 255, 0.92);
+  border-bottom: 1px solid rgba(64, 44, 96, 0.1);
+}
+
+#screen-wheel .header-title {
+  font-family: "Orchidea Pro", Georgia, "Times New Roman", serif;
+  font-weight: 600;
+  color: #402C60;
+}
+
+#screen-wheel .header-sub {
+  font-family: "XO Thames", system-ui, sans-serif;
+  font-style: italic;
+  text-transform: lowercase;
+  color: #F47CB8;
+}
+
+.wheel-screen-body {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: flex-start;
+  flex: 1;
+  min-height: 0;
+  width: 100%;
+  padding-top: clamp(6px, 1.5dvh, 14px);
+  padding-bottom: calc(18px + var(--v-safe-bottom));
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+}
+
+#miniWheelMount {
+  width: 100%;
+  max-width: min(100%, 520px);
+  display: flex;
+  justify-content: center;
+  align-items: flex-start;
+  margin: 0 auto;
+}
+
+.wheel-screen-body .vw-root,
+.wheel-screen-body .vw-prize-panel {
+  max-width: min(100%, 480px);
+  width: 100%;
+}
+
+@media (min-width: 768px) {
+  #miniWheelMount {
+    max-width: 560px;
+  }
+  .wheel-screen-body .vw-root,
+  .wheel-screen-body .vw-prize-panel {
+    max-width: 500px;
+  }
+}
+
+@media (max-height: 640px) {
+  #screen-wheel .screen-header {
+    padding-top: calc(8px + var(--v-safe-top));
+    padding-bottom: 8px;
+  }
+  .wheel-screen-body {
+    padding-top: 2px;
+  }
+  #screen-wheel.active {
+    background-size: min(100vw, 480px);
+  }
 }
 
 /* Motion preferences */

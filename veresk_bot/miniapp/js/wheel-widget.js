@@ -1,20 +1,19 @@
 /**
- * Veresk fortune wheel — общий виджет для Mini App и превью в админке.
- * API: VereskWheel.create(rootEl, { title, note, segments, onSpinEnd })
+ * Veresk fortune wheel — Mini App hero variant.
+ * API: VereskWheel.create(rootEl, { title, note, segments, once, resolveWinner, onSpinEnd })
  */
 (function (global) {
   "use strict";
 
-  // Мягкая палитра Veresk (светлый / тёмный чередуются)
   const DEFAULT_COLORS = [
-    "#E879B0",
-    "#3D2A55",
-    "#F3C4DC",
-    "#6B4C8A",
-    "#D4569A",
-    "#52406A",
-    "#F0A8CB",
-    "#2A1B3D",
+    "#F47CB8",
+    "#402C60",
+    "#FFFFFF",
+    "#F47CB8",
+    "#402C60",
+    "#FFFFFF",
+    "#F47CB8",
+    "#402C60",
   ];
 
   function esc(s) {
@@ -63,14 +62,8 @@
     const g = parseInt(h.slice(2, 4), 16);
     const b = parseInt(h.slice(4, 6), 16);
     const lum = (0.299 * r + 0.587 * g + 0.114 * b) / 255;
-    return lum > 0.58 ? "#2A1B3D" : "#ffffff";
-  }
-
-  function shortenLabel(label, span) {
-    const raw = String(label || "").trim();
-    if (span < 40) return raw.slice(0, 10);
-    if (span < 55) return raw.slice(0, 14);
-    return raw.slice(0, 18);
+    // Brand: dark plum on white/light, white on plum/pink
+    return lum > 0.62 ? "#402C60" : "#ffffff";
   }
 
   /** Визуально все сектора равные — вес влияет только на шанс. */
@@ -87,26 +80,35 @@
   }
 
   function labelLines(text, span) {
-    const raw = shortenLabel(text, span);
-    if (raw.length <= 9 || span < 48) return [raw];
-    const parts = raw.split(/\s+/);
+    const raw = String(text || "").trim();
+    const maxChars = span < 50 ? 16 : span < 72 ? 22 : 26;
+    let clipped = raw;
+    if (raw.length > maxChars) {
+      const slice = raw.slice(0, maxChars);
+      const sp = slice.lastIndexOf(" ");
+      clipped = sp > maxChars * 0.35 ? slice.slice(0, sp) : slice;
+    }
+    if (clipped.length <= 11 || span < 52) return [clipped];
+    const parts = clipped.split(/\s+/);
     if (parts.length >= 2) {
       const mid = Math.ceil(parts.length / 2);
       return [parts.slice(0, mid).join(" "), parts.slice(mid).join(" ")].filter(Boolean);
     }
-    const cut = Math.ceil(raw.length / 2);
-    return [raw.slice(0, cut).trim(), raw.slice(cut).trim()].filter(Boolean);
+    const cut = Math.ceil(clipped.length / 2);
+    return [clipped.slice(0, cut).trim(), clipped.slice(cut).trim()].filter(Boolean);
   }
 
   function buildSvg(segments, highlightIndex) {
-    const size = 320;
+    const size = 360;
     const cx = size / 2;
     const cy = size / 2;
-    const r = 138;
+    const r = 148;
+    const PLUM = "#402C60";
+    const PINK = "#F47CB8";
     if (!segments.length) {
       return `<svg class="vw-svg" viewBox="0 0 ${size} ${size}" aria-hidden="true">
-        <circle cx="${cx}" cy="${cy}" r="${r}" fill="#F7F0F8"/>
-        <text x="${cx}" y="${cy}" text-anchor="middle" dominant-baseline="middle" fill="#9A8AAD" font-size="13" font-family="system-ui,sans-serif">Нет секторов</text>
+        <circle cx="${cx}" cy="${cy}" r="${r}" fill="#FFF0F6"/>
+        <text x="${cx}" y="${cy}" text-anchor="middle" dominant-baseline="middle" fill="${PLUM}" font-size="14" font-family="Orchidea Pro,Georgia,serif">Нет секторов</text>
       </svg>`;
     }
 
@@ -114,64 +116,63 @@
     const parts = [];
     const labels = [];
     const ticks = [];
+    const beads = [];
     const uid = "vw" + Math.random().toString(36).slice(2, 8);
+
+    // Точки как на логотипе из брендбука
+    for (let i = 0; i < 28; i++) {
+      const deg = (360 / 28) * i;
+      const [bx, by] = polar(cx, cy, r + 16, deg);
+      const on = i % 2 === 0;
+      beads.push(
+        `<circle cx="${bx}" cy="${by}" r="${on ? 2.6 : 1.5}" fill="${on ? PINK : PLUM}" opacity="${on ? 1 : 0.85}"/>`
+      );
+    }
 
     slices.forEach((sl) => {
       const s = sl.segment;
       const { startDeg, midDeg, spanDeg, index } = sl;
       const isWin = highlightIndex === index;
-      const stroke = isWin ? "rgba(255,255,255,.98)" : "rgba(255,255,255,.85)";
-      const sw = isWin ? 3.5 : 2.5;
+      const fillColor = s.color || PLUM;
       parts.push(
-        `<path class="${isWin ? "vw-slice is-win" : "vw-slice"}" d="${slicePath(cx, cy, r, startDeg, startDeg + spanDeg)}" fill="${esc(s.color)}" stroke="${stroke}" stroke-width="${sw}"${isWin ? ` filter="url(#${uid}-win)"` : ""}/>`
+        `<path class="${isWin ? "vw-slice is-win" : "vw-slice"}" d="${slicePath(cx, cy, r, startDeg, startDeg + spanDeg)}" fill="${esc(fillColor)}" stroke="${PLUM}" stroke-width="${isWin ? 2.8 : 1.6}"${isWin ? ` filter="url(#${uid}-win)"` : ""}/>`
       );
 
       const [t1x, t1y] = polar(cx, cy, r - 1, startDeg);
-      const [t2x, t2y] = polar(cx, cy, r + 8, startDeg);
+      const [t2x, t2y] = polar(cx, cy, r + 7, startDeg);
       ticks.push(
-        `<line x1="${t1x}" y1="${t1y}" x2="${t2x}" y2="${t2y}" stroke="rgba(255,255,255,.7)" stroke-width="2.5" stroke-linecap="round"/>`
+        `<line x1="${t1x}" y1="${t1y}" x2="${t2x}" y2="${t2y}" stroke="${PLUM}" stroke-width="2" stroke-linecap="square"/>`
       );
 
       const lines = labelLines(s.label, spanDeg);
-      const [tx, ty] = polar(cx, cy, r * 0.68, midDeg);
+      const [tx, ty] = polar(cx, cy, r * 0.62, midDeg);
       const flip = midDeg > 90 && midDeg < 270;
       const rot = flip ? midDeg + 180 : midDeg;
-      const fs = spanDeg < 45 ? 10 : spanDeg < 60 ? 11.5 : 13;
+      const fs = spanDeg < 50 ? 12 : spanDeg < 72 ? 14 : 15.5;
       const lineH = fs + 2;
       const startY = ty - ((lines.length - 1) * lineH) / 2;
-      const fill = contrastText(s.color);
+      const fill = contrastText(fillColor);
       const tspans = lines
         .map((line, i) => `<tspan x="${tx}" y="${startY + i * lineH}">${esc(line)}</tspan>`)
         .join("");
       labels.push(
-        `<text class="vw-label${isWin ? " is-win" : ""}" fill="${fill}" font-size="${fs}" font-weight="${isWin ? 700 : 600}" text-anchor="middle" dominant-baseline="middle" transform="rotate(${rot} ${tx} ${ty})">${tspans}</text>`
+        `<text class="vw-label${isWin ? " is-win" : ""}" fill="${fill}" font-size="${fs}" font-weight="600" font-family="Orchidea Pro, Georgia, serif" text-anchor="middle" dominant-baseline="middle" transform="rotate(${rot} ${tx} ${ty})">${tspans}</text>`
       );
     });
 
     return `<svg class="vw-svg" viewBox="0 0 ${size} ${size}" aria-hidden="true">
       <defs>
-        <radialGradient id="${uid}-glow" cx="50%" cy="42%" r="58%">
-          <stop offset="0%" stop-color="#fff" stop-opacity=".22"/>
-          <stop offset="55%" stop-color="#fff" stop-opacity="0"/>
-          <stop offset="100%" stop-color="#2A1B3D" stop-opacity=".08"/>
-        </radialGradient>
-        <linearGradient id="${uid}-rim" x1="0%" y1="0%" x2="100%" y2="100%">
-          <stop offset="0%" stop-color="#FFFFFF"/>
-          <stop offset="45%" stop-color="#F4ECF7"/>
-          <stop offset="100%" stop-color="#E4D5EE"/>
-        </linearGradient>
-        <filter id="${uid}-win" x="-30%" y="-30%" width="160%" height="160%">
-          <feDropShadow dx="0" dy="0" stdDeviation="6" flood-color="#FFD6EC" flood-opacity=".95"/>
-          <feDropShadow dx="0" dy="0" stdDeviation="2" flood-color="#FFFFFF" flood-opacity=".9"/>
+        <filter id="${uid}-win" x="-25%" y="-25%" width="150%" height="150%">
+          <feDropShadow dx="0" dy="0" stdDeviation="4" flood-color="${PINK}" flood-opacity=".85"/>
         </filter>
       </defs>
-      <circle cx="${cx}" cy="${cy}" r="${r + 14}" fill="url(#${uid}-rim)"/>
-      <circle cx="${cx}" cy="${cy}" r="${r + 11}" fill="none" stroke="rgba(61,42,85,.08)" stroke-width="1"/>
+      <circle cx="${cx}" cy="${cy}" r="${r + 20}" fill="#FFFFFF" stroke="${PLUM}" stroke-width="2.5"/>
+      <circle cx="${cx}" cy="${cy}" r="${r + 12}" fill="none" stroke="${PINK}" stroke-width="2"/>
+      <g>${beads.join("")}</g>
       <g>${parts.join("")}</g>
-      <circle cx="${cx}" cy="${cy}" r="${r}" fill="url(#${uid}-glow)"/>
-      <g opacity=".95">${ticks.join("")}</g>
+      <g>${ticks.join("")}</g>
       ${labels.join("")}
-      <circle cx="${cx}" cy="${cy}" r="${r}" fill="none" stroke="rgba(255,255,255,.45)" stroke-width="1.5"/>
+      <circle cx="${cx}" cy="${cy}" r="36" fill="#FFFFFF" stroke="${PINK}" stroke-width="2"/>
     </svg>`;
   }
 
@@ -218,27 +219,27 @@
       root.getAttribute("data-logo") ||
       DEFAULT_LOGO;
 
-    root.classList.add("vw-root");
+    root.classList.add("vw-root", "vw-root--hero");
     root.innerHTML = `
       <div class="vw-meta">
-        <div class="vw-kicker">Колесо фортуны</div>
         <div class="vw-title"></div>
         <div class="vw-note"></div>
       </div>
       <div class="vw-stage">
         <div class="vw-aura" aria-hidden="true"></div>
+        <div class="vw-orbit" aria-hidden="true"></div>
         <div class="vw-flash" aria-hidden="true"></div>
         <div class="vw-pointer" aria-hidden="true"><span></span></div>
         <div class="vw-disc"></div>
         <button type="button" class="vw-hub" aria-label="Крутить колесо">
-          <img class="vw-hub-logo" src="${esc(logoUrl)}" alt="Veresk" width="48" height="48" decoding="async">
+          <img class="vw-hub-logo" src="${esc(logoUrl)}" alt="Veresk" width="56" height="56" decoding="async">
         </button>
       </div>
       <div class="vw-result" hidden>
         <div class="vw-result-kicker"></div>
         <div class="vw-result-prize"></div>
       </div>
-      <button type="button" class="vw-spin-btn">Крутить</button>
+      <button type="button" class="vw-spin-btn"><span>Крутить</span></button>
     `;
 
     const titleEl = root.querySelector(".vw-title");
@@ -256,9 +257,20 @@
       revealTimers = [];
     }
 
+    function setResultState(kicker, prize, cls) {
+      if (!resultEl) return;
+      resultEl.hidden = false;
+      resultEl.classList.remove("is-show", "is-tease", "is-win");
+      if (resultKicker) resultKicker.textContent = kicker || "";
+      if (resultPrize) resultPrize.textContent = prize || "";
+      void resultEl.offsetWidth;
+      resultEl.classList.add("is-show");
+      if (cls) resultEl.classList.add(cls);
+    }
+
     function paint() {
       if (titleEl) titleEl.textContent = title || "Розыгрыш";
-      if (noteEl) noteEl.textContent = note || "Нажмите, чтобы крутить";
+      if (noteEl) noteEl.textContent = note || "Один подарок после анкеты";
       if (discEl) {
         const keep = discEl.style.transform;
         discEl.innerHTML = buildSvg(segments, highlightIndex);
@@ -278,54 +290,24 @@
       return {
         title,
         note,
-        segments: segments.map((s, i) => ({
-          ...s,
-          order: i,
-          chance_pct:
-            totalWeight(segments) > 0
-              ? Math.round((Math.max(0, s.weight) / totalWeight(segments)) * 1000) / 10
-              : 0,
-        })),
+        segments: segments.map((s) => ({ ...s })),
       };
-    }
-
-    function setResultState(kicker, prize, mode) {
-      if (!resultEl) return;
-      resultEl.hidden = false;
-      resultEl.classList.remove("is-show", "is-tease", "is-win");
-      if (mode) resultEl.classList.add(mode);
-      if (resultKicker) resultKicker.textContent = kicker || "";
-      if (resultPrize) resultPrize.textContent = prize || "";
-      // reflow for animation restart
-      void resultEl.offsetWidth;
-      resultEl.classList.add("is-show");
     }
 
     function revealPrize(picked) {
       return new Promise((resolve) => {
-        clearRevealTimers();
-        highlightIndex = -1;
+        highlightIndex = picked.index;
         paint();
+        hubBtn?.classList.add("is-pulse");
+        stageEl?.classList.add("is-flash", "is-teasing");
         root.classList.add("is-teasing");
-        stageEl?.classList.add("is-teasing");
-        setResultState("Секунду…", "· · ·", "is-tease");
+        setResultState("Ваш приз", picked.segment?.label || "Приз", "is-win");
 
         revealTimers.push(
           setTimeout(() => {
-            setResultState("И выпадает…", "?", "is-tease");
-            hubBtn?.classList.add("is-pulse");
-          }, 550)
-        );
-
-        revealTimers.push(
-          setTimeout(() => {
-            highlightIndex = picked.index;
-            paint();
-            stageEl?.classList.add("is-flash");
-            setResultState("Ваш приз", picked.segment.label, "is-win");
             hubBtn?.classList.remove("is-pulse");
             hubBtn?.classList.add("is-win");
-          }, 1250)
+          }, 120)
         );
 
         revealTimers.push(
@@ -392,7 +374,7 @@
       }
       hubBtn.disabled = true;
       spinBtn.disabled = true;
-      if (spinBtn) spinBtn.textContent = "Крутится…";
+      if (spinBtn) spinBtn.innerHTML = "<span>Крутится…</span>";
 
       return new Promise((resolve) => {
         if (spinTimer) clearTimeout(spinTimer);
@@ -400,10 +382,16 @@
           spinning = false;
           root.classList.remove("is-spinning");
           discEl.classList.remove("is-spinning");
-          if (spinBtn) spinBtn.textContent = "Крутить";
           await revealPrize(picked);
-          hubBtn.disabled = false;
-          spinBtn.disabled = false;
+          if (options.once) {
+            if (spinBtn) spinBtn.innerHTML = "<span>Приз получен</span>";
+            hubBtn.disabled = true;
+            spinBtn.disabled = true;
+          } else {
+            if (spinBtn) spinBtn.innerHTML = "<span>Крутить</span>";
+            hubBtn.disabled = false;
+            spinBtn.disabled = false;
+          }
           if (typeof options.onSpinEnd === "function") {
             options.onSpinEnd(picked.segment, picked.index);
           }
@@ -449,7 +437,7 @@
         hubBtn.removeEventListener("click", onSpinClick);
         spinBtn.removeEventListener("click", onSpinClick);
         root.innerHTML = "";
-        root.classList.remove("vw-root", "is-spinning", "is-teasing");
+        root.classList.remove("vw-root", "vw-root--hero", "is-spinning", "is-teasing");
       },
     };
   }

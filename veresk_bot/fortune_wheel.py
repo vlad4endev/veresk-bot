@@ -10,25 +10,25 @@ import runtime_settings
 SETTINGS_KEY = "fortune_wheel"
 
 DEFAULT_COLORS = (
-    "#E879B0",
-    "#3D2A55",
-    "#F3C4DC",
-    "#6B4C8A",
-    "#D4569A",
-    "#52406A",
-    "#F0A8CB",
-    "#2A1B3D",
+    "#F47CB8",
+    "#402C60",
+    "#FFFFFF",
+    "#F47CB8",
+    "#402C60",
+    "#FFFFFF",
+    "#F47CB8",
+    "#402C60",
 )
 
 DEFAULT_CONFIG: dict[str, Any] = {
     "title": "Весенний розыгрыш",
-    "note": "Крутите колесо — получите подарок от Veresk",
+    "note": "крутите колесо — получите подарок от Veresk",
     "segments": [
-        {"id": "s1", "label": "Скидка 10%", "color": "#E879B0", "weight": 30},
-        {"id": "s2", "label": "Скидка 15%", "color": "#3D2A55", "weight": 18},
-        {"id": "s3", "label": "Бесплатная доставка", "color": "#F3C4DC", "weight": 22},
-        {"id": "s4", "label": "Попробуйте ещё", "color": "#6B4C8A", "weight": 20},
-        {"id": "s5", "label": "Мини-букет", "color": "#D4569A", "weight": 10},
+        {"id": "s1", "label": "Скидка 10%", "color": "#F47CB8", "weight": 30},
+        {"id": "s2", "label": "Скидка 15%", "color": "#402C60", "weight": 18},
+        {"id": "s3", "label": "Бесплатная доставка", "color": "#FFFFFF", "weight": 22},
+        {"id": "s4", "label": "Попробуйте ещё", "color": "#F47CB8", "weight": 20},
+        {"id": "s5", "label": "Мини-букет", "color": "#402C60", "weight": 10},
     ],
 }
 

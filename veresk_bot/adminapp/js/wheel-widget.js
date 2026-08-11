@@ -400,10 +400,16 @@
           spinning = false;
           root.classList.remove("is-spinning");
           discEl.classList.remove("is-spinning");
-          if (spinBtn) spinBtn.textContent = "Крутить";
           await revealPrize(picked);
-          hubBtn.disabled = false;
-          spinBtn.disabled = false;
+          if (options.once) {
+            if (spinBtn) spinBtn.textContent = "Приз получен";
+            hubBtn.disabled = true;
+            spinBtn.disabled = true;
+          } else {
+            if (spinBtn) spinBtn.textContent = "Крутить";
+            hubBtn.disabled = false;
+            spinBtn.disabled = false;
+          }
           if (typeof options.onSpinEnd === "function") {
             options.onSpinEnd(picked.segment, picked.index);
           }

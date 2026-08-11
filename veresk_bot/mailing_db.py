@@ -2163,8 +2163,12 @@ async def record_fortune_play(
     customer_id: int | None = None,
     tg_user_id: int | None = None,
     max_user_id: str | None = None,
-) -> dict[str, Any]:
-    """Записать прохождение (один раз на channel+user_id). Если уже есть — вернуть старое."""
+) -> tuple[dict[str, Any], bool]:
+    """Записать прохождение (один раз на channel+user_id).
+
+    Returns:
+        (play, created) — created=False если розыгрыш уже был (или гонка UNIQUE).
+    """
     ch = str(channel or "").strip().lower()
     uid = str(user_id or "").strip()
     if ch not in ("telegram", "max"):
@@ -2186,44 +2190,53 @@ async def record_fortune_play(
     )
     now = _now()
 
-    def _upsert() -> dict[str, Any]:
+    def _upsert() -> tuple[dict[str, Any], bool]:
         with _connect() as db:
             existing = db.execute(
                 "SELECT * FROM fortune_plays WHERE channel = ? AND user_id = ?",
                 (ch, uid),
             ).fetchone()
             if existing:
-                return dict(existing)
-            cur = db.execute(
-                """
-                INSERT INTO fortune_plays (
-                    channel, user_id, first_name, last_name, username, full_name,
-                    prize_id, prize_label, discount_pct, customer_id,
-                    tg_user_id, max_user_id, created_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """,
-                (
-                    ch,
-                    uid,
-                    first,
-                    last,
-                    uname,
-                    full,
-                    prize_id_s,
-                    prize_label_s,
-                    discount_pct,
-                    customer_id,
-                    tg_id,
-                    max_id,
-                    now,
-                ),
-            )
-            db.commit()
+                return dict(existing), False
+            try:
+                cur = db.execute(
+                    """
+                    INSERT INTO fortune_plays (
+                        channel, user_id, first_name, last_name, username, full_name,
+                        prize_id, prize_label, discount_pct, customer_id,
+                        tg_user_id, max_user_id, created_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        ch,
+                        uid,
+                        first,
+                        last,
+                        uname,
+                        full,
+                        prize_id_s,
+                        prize_label_s,
+                        discount_pct,
+                        customer_id,
+                        tg_id,
+                        max_id,
+                        now,
+                    ),
+                )
+                db.commit()
+            except sqlite3.IntegrityError:
+                row = db.execute(
+                    "SELECT * FROM fortune_plays WHERE channel = ? AND user_id = ?",
+                    (ch, uid),
+                ).fetchone()
+                if row:
+                    return dict(row), False
+                raise
             row = db.execute(
                 "SELECT * FROM fortune_plays WHERE id = ?",
                 (cur.lastrowid,),
             ).fetchone()
-            return dict(row) if row else {
+            play = dict(row) if row else {
                 "id": cur.lastrowid,
                 "channel": ch,
                 "user_id": uid,
@@ -2239,6 +2252,7 @@ async def record_fortune_play(
                 "max_user_id": max_id,
                 "created_at": now,
             }
+            return play, True
 
     return await _run_db(_upsert)
 
