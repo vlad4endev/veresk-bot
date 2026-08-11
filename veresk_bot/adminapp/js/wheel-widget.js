@@ -287,12 +287,23 @@
       // Останавливаем указатель в случайной точке внутри равного сектора
       const jitter = (Math.random() * 0.7 + 0.15) * picked.spanDeg;
       const stopAt = picked.startDeg + jitter;
-      const extraTurns = so.turns != null ? so.turns : 4 + Math.floor(Math.random() * 3);
+      const TURN_OPTIONS = [8, 10, 19, 30];
+      const extraTurns =
+        so.turns != null
+          ? Math.max(8, Number(so.turns) || 8)
+          : TURN_OPTIONS[Math.floor(Math.random() * TURN_OPTIONS.length)];
       const target = extraTurns * 360 + (360 - stopAt);
+      // Дольше крутим при большем числе оборотов
+      const duration =
+        so.durationMs != null ? so.durationMs : Math.round(2600 + extraTurns * 340);
       rotation = (rotation % 360) + target;
       spinning = true;
       root.classList.add("is-spinning");
       discEl.classList.add("is-spinning");
+      discEl.style.transitionDuration = `${duration}ms`;
+      discEl.style.transitionTimingFunction = "cubic-bezier(.08,.82,.16,1)";
+      // force reflow so duration applies before transform
+      void discEl.offsetWidth;
       discEl.style.transform = `rotate(${rotation}deg)`;
       if (resultEl) {
         resultEl.hidden = true;
@@ -302,7 +313,6 @@
       hubBtn.disabled = true;
       spinBtn.disabled = true;
 
-      const duration = so.durationMs != null ? so.durationMs : 4200;
       return new Promise((resolve) => {
         if (spinTimer) clearTimeout(spinTimer);
         spinTimer = setTimeout(() => {
@@ -319,7 +329,7 @@
           if (typeof options.onSpinEnd === "function") {
             options.onSpinEnd(picked.segment, picked.index);
           }
-          resolve({ segment: picked.segment, index: picked.index });
+          resolve({ segment: picked.segment, index: picked.index, turns: extraTurns });
         }, duration);
       });
     }
