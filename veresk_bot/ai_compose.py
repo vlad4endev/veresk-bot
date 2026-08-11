@@ -42,8 +42,8 @@ PROVIDER_PRESETS: dict[str, dict[str, str]] = {
     "deepseek": {
         "label": "DeepSeek",
         "api_base": "https://api.deepseek.com/v1",
-        "model": "deepseek-chat",
-        "hint": "Ключ с platform.deepseek.com · модели deepseek-chat / deepseek-reasoner",
+        "model": "deepseek-v4-pro",
+        "hint": "Ключ с platform.deepseek.com · deepseek-v4-pro (умная) / deepseek-v4-flash",
     },
     "yandexgpt": {
         "label": "YandexGPT",
@@ -57,6 +57,15 @@ PROVIDER_PRESETS: dict[str, dict[str, str]] = {
         "model": "gpt-4o-mini",
         "hint": "Любой OpenAI-совместимый endpoint",
     },
+}
+
+# Устаревшие ID DeepSeek → актуальные (chat/reasoner сняты после июля 2026).
+DEEPSEEK_MODEL_ALIASES = {
+    "deepseek-chat": "deepseek-v4-pro",
+    "deepseek-reasoner": "deepseek-v4-pro",
+    "deepseek-v3": "deepseek-v4-pro",
+    "deepseek-v3.1": "deepseek-v4-pro",
+    "deepseek-v3.2": "deepseek-v4-pro",
 }
 
 SEGMENT_HINTS = {
@@ -337,7 +346,10 @@ def is_ai_configured() -> bool:
 def resolve_model_uri() -> str:
     """Для YandexGPT модель должна быть gpt://folder_id/name."""
     model = get_ai_model()
-    if get_ai_provider() != "yandexgpt":
+    provider = get_ai_provider()
+    if provider == "deepseek":
+        return DEEPSEEK_MODEL_ALIASES.get(model.lower(), model)
+    if provider != "yandexgpt":
         return model
     folder = get_ai_folder_id()
     if model.startswith("gpt://") or model.startswith("emb://"):
@@ -372,7 +384,7 @@ def ai_settings_public() -> dict[str, Any]:
         "api_key_set": bool(key),
         "api_key_masked": _mask_key(key) if key else None,
         "api_base": get_ai_api_base(),
-        "model": get_ai_model(),
+        "model": resolve_model_uri() if provider == "deepseek" else get_ai_model(),
         "folder_id": folder or None,
         "folder_id_set": bool(folder),
         "from_env": bool(key) and not from_panel,
@@ -423,7 +435,7 @@ async def _chat_completion(
     messages: list[dict[str, str]],
     *,
     temperature: float = 0.7,
-    max_tokens: int = 500,
+    max_tokens: int = 1200,
 ) -> str:
     if not is_ai_configured():
         raise AiComposeError(
@@ -442,9 +454,15 @@ async def _chat_completion(
         "max_tokens": max_tokens,
         "messages": messages,
     }
+    # DeepSeek V4: thinking по умолчанию включён и съедает max_tokens —
+    # ответ обрывается. Для админки отключаем CoT, весь лимит идёт в текст.
+    if provider == "deepseek":
+        payload["thinking"] = {"type": "disabled"}
+
     headers = _request_headers(provider, api_key)
 
-    timeout = aiohttp.ClientTimeout(total=60)
+    timeout_sec = 120 if provider == "deepseek" else 60
+    timeout = aiohttp.ClientTimeout(total=timeout_sec)
     try:
         async with aiohttp.ClientSession(timeout=timeout) as session:
             async with session.post(url, json=payload, headers=headers) as resp:
@@ -465,6 +483,20 @@ async def _chat_completion(
     text = _extract_message(body)
     if not text:
         raise AiComposeError("ai_empty", "ИИ вернул пустой ответ")
+
+    finish = ""
+    try:
+        finish = str(((body.get("choices") or [{}])[0] or {}).get("finish_reason") or "")
+    except Exception:
+        finish = ""
+    if finish == "length":
+        logger.warning(
+            "AI reply truncated by max_tokens=%s (%s / %s)",
+            max_tokens,
+            provider,
+            resolve_model_uri(),
+        )
+
     return text
 
 
@@ -504,7 +536,7 @@ async def generate_mailing_text(
             {"role": "user", "content": user_content},
         ],
         temperature=0.7,
-        max_tokens=500,
+        max_tokens=1200,
     )
 
 
@@ -559,7 +591,7 @@ async def admin_assistant_reply(
     return await _chat_completion(
         [{"role": "system", "content": system}, *history],
         temperature=0.5,
-        max_tokens=1600,
+        max_tokens=4096,
     )
 
 
