@@ -437,11 +437,17 @@
     const listBox = $("#campaignsList");
     eventsBox.innerHTML = '<div class="loading">Загрузка…</div>';
     listBox.innerHTML = '<div class="loading">Загрузка…</div>';
+    const subsNewEl = $("#statSubsNew");
+    const subsKpi = $("#kpiSubsNew");
+    if (subsNewEl) subsNewEl.textContent = "—";
     try {
-      const [stats, events, campaigns] = await Promise.all([
+      const [stats, events, campaigns, subs] = await Promise.all([
         AdminAPI.stats(),
         AdminAPI.events(state.eventsDays),
         AdminAPI.campaigns(),
+        AdminAPI.channelSubscribers
+          ? AdminAPI.channelSubscribers({ page_size: 1, filter: "member" }).catch(() => null)
+          : Promise.resolve(null),
       ]);
       $("#statCustomers").textContent = fmtNum(stats.customers);
       const accLabel =
@@ -464,6 +470,9 @@
         const lbl = $("#statDeliveryLabel");
         if (lbl) lbl.textContent = "отправлено за месяц";
       }
+      const neu = Number(subs?.stats?.new) || 0;
+      if (subsNewEl) subsNewEl.textContent = fmtNum(neu);
+      if (subsKpi) subsKpi.classList.toggle("has-new", neu > 0);
       syncEventsFilters();
       renderEvents(events);
       renderCampaigns(campaigns.items || []);
@@ -1004,8 +1013,7 @@
   let subsSearch = "";
   let subsSearchTimer = null;
 
-  function setClientsView(view) {
-    clientsView = view === "subscribers" ? "subscribers" : "base";
+  function applyClientsViewUi() {
     $$(".clients-tab").forEach((tab) => {
       const on = tab.dataset.clientsTab === clientsView;
       tab.classList.toggle("on", on);
@@ -1030,9 +1038,31 @@
     }
     if ($("#btnSync")) $("#btnSync").hidden = clientsView !== "base";
     if ($("#btnSubsSync")) $("#btnSubsSync").hidden = clientsView !== "subscribers";
+  }
+
+  function setClientsView(view) {
+    clientsView = view === "subscribers" ? "subscribers" : "base";
+    applyClientsViewUi();
     if (clientsView === "subscribers") loadSubscribers();
     else loadClients();
   }
+
+  function syncSubsFilterButtons() {
+    $$("#subsSeg button").forEach((b) => {
+      b.classList.toggle("on", (b.dataset.subsFilter || "member") === subsFilter);
+    });
+  }
+
+  /** Главная → Клиенты → Подписчики (фильтр «Новые» по умолчанию). */
+  function openChannelSubscribers(filter = "new") {
+    subsFilter = filter || "new";
+    syncSubsFilterButtons();
+    clientsView = "subscribers";
+    applyClientsViewUi();
+    go("clients");
+  }
+
+  $("#kpiSubsNew")?.addEventListener("click", () => openChannelSubscribers("new"));
 
   $$(".clients-tab").forEach((btn) => {
     btn.addEventListener("click", () => setClientsView(btn.dataset.clientsTab || "base"));
@@ -1557,9 +1587,8 @@
 
   $$("#subsSeg button").forEach((btn) => {
     btn.addEventListener("click", () => {
-      $$("#subsSeg button").forEach((b) => b.classList.remove("on"));
-      btn.classList.add("on");
       subsFilter = btn.dataset.subsFilter || "member";
+      syncSubsFilterButtons();
       loadSubscribers({ skipDiscover: true });
     });
   });

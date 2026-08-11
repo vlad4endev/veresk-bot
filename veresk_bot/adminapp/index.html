@@ -14,7 +14,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,500;9..144,600;9..144,700&family=Manrope:wght@400;500;600;700&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="css/admin.css?v=62">
+<link rel="stylesheet" href="css/admin.css?v=63">
 <link rel="stylesheet" href="css/wheel.css?v=11">
 <!-- Критичный CSS до paint: иначе логин мелькнёт, пока качается admin.css -->
 <style>
@@ -161,6 +161,10 @@
             <div class="kpi-ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="m3 11 18-8-8 18-2-8z"/></svg></div>
             <div><div class="n" id="statDelivery">—</div><div class="l" id="statDeliveryLabel">успешно за месяц</div></div>
           </div>
+          <button type="button" class="kpi kpi-btn" id="kpiSubsNew" title="Открыть новых подписчиков канала">
+            <div class="kpi-ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M4 19.5A2.5 2.5 0 016.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 014 19.5v-15A2.5 2.5 0 016.5 2z"/><path d="M12 8v6M9 11h6"/></svg></div>
+            <div><div class="n" id="statSubsNew">—</div><div class="l">новых подписчиков канала</div></div>
+          </button>
         </div>
         <div class="widget events-widget">
           <div class="wg-head">
@@ -1404,6 +1408,6 @@
 <script src="js/qrcode.min.js?v=1"></script>
 <script src="js/api.js?v=40"></script>
 <script src="js/wheel-widget.js?v=13"></script>
-<script src="js/app.js?v=68"></script>
+<script src="js/app.js?v=69"></script>
 </body>
 </html>
