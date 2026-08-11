@@ -641,21 +641,62 @@
   }
   .clients-pane{display:none;}
   .clients-pane.active{display:block;animation:fade .22s ease;}
-  .subs-setup{
-    margin:12px 0 4px;padding:14px 16px;border:1px solid var(--line);
-    border-radius:var(--radius);background:var(--surface);box-shadow:var(--shadow);
+
+  /* ===== Подписчики: спокойная структура ===== */
+  .subs-layout{display:flex;flex-direction:column;gap:14px;margin-top:4px;}
+  .subs-summary{
+    display:flex;align-items:center;justify-content:space-between;gap:12px 16px;flex-wrap:wrap;
+    padding:12px 14px;border:1px solid var(--line);border-radius:var(--radius);
+    background:var(--surface);box-shadow:var(--shadow);
   }
-  .subs-channel-status{
-    display:flex;align-items:flex-start;justify-content:space-between;gap:14px;flex-wrap:wrap;
+  .subs-summary-label{
+    font-size:11px;font-weight:650;color:var(--ink-3);
+    text-transform:uppercase;letter-spacing:.04em;
   }
-  .subs-channel-label{font-size:12px;font-weight:600;color:var(--ink-3);text-transform:uppercase;letter-spacing:.04em;}
-  .subs-channel-name{font-size:17px;font-weight:700;margin-top:4px;color:var(--ink);font-family:var(--font-display);}
-  .subs-channel-meta{font-size:13px;color:var(--ink-3);margin-top:4px;}
+  .subs-summary-title{
+    font-size:16px;font-weight:700;margin-top:2px;color:var(--ink);
+    font-family:var(--font-display);letter-spacing:-.02em;
+  }
+  .subs-summary-meta{font-size:12.5px;color:var(--ink-3);margin-top:2px;}
+  .subs-summary-side{display:flex;align-items:center;gap:8px;flex-wrap:wrap;}
+  .subs-pill{
+    display:inline-flex;align-items:center;gap:6px;
+    font-size:12px;font-weight:650;padding:5px 10px;border-radius:999px;
+    background:var(--surface-2);color:var(--ink-3);border:1px solid var(--line);
+  }
+  .subs-pill[data-on="1"]{background:var(--ok-soft);color:var(--ok);border-color:transparent;}
+  .subs-pill::before{
+    content:"";width:6px;height:6px;border-radius:50%;background:currentColor;opacity:.85;
+  }
+  #btnSubsSettingsToggle[aria-expanded="true"]{
+    background:var(--accent-soft);border-color:var(--accent);color:var(--accent);
+  }
+
+  .subs-settings[hidden]{display:none !important;}
+  .subs-settings-grid{
+    display:grid;gap:12px;
+    grid-template-columns:1fr;
+  }
+  @media (min-width:900px){
+    .subs-settings-grid{grid-template-columns:1fr 1fr;align-items:start;}
+  }
+  .subs-card{
+    padding:14px 16px;border:1px solid var(--line);border-radius:var(--radius);
+    background:var(--surface);box-shadow:var(--shadow);
+    display:flex;flex-direction:column;gap:10px;
+  }
+  .subs-card-head h3{
+    margin:0;font-size:14px;font-weight:700;color:var(--ink);
+    font-family:var(--font-display);letter-spacing:-.02em;
+  }
+  .subs-card-head p{
+    margin:4px 0 0;font-size:12.5px;color:var(--ink-3);line-height:1.4;
+  }
   .subs-channel-actions{display:flex;gap:8px;flex-wrap:wrap;align-items:center;}
-  .subs-channel-pick{display:flex;flex-direction:column;gap:8px;margin-top:12px;}
+  .subs-channel-pick{display:flex;flex-direction:column;gap:8px;}
   .subs-pick-item{
     display:flex;align-items:center;justify-content:space-between;gap:12px;
-    width:100%;text-align:left;padding:12px 14px;border-radius:12px;
+    width:100%;text-align:left;padding:11px 12px;border-radius:12px;
     border:1.5px solid var(--line);background:var(--surface-2);cursor:pointer;
     color:var(--ink);font:inherit;
   }
@@ -663,47 +704,58 @@
   .subs-pick-item .t{font-weight:650;}
   .subs-pick-item .s{font-size:12.5px;color:var(--ink-3);margin-top:2px;}
   .subs-setup-fields{
-    display:flex;flex-wrap:wrap;gap:12px 14px;align-items:flex-end;margin-top:12px;
+    display:flex;flex-wrap:wrap;gap:10px 12px;align-items:flex-end;
   }
+  .subs-card .field,
   .subs-setup .field{
-    display:flex;flex-direction:column;gap:6px;min-width:min(220px,100%);
-    font-size:12.5px;font-weight:600;color:var(--ink-2);
+    display:flex;flex-direction:column;gap:5px;min-width:min(180px,100%);
+    font-size:12px;font-weight:600;color:var(--ink-2);
   }
+  .subs-card .field input,
   .subs-setup .field input{
-    font-weight:500;font-size:14px;padding:10px 12px;border-radius:12px;
+    font-weight:500;font-size:14px;padding:9px 11px;border-radius:11px;
     border:1.5px solid var(--line);background:var(--surface-2);color:var(--ink);
-    min-height:42px;
+    min-height:40px;
   }
+  .subs-card .field input:focus,
   .subs-setup .field input:focus{outline:none;border-color:var(--accent);background:var(--surface);}
-  .subs-setup-hint{margin:10px 0 0;font-size:13px;color:var(--ink-3);line-height:1.45;}
-  .subs-setup-hint b{color:var(--ink-2);font-weight:650;}
-  .subs-welcome{
-    margin-top:14px;padding-top:14px;border-top:1px dashed var(--line);
-    display:flex;flex-direction:column;gap:12px;
-  }
-  .subs-welcome-head{display:flex;flex-wrap:wrap;align-items:center;gap:8px 14px;}
   .subs-welcome-toggle{
-    display:inline-flex;align-items:center;gap:8px;font-size:14px;font-weight:650;
+    display:inline-flex;align-items:center;gap:8px;font-size:13.5px;font-weight:650;
     color:var(--ink);cursor:pointer;
   }
   .subs-welcome-toggle input{width:16px;height:16px;accent-color:var(--accent);}
   .subs-welcome-text textarea{
-    width:100%;min-height:110px;resize:vertical;font:inherit;font-size:14px;
-    padding:10px 12px;border-radius:12px;border:1.5px solid var(--line);
+    width:100%;min-height:96px;resize:vertical;font:inherit;font-size:13.5px;
+    padding:10px 11px;border-radius:11px;border:1.5px solid var(--line);
     background:var(--surface-2);color:var(--ink);line-height:1.45;
   }
   .subs-welcome-text textarea:focus{outline:none;border-color:var(--accent);background:var(--surface);}
-  .subs-welcome-row{display:flex;flex-wrap:wrap;gap:12px;align-items:flex-end;}
-  .subs-welcome-row .field{min-width:140px;max-width:180px;}
+  .subs-welcome-row{display:flex;flex-wrap:wrap;gap:10px;align-items:flex-end;}
+  .subs-welcome-row .field{min-width:120px;max-width:150px;}
   .subs-welcome-row .field input{width:100%;}
+
+  .subs-list-block{display:flex;flex-direction:column;gap:10px;}
+  .subs-list-toolbar{
+    display:flex;align-items:center;justify-content:space-between;gap:10px 14px;flex-wrap:wrap;
+  }
+  .subs-list-tools{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-left:auto;}
+  .subs-list-tools .hint{margin:0;font-size:12.5px;color:var(--ink-3);white-space:nowrap;}
+  .subs-seg.seg{gap:6px;}
+  .subs-seg.seg button{
+    font-size:13px;padding:7px 12px;min-height:34px;
+  }
   .subs-bulk{
-    display:flex;align-items:center;gap:10px 14px;flex-wrap:wrap;
-    margin:0 0 12px;padding:10px 12px;border-radius:12px;
-    background:var(--surface-2);border:1px solid var(--line);
+    display:flex;align-items:center;gap:10px 12px;flex-wrap:wrap;
+    margin:0;padding:8px 12px;border-radius:12px;
+    background:var(--surface);border:1px solid var(--line);
   }
   .subs-bulk[hidden]{display:none !important;}
-  .subs-bulk-check{display:inline-flex;align-items:center;gap:8px;font-size:13.5px;font-weight:600;color:var(--ink-2);cursor:pointer;}
-  .subs-bulk-count{font-size:13px;color:var(--ink-3);margin-right:auto;}
+  .subs-bulk-check{display:inline-flex;align-items:center;gap:8px;font-size:13px;font-weight:600;color:var(--ink-2);cursor:pointer;}
+  .subs-bulk-count{font-size:12.5px;color:var(--ink-3);margin-right:auto;}
+  .subs-layout.needs-setup .subs-summary{
+    border-color:color-mix(in srgb, var(--accent) 35%, var(--line));
+    background:linear-gradient(180deg,var(--accent-soft),var(--surface));
+  }
   .seg-n{
     display:inline-flex;min-width:18px;padding:0 5px;margin-left:4px;
     border-radius:999px;font-size:11px;font-weight:700;
@@ -734,7 +786,6 @@
   .subs-main .cl-who-av{margin-top:1px;}
   .subs-when-mob{display:none;color:var(--ink-3);}
   .subs-when-inline{display:none;}
-  /* Подписчики: свои ширины — не наследовать колонки базы клиентов */
   .subs-tbl table{table-layout:fixed;width:100%;}
   .subs-tbl th:nth-child(1),
   .subs-tbl td:nth-child(1),
@@ -883,10 +934,13 @@
     .clients-tabs{width:100%;}
     .clients-tab{flex:1;justify-content:center;}
     .subs-setup-fields{flex-direction:column;align-items:stretch;}
-    .subs-setup .field{min-width:0;}
-    .subs-setup #btnSubsSaveChannel{width:100%;}
+    .subs-card .field,.subs-setup .field{min-width:0;}
+    .subs-card #btnSubsSaveChannel,.subs-setup #btnSubsSaveChannel{width:100%;}
     .subs-channel-actions{width:100%;}
     .subs-channel-actions .btn{flex:1;justify-content:center;}
+    .subs-summary-side{width:100%;justify-content:space-between;}
+    .subs-list-tools{width:100%;margin-left:0;}
+    .subs-list-tools .clients-search{width:100%;}
   }
 
   /* accounts */

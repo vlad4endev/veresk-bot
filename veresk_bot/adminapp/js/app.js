@@ -1222,6 +1222,17 @@
       '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M12 3v12M8 11l4 4 4-4"/><path d="M4 17v2a2 2 0 002 2h12a2 2 0 002-2v-2"/></svg> Синхронизировать';
   });
 
+  function setSubsSettingsOpen(open) {
+    const panel = $("#subsSetup");
+    const btn = $("#btnSubsSettingsToggle");
+    const on = !!open;
+    if (panel) panel.hidden = !on;
+    if (btn) {
+      btn.setAttribute("aria-expanded", on ? "true" : "false");
+      btn.textContent = on ? "Скрыть настройки" : "Настройки";
+    }
+  }
+
   function applySubsChannelForm(channel) {
     const ch = channel || {};
     if ($("#subsChannelUsername")) {
@@ -1248,9 +1259,13 @@
         if (ch.channel_id) bits.push("id " + ch.channel_id);
         metaEl.textContent = bits.join(" · ");
       } else {
-        metaEl.textContent = "Нажмите «Определить автоматически» или назначьте бота админом канала";
+        metaEl.textContent = "Откройте настройки и определите канал";
       }
     }
+    const layout = $("#subsLayout");
+    if (layout) layout.classList.toggle("needs-setup", !ch.configured);
+    // Если канал ещё не задан — сразу показать настройки
+    if (!ch.configured) setSubsSettingsOpen(true);
     applySubsWelcomeForm(ch.welcome || null);
   }
 
@@ -1269,7 +1284,18 @@
     if (hint) {
       hint.textContent = w.enabled
         ? "включено — отправим при новой подписке"
-        : "выключено — включите и сохраните текст";
+        : "выключено";
+    }
+    const pill = $("#subsWelcomePill");
+    if (pill) {
+      const on = !!w.enabled;
+      pill.dataset.on = on ? "1" : "0";
+      const delay = Number(w.delay_minutes) || 0;
+      pill.textContent = on
+        ? delay > 0
+          ? `Автосообщение · ${delay} мин`
+          : "Автосообщение вкл"
+        : "Автосообщение выкл";
     }
   }
 
@@ -1346,6 +1372,7 @@
       applySubsChannelForm(res.channel);
       if (res.need_pick || ((res.channels || []).length > 1 && !res.channel?.configured)) {
         renderSubsChannelPick(res.channels || []);
+        setSubsSettingsOpen(true);
         if (!silent && (res.channels || []).length > 1) {
           /* выбор в UI */
         }
@@ -1416,7 +1443,7 @@
   function syncSubsBulkUi() {
     const bulk = $("#subsBulk");
     const n = subsSelected.size;
-    if (bulk) bulk.hidden = false;
+    if (bulk) bulk.hidden = n === 0;
     const countEl = $("#subsSelectedCount");
     if (countEl) countEl.textContent = n ? `${n} выбрано` : "0 выбрано";
     if ($("#btnSubsWrite")) $("#btnSubsWrite").disabled = n === 0;
@@ -1502,7 +1529,7 @@
       applySubsChannelForm(data.channel);
       updateSubsNewBadge(data.stats?.new || 0);
       updateSubsFilterCounts(data.stats);
-      if ($("#subsBulk")) $("#subsBulk").hidden = false;
+      syncSubsBulkUi();
 
       if (!opts.skipDiscover && !data.channel?.configured && !subsAutoDiscoverDone) {
         subsAutoDiscoverDone = true;
@@ -1658,10 +1685,17 @@
     await loadSubscribers({ skipDiscover: true });
   });
 
+  $("#btnSubsSettingsToggle")?.addEventListener("click", () => {
+    const panel = $("#subsSetup");
+    const open = !panel || panel.hidden;
+    setSubsSettingsOpen(open);
+  });
+
   $("#btnSubsManualToggle")?.addEventListener("click", () => {
     const fields = $("#subsManualFields");
     if (!fields) return;
     fields.hidden = !fields.hidden;
+    setSubsSettingsOpen(true);
   });
 
   $("#btnSubsSaveChannel")?.addEventListener("click", async () => {
@@ -1686,6 +1720,7 @@
       applySubsChannelForm(res.channel);
       if (res.welcome) applySubsWelcomeForm(res.welcome);
       renderSubsChannelPick([]);
+      if (res.channel?.configured) setSubsSettingsOpen(false);
       alert(res.channel?.configured ? "Канал сохранён" : "Сохранено (канал пока не задан)");
       await loadSubscribers({ skipDiscover: true });
     } catch (err) {
@@ -1710,6 +1745,7 @@
       });
       applySubsChannelForm(res.channel || {});
       applySubsWelcomeForm(res.welcome || res.channel?.welcome);
+      setSubsSettingsOpen(false);
       alert(
         enabled
           ? "Автосообщение новым подписчикам включено"

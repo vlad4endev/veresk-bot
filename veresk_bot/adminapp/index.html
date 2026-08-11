@@ -14,7 +14,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,500;9..144,600;9..144,700&family=Manrope:wght@400;500;600;700&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="css/admin.css?v=65">
+<link rel="stylesheet" href="css/admin.css?v=66">
 <link rel="stylesheet" href="css/wheel.css?v=11">
 <!-- Критичный CSS до paint: иначе логин мелькнёт, пока качается admin.css -->
 <style>
@@ -256,88 +256,115 @@
       </div>
 
       <div class="clients-pane" id="clientsPaneSubs" data-clients-pane="subscribers" hidden>
-        <div class="subs-setup" id="subsSetup">
-          <div class="subs-channel-status" id="subsChannelStatus">
-            <div class="subs-channel-main">
-              <div class="subs-channel-label">Канал</div>
-              <div class="subs-channel-name" id="subsChannelName">Не определён</div>
-              <div class="subs-channel-meta" id="subsChannelMeta"></div>
+        <div class="subs-layout" id="subsLayout">
+          <!-- Компактная шапка: канал + статус welcome -->
+          <div class="subs-summary" id="subsSummary">
+            <div class="subs-summary-main">
+              <div class="subs-summary-label">Канал</div>
+              <div class="subs-summary-title" id="subsChannelName">Не определён</div>
+              <div class="subs-summary-meta" id="subsChannelMeta"></div>
             </div>
-            <div class="subs-channel-actions">
-              <button type="button" class="btn primary" id="btnSubsDiscover">Определить автоматически</button>
-              <button type="button" class="btn" id="btnSubsManualToggle">Вручную</button>
+            <div class="subs-summary-side">
+              <span class="subs-pill" id="subsWelcomePill" data-on="0">Автосообщение выкл</span>
+              <button type="button" class="btn" id="btnSubsSettingsToggle" aria-expanded="false">
+                Настройки
+              </button>
             </div>
           </div>
-          <div class="subs-channel-pick" id="subsChannelPick" hidden></div>
-          <div class="subs-setup-fields" id="subsManualFields" hidden>
-            <label class="field">
-              <span>Канал (@username)</span>
-              <input type="text" id="subsChannelUsername" placeholder="veresk_flowers" autocomplete="off">
-            </label>
-            <label class="field">
-              <span>Или ID канала</span>
-              <input type="text" id="subsChannelId" placeholder="-100…" autocomplete="off">
-            </label>
-            <button type="button" class="btn primary" id="btnSubsSaveChannel">Сохранить</button>
-          </div>
-          <p class="hint subs-setup-hint">Бот должен быть <b>админом</b> канала. Система сама находит такие каналы через подключённый Telegram-аккаунт и запоминает канал, когда бота назначают админом.</p>
-          <div class="subs-welcome" id="subsWelcome">
-            <div class="subs-welcome-head">
-              <label class="subs-welcome-toggle">
-                <input type="checkbox" id="subsWelcomeEnabled">
-                <span>Автосообщение новым подписчикам</span>
-              </label>
-              <span class="hint" id="subsWelcomeHint">при подписке на канал → личное сообщение в Telegram</span>
+
+          <!-- Настройки: свёрнуты по умолчанию, если канал уже есть -->
+          <div class="subs-settings" id="subsSetup" hidden>
+            <div class="subs-settings-grid">
+              <section class="subs-card" id="subsChannelCard">
+                <div class="subs-card-head">
+                  <h3>Канал Telegram</h3>
+                  <p>Бот должен быть админом. Можно найти канал автоматически.</p>
+                </div>
+                <div class="subs-channel-actions">
+                  <button type="button" class="btn primary" id="btnSubsDiscover">Определить автоматически</button>
+                  <button type="button" class="btn" id="btnSubsManualToggle">Вручную</button>
+                </div>
+                <div class="subs-channel-pick" id="subsChannelPick" hidden></div>
+                <div class="subs-setup-fields" id="subsManualFields" hidden>
+                  <label class="field">
+                    <span>@username</span>
+                    <input type="text" id="subsChannelUsername" placeholder="veresk_flowers" autocomplete="off">
+                  </label>
+                  <label class="field">
+                    <span>Или ID</span>
+                    <input type="text" id="subsChannelId" placeholder="-100…" autocomplete="off">
+                  </label>
+                  <button type="button" class="btn primary" id="btnSubsSaveChannel">Сохранить</button>
+                </div>
+              </section>
+
+              <section class="subs-card" id="subsWelcome">
+                <div class="subs-card-head">
+                  <h3>Автосообщение</h3>
+                  <p>Новому подписчику — личное сообщение в Telegram.</p>
+                </div>
+                <label class="subs-welcome-toggle">
+                  <input type="checkbox" id="subsWelcomeEnabled">
+                  <span>Включить автосообщение</span>
+                </label>
+                <p class="hint" id="subsWelcomeHint">при подписке → личка</p>
+                <label class="field subs-welcome-text">
+                  <span>Текст</span>
+                  <textarea id="subsWelcomeText" rows="4" placeholder="Здравствуйте, {имя}!…"></textarea>
+                </label>
+                <div class="subs-welcome-row">
+                  <label class="field">
+                    <span>Задержка, мин</span>
+                    <input type="number" id="subsWelcomeDelay" min="0" max="10080" step="1" value="0">
+                  </label>
+                  <button type="button" class="btn primary" id="btnSubsWelcomeSave">Сохранить</button>
+                </div>
+                <p class="hint">Плейсхолдер <code>{имя}</code>. Нужен Telegram-аккаунт в Настройках.</p>
+              </section>
             </div>
-            <label class="field subs-welcome-text">
-              <span>Текст сообщения</span>
-              <textarea id="subsWelcomeText" rows="5" placeholder="Здравствуйте, {имя}!…"></textarea>
-            </label>
-            <div class="subs-welcome-row">
-              <label class="field">
-                <span>Задержка (минуты)</span>
-                <input type="number" id="subsWelcomeDelay" min="0" max="10080" step="1" value="0">
-              </label>
-              <button type="button" class="btn primary" id="btnSubsWelcomeSave">Сохранить автосообщение</button>
+          </div>
+
+          <!-- Список: главный фокус раздела -->
+          <div class="subs-list-block">
+            <div class="subs-list-toolbar">
+              <div class="seg subs-seg" id="subsSeg">
+                <button class="on" data-subs-filter="member">Подписаны <span class="seg-n" data-stat="members"></span></button>
+                <button data-subs-filter="new">Новые <span class="seg-n" data-stat="new"></span></button>
+                <button data-subs-filter="survey">С анкетой <span class="seg-n" data-stat="survey"></span></button>
+                <button data-subs-filter="no_survey">Без анкеты <span class="seg-n" data-stat="no_survey"></span></button>
+                <button data-subs-filter="left">Отписались <span class="seg-n" data-stat="left"></span></button>
+                <button data-subs-filter="all">Все</button>
+              </div>
+              <div class="subs-list-tools">
+                <div class="searchbox clients-search">
+                  <svg class="si" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="m21 21-4.3-4.3"/></svg>
+                  <input type="search" id="subsSearch" placeholder="Поиск…" autocomplete="off">
+                </div>
+                <p class="hint" id="subsHint"></p>
+              </div>
             </div>
-            <p class="hint">Плейсхолдер <code>{имя}</code>. Нужен подключённый Telegram-аккаунт в Настройках. Уже получившие welcome повторно не получают.</p>
-          </div>
-        </div>
-        <div class="clients-toolbar">
-          <div class="seg" id="subsSeg">
-            <button class="on" data-subs-filter="member">Подписаны <span class="seg-n" data-stat="members"></span></button>
-            <button data-subs-filter="new">Новые <span class="seg-n" data-stat="new"></span></button>
-            <button data-subs-filter="survey">С анкетой <span class="seg-n" data-stat="survey"></span></button>
-            <button data-subs-filter="no_survey">Без анкеты <span class="seg-n" data-stat="no_survey"></span></button>
-            <button data-subs-filter="left">Отписались <span class="seg-n" data-stat="left"></span></button>
-            <button data-subs-filter="all">Все</button>
-          </div>
-          <div class="clients-tools">
-            <div class="searchbox clients-search">
-              <svg class="si" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="m21 21-4.3-4.3"/></svg>
-              <input type="search" id="subsSearch" placeholder="Имя, @username или ID…" autocomplete="off">
+
+            <div class="subs-bulk" id="subsBulk" hidden>
+              <label class="subs-bulk-check"><input type="checkbox" id="subsSelectAll"> Выбрать все</label>
+              <span class="subs-bulk-count" id="subsSelectedCount">0 выбрано</span>
+              <button type="button" class="btn" id="btnSubsWrite" disabled>Написать</button>
+              <button type="button" class="btn primary" id="btnSubsToMailing" disabled>В рассылку</button>
             </div>
-            <p class="hint" id="subsHint"></p>
+
+            <div class="tbl-wrap clients-tbl subs-tbl">
+              <table>
+                <thead>
+                  <tr>
+                    <th class="th-check"><span class="sr-only">Выбор</span></th>
+                    <th>Подписчик</th>
+                    <th class="hide-mob th-when">Подписка</th>
+                    <th class="th-actions">Действия</th>
+                  </tr>
+                </thead>
+                <tbody id="subsBody"></tbody>
+              </table>
+            </div>
           </div>
-        </div>
-        <div class="subs-bulk" id="subsBulk" hidden>
-          <label class="subs-bulk-check"><input type="checkbox" id="subsSelectAll"> Выбрать все на странице</label>
-          <span class="subs-bulk-count" id="subsSelectedCount">0 выбрано</span>
-          <button type="button" class="btn" id="btnSubsWrite" disabled>Написать</button>
-          <button type="button" class="btn primary" id="btnSubsToMailing" disabled>В рассылку</button>
-        </div>
-        <div class="tbl-wrap clients-tbl subs-tbl">
-          <table>
-            <thead>
-              <tr>
-                <th class="th-check"><span class="sr-only">Выбор</span></th>
-                <th>Подписчик</th>
-                <th class="hide-mob th-when">Подписка</th>
-                <th class="th-actions">Действия</th>
-              </tr>
-            </thead>
-            <tbody id="subsBody"></tbody>
-          </table>
         </div>
       </div>
     </section>
@@ -1428,6 +1455,6 @@
 <script src="js/qrcode.min.js?v=1"></script>
 <script src="js/api.js?v=40"></script>
 <script src="js/wheel-widget.js?v=13"></script>
-<script src="js/app.js?v=71"></script>
+<script src="js/app.js?v=72"></script>
 </body>
 </html>
