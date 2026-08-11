@@ -8016,10 +8016,43 @@
     inited: false,
     segs: [],
     widget: null,
+    tab: "setup",
+    toastTimer: null,
   };
 
   function uidWheelSeg() {
     return "w" + Math.random().toString(36).slice(2, 9);
+  }
+
+  function showWheelToast(text) {
+    const el = $("#wheelToast");
+    if (!el) return;
+    el.textContent = text;
+    el.hidden = false;
+    if (wheelState.toastTimer) clearTimeout(wheelState.toastTimer);
+    wheelState.toastTimer = setTimeout(() => {
+      el.hidden = true;
+    }, 2400);
+  }
+
+  function setWheelTab(tab) {
+    const next = ["setup", "links", "plays"].includes(tab) ? tab : "setup";
+    wheelState.tab = next;
+    $$(".wheel-tab").forEach((btn) => {
+      const on = btn.getAttribute("data-wheel-tab") === next;
+      btn.classList.toggle("on", on);
+      btn.setAttribute("aria-selected", on ? "true" : "false");
+    });
+    $$("[data-wheel-pane]").forEach((pane) => {
+      const on = pane.getAttribute("data-wheel-pane") === next;
+      pane.classList.toggle("on", on);
+      pane.hidden = !on;
+    });
+    const saveBtn = $("#wheelSave");
+    const spinTop = $("#wheelSpinDemo");
+    if (saveBtn) saveBtn.hidden = next !== "setup";
+    if (spinTop) spinTop.hidden = true;
+    if (next === "plays") loadWheelPlays();
   }
 
   function wheelTotalWeight(segs) {
@@ -8071,6 +8104,27 @@
     return wheelState.widget;
   }
 
+  function syncWheelChanceBar() {
+    const bar = $("#wheelChanceBar");
+    if (!bar) return;
+    const total = wheelTotalWeight(wheelState.segs);
+    if (!total || !wheelState.segs.length) {
+      bar.innerHTML = "";
+      return;
+    }
+    bar.innerHTML = wheelState.segs
+      .map((s, i) => {
+        const pct = (Math.max(0, Number(s.weight) || 0) / total) * 100;
+        const color = wheelBrandColor(i);
+        const border =
+          color.toLowerCase() === "#ffffff"
+            ? "box-shadow:inset 0 0 0 1px rgba(64,44,96,.2);"
+            : "";
+        return `<span style="width:${pct}%;background:${esc(color)};${border}" title="${esc(s.label || "Приз")} · ${wheelChancePct(s, wheelState.segs)}%"></span>`;
+      })
+      .join("");
+  }
+
   function syncWheelWidget() {
     const widget = ensureWheelWidget();
     const payload = collectWheelPayload();
@@ -8094,6 +8148,7 @@
         })
         .join("");
     }
+    syncWheelChanceBar();
   }
 
   function renderWheelSegs() {
@@ -8101,7 +8156,7 @@
     if (!box) return;
     if (!wheelState.segs.length) {
       box.innerHTML =
-        '<div class="empty" style="padding:18px;text-align:center;color:var(--ink-3)">Пока нет секторов — нажмите «Добавить»</div>';
+        '<div class="wheel-seg-empty">Пока нет секторов — нажмите «Добавить»</div>';
       syncWheelWidget();
       return;
     }
@@ -8112,6 +8167,7 @@
         s.color = color;
         return `
         <div class="wheel-seg" role="listitem" data-id="${esc(s.id)}">
+          <span class="wheel-seg-idx" aria-hidden="true">${i + 1}</span>
           <input class="wheel-seg-color" type="color" value="${esc(color)}" data-field="color" tabindex="-1" aria-label="Цвет сектора ${i + 1} (брендбук)" title="Цвет из брендбука">
           <div class="wheel-seg-fields">
             <div>
@@ -8162,7 +8218,6 @@
     if (!seg) return;
     if (field === "label") seg.label = value;
     else if (field === "color") {
-      /* цвета фиксирует бренд-цикл */
       renderWheelSegs();
       return;
     } else if (field === "weight") seg.weight = Math.max(0, Number(value) || 0);
@@ -8173,6 +8228,7 @@
         const badge = el.querySelector(".wheel-seg-chance");
         if (s && badge) badge.textContent = `${wheelChancePct(s, wheelState.segs)}%`;
       });
+      syncWheelChanceBar();
     } else {
       const row = $(`.wheel-seg[data-id="${CSS.escape(id)}"]`);
       const chance = row?.querySelector(".wheel-seg-chance");
@@ -8185,6 +8241,7 @@
     const errEl = $("#wheelError");
     const widget = ensureWheelWidget();
     if (!widget) return;
+    if (wheelState.tab !== "setup") setWheelTab("setup");
     syncWheelWidget();
     widget.spin().catch((err) => {
       if (errEl && err && err.message === "need segments") {
@@ -8243,7 +8300,7 @@
         errEl.hidden = false;
       }
     }
-    loadWheelPlays();
+    if (wheelState.tab === "plays") loadWheelPlays();
   }
 
   function fillWheelPromoLinks(links) {
@@ -8328,12 +8385,18 @@
   function renderWheelPlays(data) {
     const box = $("#wheelPlaysList");
     const stats = $("#wheelPlaysStats");
+    const badge = $("#wheelPlaysBadge");
     if (!box) return;
     const items = Array.isArray(data?.items) ? data.items : [];
+    const total = data?.total ?? items.length;
+    if (badge) {
+      badge.textContent = String(total);
+      badge.hidden = !total;
+    }
     if (stats) {
       stats.hidden = false;
       stats.innerHTML = `
-        <span class="wheel-plays-pill">Всего <b>${esc(data?.total ?? items.length)}</b></span>
+        <span class="wheel-plays-pill">Всего <b>${esc(total)}</b></span>
         <span class="wheel-plays-pill">Telegram <b>${esc(data?.telegram ?? 0)}</b></span>
         <span class="wheel-plays-pill">MAX <b>${esc(data?.max ?? 0)}</b></span>
       `;
@@ -8347,8 +8410,17 @@
         const channel = p.channel === "max" ? "max" : "telegram";
         const channelLabel = channel === "max" ? "MAX" : "Telegram";
         const name = p.full_name || [p.first_name, p.last_name].filter(Boolean).join(" ") || "Без имени";
+        const sealed = p.ticket || p.status === "sealed";
+        const statusHtml = sealed
+          ? `<span class="wheel-play-status is-sealed">Билет</span>`
+          : p.status === "revealed"
+            ? `<span class="wheel-play-status is-revealed">Открыт</span>`
+            : "";
+        const prizeLabel = sealed
+          ? "Приз запечатан"
+          : p.prize_label || "Приз";
         const disc =
-          p.discount_pct != null && p.discount_pct !== ""
+          !sealed && p.discount_pct != null && p.discount_pct !== ""
             ? `<span class="wheel-play-discount">−${esc(p.discount_pct)}%</span>`
             : "";
         const tgId = p.tg_user_id != null ? p.tg_user_id : channel === "telegram" ? p.user_id : "";
@@ -8361,6 +8433,7 @@
               <div class="wheel-play-name">${esc(name)}</div>
               <div class="wheel-play-meta">
                 <span class="wheel-play-channel is-${channel === "max" ? "max" : "tg"}">${channelLabel}</span>
+                ${statusHtml}
                 ${uname ? `<span>${esc(uname)}</span>` : ""}
                 <span class="wheel-play-time">${esc(formatWheelWhen(p.created_at))}</span>
               </div>
@@ -8371,7 +8444,7 @@
               ${!tgId && !maxId ? `<span><b>ID</b>${esc(p.user_id || "—")}</span>` : ""}
             </div>
             <div class="wheel-play-prize">
-              <div class="wheel-play-prize-label">${esc(p.prize_label || "Приз")}</div>
+              <div class="wheel-play-prize-label">${esc(prizeLabel)}</div>
               ${disc}
             </div>
           </article>
@@ -8403,6 +8476,7 @@
         errEl.textContent = msg;
         errEl.hidden = false;
       }
+      setWheelTab("setup");
       return;
     }
     if (errEl) errEl.hidden = true;
@@ -8413,7 +8487,7 @@
     try {
       const saved = await AdminAPI.wheelSave(collectWheelPayload());
       applyWheelConfig(saved);
-      alert("Настройки фортуны сохранены");
+      showWheelToast("Настройки фортуны сохранены");
     } catch (err) {
       const detail =
         err.data?.detail || err.data?.error || err.message || "Ошибка сохранения";
@@ -8421,7 +8495,7 @@
         errEl.textContent = detail;
         errEl.hidden = false;
       } else {
-        alert(detail);
+        showWheelToast(detail);
       }
     } finally {
       if (btn) {
@@ -8448,6 +8522,7 @@
       });
       $("#wheelAddSeg")?.addEventListener("click", addWheelSeg);
       $("#wheelSpinDemo")?.addEventListener("click", spinWheelPreview);
+      $("#wheelSpinDemoSide")?.addEventListener("click", spinWheelPreview);
       $("#wheelExit")?.addEventListener("click", () => go("home"));
       $("#wheelTitle")?.addEventListener("input", syncWheelWidget);
       $("#wheelNote")?.addEventListener("input", syncWheelWidget);
@@ -8455,15 +8530,23 @@
         saveWheelEditor();
       });
       $("#wheelPlaysRefresh")?.addEventListener("click", () => loadWheelPlays());
-      document.querySelectorAll("[data-copy-from]").forEach((btn) => {
+      $$(".wheel-tab").forEach((btn) => {
+        btn.addEventListener("click", () => {
+          setWheelTab(btn.getAttribute("data-wheel-tab"));
+        });
+      });
+      document.querySelectorAll("#wheel [data-copy-from]").forEach((btn) => {
         btn.addEventListener("click", () => {
           copyWheelPromoLink(btn.getAttribute("data-copy-from"), btn);
         });
       });
       wheelState.inited = true;
+      setWheelTab("setup");
       loadWheelEditor();
+      loadWheelPlays();
     } else {
       loadWheelEditor();
+      if (wheelState.tab === "plays") loadWheelPlays();
     }
   }
   window.initWheelEditor = initWheelEditor;

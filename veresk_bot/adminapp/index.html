@@ -3,9 +3,9 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<meta name="theme-color" content="#402C60">
+<meta name="theme-color" content="#FDF4F9">
 <meta name="description" content="Veresk — авторассылки клиентам через Telegram и MAX">
-<title>Veresk — рассылки клиентам</title>
+<title>Вход · Панель рассылок Veresk</title>
 <link rel="icon" href="favicon.svg" type="image/svg+xml">
 <link rel="icon" href="favicon-32.png" type="image/png" sizes="32x32">
 <link rel="icon" href="favicon-16.png" type="image/png" sizes="16x16">
@@ -14,7 +14,8 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,500;9..144,600;9..144,700&family=Manrope:wght@400;500;600;700&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="css/admin.css?v=68">
+<link rel="stylesheet" href="css/admin.css?v=71">
+<link rel="stylesheet" href="css/login.css?v=1">
 <link rel="stylesheet" href="css/wheel.css?v=11">
 <link rel="stylesheet" href="css/promos.css?v=1">
 <!-- Критичный CSS до paint: иначе логин мелькнёт, пока качается admin.css -->
@@ -1518,108 +1519,156 @@
     <!-- WHEEL -->
     <section class="panel" id="wheel">
       <button type="button" class="back" id="wheelExit"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M15 18l-6-6 6-6"/></svg>Назад</button>
+
       <div class="wheel-head">
         <div>
-          <div class="page-title page-title-tight">Настройки фортуны</div>
-          <p class="page-desc">Редактируйте призы слева — справа живое превью как в Mini App бота.</p>
+          <div class="page-title page-title-tight">Фортуна</div>
+          <p class="page-desc">Призы, ссылки для канала и участники розыгрыша — в одном месте.</p>
         </div>
         <div class="wheel-head-actions">
-          <button type="button" class="btn" id="wheelSpinDemo" title="Прокрутить превью">Крутить</button>
+          <button type="button" class="btn" id="wheelSpinDemo" title="Прокрутить превью" hidden>Крутить превью</button>
           <button type="button" class="btn primary" id="wheelSave">Сохранить</button>
         </div>
       </div>
 
-      <div class="wheel-layout">
-        <div class="wheel-editor">
-          <div class="wheel-block">
-            <label class="lbl" for="wheelTitle">Название</label>
-            <input class="wheel-inp" id="wheelTitle" type="text" maxlength="80" placeholder="Например: Весенний розыгрыш" autocomplete="off">
-          </div>
-          <div class="wheel-block">
-            <label class="lbl" for="wheelNote">Подпись для клиента</label>
-            <textarea class="wheel-inp wheel-ta" id="wheelNote" rows="2" maxlength="240" placeholder="Крутите колесо и получите подарок от Veresk"></textarea>
-          </div>
-
-          <div class="wheel-segs-head">
-            <h3 class="subh">Секторы · <span class="rcount" id="wheelSegCount">0</span></h3>
-            <button type="button" class="btn" id="wheelAddSeg">
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M12 5v14M5 12h14"/></svg>
-              Добавить
-            </button>
-          </div>
-          <p class="wsub wheel-segs-hint">Секторы равные. Цвета — цикл брендбука (сливовый → розовый → белый). Вес меняет только шанс.</p>
-          <div class="wheel-segs" id="wheelSegs" role="list"></div>
-          <p class="msg-error" id="wheelError" hidden></p>
-        </div>
-
-        <aside class="wheel-preview-col" aria-label="Превью Mini App">
-          <div class="wheel-phone">
-            <div class="wheel-phone-bezel">
-              <div class="wheel-phone-island" aria-hidden="true"></div>
-              <div class="wheel-phone-screen">
-                <div class="wheel-phone-topbar">
-                  <span class="wheel-phone-brand">Veresk</span>
-                  <span class="wheel-phone-chip">preview</span>
-                </div>
-                <div class="wheel-phone-body" id="wheelWidgetMount"></div>
-              </div>
-            </div>
-          </div>
-          <ul class="wheel-legend" id="wheelLegend"></ul>
-        </aside>
+      <div class="wheel-tabs" role="tablist" aria-label="Разделы фортуны">
+        <button type="button" class="wheel-tab on" data-wheel-tab="setup" role="tab" aria-selected="true">Колесо</button>
+        <button type="button" class="wheel-tab" data-wheel-tab="links" role="tab" aria-selected="false">Ссылки</button>
+        <button type="button" class="wheel-tab" data-wheel-tab="plays" role="tab" aria-selected="false">
+          Участники
+          <span class="wheel-tab-badge" id="wheelPlaysBadge" hidden>0</span>
+        </button>
       </div>
 
-      <section class="wheel-promo" aria-label="Ссылка для канала">
-        <div class="wheel-promo-head">
-          <div>
-            <h3 class="subh">Ссылка для канала</h3>
-            <p class="wsub">В пост копируйте Telegram или MAX. Клиент открывает бота → жмёт кнопку → крутит колесо → билет → анкета.</p>
-          </div>
-        </div>
-        <p class="msg-error" id="wheelPromoHint" hidden></p>
-        <div class="wheel-promo-rows" id="wheelPromoRows">
-          <div class="wheel-promo-row">
-            <div class="wheel-promo-meta">
-              <span class="wheel-promo-label">Telegram (для поста)</span>
-              <span class="wheel-promo-desc">Открывает бота с кнопкой Mini App — так виден аккаунт</span>
-            </div>
-            <input class="wheel-inp wheel-promo-inp" id="wheelPromoTgApp" type="text" readonly value="" placeholder="Нужен @username бота">
-            <button type="button" class="btn primary" data-copy-from="wheelPromoTgApp">Копировать</button>
-          </div>
-          <div class="wheel-promo-row">
-            <div class="wheel-promo-meta">
-              <span class="wheel-promo-label">MAX (для поста)</span>
-              <span class="wheel-promo-desc">Промо-колесо внутри MAX</span>
-            </div>
-            <input class="wheel-inp wheel-promo-inp" id="wheelPromoMaxApp" type="text" readonly value="" placeholder="Нужен MAX_BOT_USERNAME">
-            <button type="button" class="btn" data-copy-from="wheelPromoMaxApp">Копировать</button>
-          </div>
-          <div class="wheel-promo-row">
-            <div class="wheel-promo-meta">
-              <span class="wheel-promo-label">HTTPS Mini App (не для поста)</span>
-              <span class="wheel-promo-desc">В Safari/Chrome аккаунт не виден — только для отладки</span>
-            </div>
-            <input class="wheel-inp wheel-promo-inp" id="wheelPromoMiniapp" type="text" readonly value="" placeholder="Загрузка…">
-            <button type="button" class="btn" data-copy-from="wheelPromoMiniapp">Копировать</button>
-          </div>
-        </div>
-      </section>
+      <p class="msg-error wheel-page-error" id="wheelError" hidden></p>
+      <div class="wheel-toast" id="wheelToast" hidden role="status" aria-live="polite"></div>
 
-      <section class="wheel-plays" aria-label="Участники фортуны">
-        <div class="wheel-plays-head">
-          <div>
-            <h3 class="subh">Участники</h3>
-            <p class="wsub">Кто прошёл колесо в Telegram и MAX — приз, скидка и ID.</p>
+      <!-- SETUP -->
+      <div class="wheel-pane on" id="wheelPaneSetup" data-wheel-pane="setup" role="tabpanel">
+        <div class="wheel-layout">
+          <div class="wheel-editor">
+            <div class="wheel-card">
+              <div class="wheel-card-head">
+                <h3 class="wheel-card-title">Текст в Mini App</h3>
+                <p class="wheel-card-desc">Так увидит клиент на экране колеса.</p>
+              </div>
+              <div class="wheel-fields">
+                <label class="wheel-field" for="wheelTitle">
+                  <span>Название</span>
+                  <input class="wheel-inp" id="wheelTitle" type="text" maxlength="80" placeholder="Например: Весенний розыгрыш" autocomplete="off">
+                </label>
+                <label class="wheel-field" for="wheelNote">
+                  <span>Подпись</span>
+                  <textarea class="wheel-inp wheel-ta" id="wheelNote" rows="2" maxlength="240" placeholder="Крутите колесо и получите подарок от Veresk"></textarea>
+                </label>
+              </div>
+            </div>
+
+            <div class="wheel-card">
+              <div class="wheel-segs-head">
+                <div>
+                  <h3 class="wheel-card-title">Секторы · <span class="rcount" id="wheelSegCount">0</span></h3>
+                  <p class="wheel-card-desc">Равные доли на колесе. Вес меняет только шанс выпадения.</p>
+                </div>
+                <button type="button" class="btn" id="wheelAddSeg">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M12 5v14M5 12h14"/></svg>
+                  Добавить
+                </button>
+              </div>
+              <div class="wheel-chance-bar" id="wheelChanceBar" aria-hidden="true"></div>
+              <div class="wheel-segs" id="wheelSegs" role="list"></div>
+            </div>
           </div>
-          <div class="wheel-plays-actions">
-            <div class="wheel-plays-stats" id="wheelPlaysStats" hidden></div>
-            <button type="button" class="btn" id="wheelPlaysRefresh" title="Обновить список">Обновить</button>
+
+          <aside class="wheel-preview-col" aria-label="Превью Mini App">
+            <div class="wheel-preview-card">
+              <div class="wheel-preview-head">
+                <span class="wheel-preview-label">Превью</span>
+                <button type="button" class="btn wheel-preview-spin" id="wheelSpinDemoSide" title="Прокрутить превью">Крутить</button>
+              </div>
+              <div class="wheel-phone">
+                <div class="wheel-phone-bezel">
+                  <div class="wheel-phone-island" aria-hidden="true"></div>
+                  <div class="wheel-phone-screen">
+                    <div class="wheel-phone-topbar">
+                      <span class="wheel-phone-brand">Veresk</span>
+                      <span class="wheel-phone-chip">preview</span>
+                    </div>
+                    <div class="wheel-phone-body" id="wheelWidgetMount"></div>
+                  </div>
+                </div>
+              </div>
+              <ul class="wheel-legend" id="wheelLegend"></ul>
+            </div>
+          </aside>
+        </div>
+      </div>
+
+      <!-- LINKS -->
+      <div class="wheel-pane" id="wheelPaneLinks" data-wheel-pane="links" role="tabpanel" hidden>
+        <div class="wheel-card">
+          <div class="wheel-card-head">
+            <h3 class="wheel-card-title">Ссылка для канала</h3>
+            <p class="wheel-card-desc">Клиент крутит колесо → получает запечатанный билет → приз открывается после анкеты.</p>
+          </div>
+          <ol class="wheel-flow">
+            <li><span>1</span>Пост в канале</li>
+            <li><span>2</span>Крутит колесо</li>
+            <li><span>3</span>Билет</li>
+            <li><span>4</span>Анкета → приз</li>
+          </ol>
+          <p class="msg-error" id="wheelPromoHint" hidden></p>
+          <div class="wheel-promo-rows" id="wheelPromoRows">
+            <div class="wheel-promo-row wheel-promo-row--primary">
+              <div class="wheel-promo-meta">
+                <span class="wheel-promo-badge">Рекомендуем</span>
+                <span class="wheel-promo-label">Telegram</span>
+                <span class="wheel-promo-desc">Для поста в канал — открывает бота с кнопкой Mini App</span>
+              </div>
+              <input class="wheel-inp wheel-promo-inp" id="wheelPromoTgApp" type="text" readonly value="" placeholder="Нужен @username бота">
+              <button type="button" class="btn primary" data-copy-from="wheelPromoTgApp">Копировать</button>
+            </div>
+            <div class="wheel-promo-row">
+              <div class="wheel-promo-meta">
+                <span class="wheel-promo-label">MAX</span>
+                <span class="wheel-promo-desc">Промо-колесо внутри MAX</span>
+              </div>
+              <input class="wheel-inp wheel-promo-inp" id="wheelPromoMaxApp" type="text" readonly value="" placeholder="Нужен MAX_BOT_USERNAME">
+              <button type="button" class="btn" data-copy-from="wheelPromoMaxApp">Копировать</button>
+            </div>
+            <details class="wheel-promo-advanced">
+              <summary>Дополнительно для отладки</summary>
+              <div class="wheel-promo-row">
+                <div class="wheel-promo-meta">
+                  <span class="wheel-promo-label">HTTPS Mini App</span>
+                  <span class="wheel-promo-desc">В Safari/Chrome аккаунт не виден — не для поста</span>
+                </div>
+                <input class="wheel-inp wheel-promo-inp" id="wheelPromoMiniapp" type="text" readonly value="" placeholder="Загрузка…">
+                <button type="button" class="btn" data-copy-from="wheelPromoMiniapp">Копировать</button>
+              </div>
+            </details>
           </div>
         </div>
-        <div class="wheel-plays-list" id="wheelPlaysList">
-          <div class="wheel-plays-empty">Пока никто не крутил колесо</div>
+      </div>
+
+      <!-- PLAYS -->
+      <div class="wheel-pane" id="wheelPanePlays" data-wheel-pane="plays" role="tabpanel" hidden>
+        <div class="wheel-card">
+          <div class="wheel-plays-head">
+            <div>
+              <h3 class="wheel-card-title">Участники</h3>
+              <p class="wheel-card-desc">Кто крутил колесо в Telegram и MAX — приз, статус билета и ID.</p>
+            </div>
+            <div class="wheel-plays-actions">
+              <div class="wheel-plays-stats" id="wheelPlaysStats" hidden></div>
+              <button type="button" class="btn" id="wheelPlaysRefresh" title="Обновить список">Обновить</button>
+            </div>
+          </div>
+          <div class="wheel-plays-list" id="wheelPlaysList">
+            <div class="wheel-plays-empty">Пока никто не крутил колесо</div>
+          </div>
         </div>
-      </section>
+      </div>
     </section>
 
     </div>
@@ -1694,6 +1743,6 @@
 <script src="js/qrcode.min.js?v=1"></script>
 <script src="js/api.js?v=41"></script>
 <script src="js/wheel-widget.js?v=13"></script>
-<script src="js/app.js?v=75"></script>
+<script src="js/app.js?v=76"></script>
 </body>
 </html>
