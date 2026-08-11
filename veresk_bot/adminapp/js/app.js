@@ -87,6 +87,7 @@
     { id: "home", label: "Главная" },
     { id: "chats", label: "Чаты" },
     { id: "clients", label: "Клиенты" },
+    { id: "promos", label: "Акции" },
     { id: "wheel", label: "Фортуна" },
     { id: "aichat", label: "ИИ чат" },
     { id: "bots", label: "Боты" },
@@ -98,6 +99,7 @@
     clients: true,
     chats: true,
     bots: false,
+    promos: false,
     wheel: false,
     settings: false,
     aichat: false,
@@ -132,7 +134,7 @@
   }
 
   function firstAllowedTab() {
-    const order = ["home", "chats", "clients", "wheel", "aichat", "bots", "settings"];
+    const order = ["home", "chats", "clients", "promos", "wheel", "aichat", "bots", "settings"];
     return order.find((t) => canAccess(t)) || "home";
   }
 
@@ -170,6 +172,7 @@
     "settings",
     "bots",
     "wheel",
+    "promos",
   ]);
 
   function go(tab) {
@@ -194,6 +197,9 @@
       } else if (tab === "wheel") {
         mtopHi.textContent = "Фортуна";
         mtopSub.textContent = "Настройки колеса";
+      } else if (tab === "promos") {
+        mtopHi.textContent = "Акции";
+        mtopSub.textContent = "Скидки и предложения";
       } else if (tab === "home") {
         mtopHi.textContent = "Здравствуйте";
         mtopSub.textContent = "Что отправим клиентам сегодня?";
@@ -214,6 +220,7 @@
       setStep(0);
     }
     if (tab === "wheel" && typeof initWheelEditor === "function") initWheelEditor();
+    if (tab === "promos" && typeof initPromosPanel === "function") initPromosPanel();
     if (tab === "home") loadHome();
     if (tab === "clients") {
       if (clientsView === "subscribers") loadSubscribers();
@@ -5522,7 +5529,7 @@
   function updatePreview() {
     if (!msgPreviewEl || !msgTa) return;
     const raw = msgTa.value;
-    const disc = "15%";
+    const disc = window.__vereskActiveDiscount || "15%";
     if (!raw.trim()) {
       msgPreviewEl.innerHTML = `<span class="pv-empty">Текст появится здесь…</span>`;
     } else {
@@ -8460,6 +8467,521 @@
     }
   }
   window.initWheelEditor = initWheelEditor;
+
+  // ── Акции ────────────────────────────────────────────────────────────────
+
+  const promoState = {
+    inited: false,
+    items: [],
+    selectedId: null,
+    status: "all",
+    search: "",
+    searchTimer: null,
+    activeDiscount: null,
+    aiResult: null,
+  };
+
+  const PROMO_TYPE_LABELS = {
+    discount: "Скидка",
+    gift: "Подарок",
+    seasonal: "Сезонная",
+    welcome: "Приветствие",
+    reactivation: "Возврат",
+    birthday: "День рождения",
+    anniversary: "Годовщина",
+    other: "Другое",
+  };
+  const PROMO_STATUS_LABELS = {
+    draft: "Черновик",
+    active: "Активна",
+    paused: "Пауза",
+    archived: "Архив",
+  };
+
+  function promoVal(id) {
+    return $(id)?.value ?? "";
+  }
+  function setPromoVal(id, v) {
+    const el = $(id);
+    if (el) el.value = v == null ? "" : String(v);
+  }
+  function setPromoCheck(id, on) {
+    const el = $(id);
+    if (el) el.checked = !!on;
+  }
+
+  function renderPromoKpis(data) {
+    const box = $("#promoKpis");
+    if (!box) return;
+    const counts = data.counts || {};
+    const overview = data.overview || {};
+    const live =
+      (overview.live && overview.live.length) ||
+      counts.live ||
+      (data.items || []).filter((x) => x.is_live).length;
+    const ending = (overview.ending_soon || []).length;
+    const disc = data.active_discount || overview.active_discount || "—";
+    box.innerHTML = `
+      <div class="promos-kpi"><div class="k">Живые сейчас</div><div class="v">${esc(live)}</div><div class="s">в окне дат</div></div>
+      <div class="promos-kpi"><div class="k">{скидка}</div><div class="v" style="font-size:22px">${esc(disc)}</div><div class="s">в рассылках</div></div>
+      <div class="promos-kpi"><div class="k">Автопоздравления</div><div class="v">${esc(overview.auto_mail_enabled ?? "—")}</div><div class="s">акций подключено</div></div>
+      <div class="promos-kpi"><div class="k">Заканчиваются</div><div class="v">${esc(ending)}</div><div class="s">в ближайшие 7 дней</div></div>
+    `;
+  }
+
+  function renderPromoList() {
+    const box = $("#promoList");
+    if (!box) return;
+    const items = promoState.items || [];
+    if (!items.length) {
+      box.innerHTML =
+        '<div class="promos-list-empty">Пока нет акций.<br>Создайте первую или спросите ИИ.</div>';
+      return;
+    }
+    box.innerHTML = items
+      .map((p) => {
+        const active = String(p.id) === String(promoState.selectedId) ? " active" : "";
+        const status = p.is_live
+          ? '<span class="promos-badge ok">live</span>'
+          : `<span class="promos-badge muted">${esc(
+              PROMO_STATUS_LABELS[p.status] || p.status || ""
+            )}</span>`;
+        const disc = p.discount_display || p.discount_text || "—";
+        const type = PROMO_TYPE_LABELS[p.promo_type] || p.promo_type || "";
+        return `<button type="button" class="promos-row${active}" data-promo-id="${esc(
+          p.id
+        )}" role="listitem">
+          <span class="promos-row-emoji">${esc(p.emoji || "🎁")}</span>
+          <span>
+            <div class="promos-row-title">${esc(p.title || "Без названия")} ${status}</div>
+            <div class="promos-row-sub">${esc(type)} · ${esc(p.segment || "all")}</div>
+          </span>
+          <span class="promos-row-disc">${esc(disc)}</span>
+        </button>`;
+      })
+      .join("");
+  }
+
+  function updatePromoPreview() {
+    const box = $("#promoPreview");
+    if (!box) return;
+    const name = "Анна";
+    let disc =
+      promoVal("promoDiscountText").trim() ||
+      (promoVal("promoDiscountPct")
+        ? promoVal("promoDiscountPct").trim() + "%"
+        : "") ||
+      promoState.activeDiscount ||
+      "15%";
+    let tpl =
+      promoVal("promoTemplate").trim() ||
+      `Здравствуйте, {имя}!\n\nДля вас скидка {скидка} на любой букет.\n\nВаш Veresk 🌷`;
+    const text = tpl
+      .replace(/\{имя\}/gi, name)
+      .replace(/\{скидка\}/gi, disc);
+    box.innerHTML = `<div class="pv-label">Превью сообщения</div>${esc(text)}`;
+  }
+
+  function showPromoEditor(show) {
+    const form = $("#promoForm");
+    const empty = $("#promoEmptyEditor");
+    if (form) form.hidden = !show;
+    if (empty) empty.hidden = !!show;
+  }
+
+  function fillPromoForm(p) {
+    const isNew = !p || !p.id;
+    setPromoVal("promoId", isNew ? "" : p.id);
+    setPromoVal("promoEmoji", (p && p.emoji) || "🎁");
+    setPromoVal("promoTitle", (p && p.title) || "");
+    setPromoVal("promoType", (p && p.promo_type) || "discount");
+    setPromoVal("promoStatus", (p && p.status) || "draft");
+    setPromoVal("promoSegment", (p && p.segment) || "all");
+    setPromoVal("promoPriority", p && p.priority != null ? p.priority : 0);
+    setPromoVal(
+      "promoDiscountPct",
+      p && p.discount_pct != null && p.discount_pct !== "" ? p.discount_pct : ""
+    );
+    setPromoVal("promoDiscountText", (p && p.discount_text) || "");
+    setPromoVal("promoStarts", (p && p.starts_at) || "");
+    setPromoVal("promoEnds", (p && p.ends_at) || "");
+    setPromoVal("promoDesc", (p && p.description) || "");
+    setPromoVal("promoTemplate", (p && p.message_template) || "");
+    setPromoVal(
+      "promoTags",
+      Array.isArray(p && p.tags) ? p.tags.join(", ") : (p && p.tags) || ""
+    );
+    setPromoVal("promoNotes", (p && p.notes) || "");
+    setPromoCheck("promoUseMailing", p ? p.use_in_mailing !== false : true);
+    setPromoCheck("promoUseAuto", p ? p.use_in_auto_mail !== false : true);
+    const channels = String((p && p.channels) || "tg,max");
+    setPromoCheck("promoChTg", channels.includes("tg"));
+    setPromoCheck("promoChMax", channels.includes("max"));
+    const title = $("#promoFormTitle");
+    if (title) title.textContent = isNew ? "Новая акция" : "Редактирование";
+    const del = $("#promoDeleteBtn");
+    if (del) del.hidden = isNew;
+    const err = $("#promoFormError");
+    if (err) {
+      err.hidden = true;
+      err.textContent = "";
+    }
+    showPromoEditor(true);
+    updatePromoPreview();
+  }
+
+  function collectPromoPayload() {
+    const channels = [];
+    if ($("#promoChTg")?.checked) channels.push("tg");
+    if ($("#promoChMax")?.checked) channels.push("max");
+    const pctRaw = promoVal("promoDiscountPct").trim();
+    return {
+      title: promoVal("promoTitle").trim(),
+      emoji: promoVal("promoEmoji").trim() || "🎁",
+      promo_type: promoVal("promoType") || "discount",
+      status: promoVal("promoStatus") || "draft",
+      segment: promoVal("promoSegment") || "all",
+      priority: Number(promoVal("promoPriority") || 0),
+      discount_pct: pctRaw === "" ? null : Number(pctRaw),
+      discount_text: promoVal("promoDiscountText").trim(),
+      starts_at: promoVal("promoStarts") || null,
+      ends_at: promoVal("promoEnds") || null,
+      description: promoVal("promoDesc").trim(),
+      message_template: promoVal("promoTemplate").trim(),
+      tags: promoVal("promoTags")
+        .split(/[,;]+/)
+        .map((t) => t.trim())
+        .filter(Boolean),
+      notes: promoVal("promoNotes").trim(),
+      use_in_mailing: !!$("#promoUseMailing")?.checked,
+      use_in_auto_mail: !!$("#promoUseAuto")?.checked,
+      channels: channels.length ? channels.join(",") : "tg,max",
+    };
+  }
+
+  function openNewPromo(prefill) {
+    promoState.selectedId = null;
+    fillPromoForm(
+      prefill || {
+        emoji: "🎁",
+        promo_type: "discount",
+        status: "draft",
+        segment: "all",
+        discount_pct: 15,
+        discount_text: "15%",
+        use_in_mailing: true,
+        use_in_auto_mail: true,
+        channels: "tg,max",
+        message_template:
+          "Здравствуйте, {имя}!\n\nДля вас скидка {скидка} на любой букет.\n\nВаш Veresk 🌷",
+      }
+    );
+    renderPromoList();
+    $("#promoTitle")?.focus();
+  }
+
+  async function selectPromo(id) {
+    promoState.selectedId = id;
+    renderPromoList();
+    const local = (promoState.items || []).find((x) => String(x.id) === String(id));
+    if (local) fillPromoForm(local);
+    try {
+      const row = await AdminAPI.promotion(id);
+      fillPromoForm(row);
+    } catch (err) {
+      console.warn("[promos] get", err);
+    }
+  }
+
+  async function loadPromos() {
+    const params = { limit: 100 };
+    if (promoState.status && promoState.status !== "all") {
+      params.status = promoState.status;
+    }
+    if (promoState.search) params.q = promoState.search;
+    try {
+      const data = await AdminAPI.promotions(params);
+      promoState.items = data.items || [];
+      promoState.activeDiscount = data.active_discount || null;
+      window.__vereskActiveDiscount = promoState.activeDiscount || null;
+      renderPromoKpis(data);
+      renderPromoList();
+      if (
+        promoState.selectedId &&
+        !promoState.items.some((x) => String(x.id) === String(promoState.selectedId))
+      ) {
+        promoState.selectedId = null;
+        showPromoEditor(false);
+      }
+    } catch (err) {
+      console.warn("[promos] list", err);
+      const box = $("#promoList");
+      if (box) {
+        box.innerHTML =
+          '<div class="promos-list-empty">Не удалось загрузить акции</div>';
+      }
+    }
+  }
+
+  async function savePromo(ev) {
+    ev?.preventDefault?.();
+    const errEl = $("#promoFormError");
+    const btn = $("#promoSaveBtn");
+    const payload = collectPromoPayload();
+    if (!payload.title) {
+      if (errEl) {
+        errEl.textContent = "Укажите название";
+        errEl.hidden = false;
+      }
+      return;
+    }
+    if (errEl) errEl.hidden = true;
+    if (btn) {
+      btn.disabled = true;
+      btn.textContent = "Сохраняю…";
+    }
+    try {
+      const id = promoVal("promoId");
+      let res;
+      if (id) res = await AdminAPI.updatePromotion(id, payload);
+      else res = await AdminAPI.createPromotion(payload);
+      const item = res.item || res;
+      promoState.selectedId = item.id;
+      await loadPromos();
+      fillPromoForm(item);
+    } catch (err) {
+      const detail =
+        err.data?.detail || err.data?.error || err.message || "Ошибка сохранения";
+      if (errEl) {
+        errEl.textContent = detail;
+        errEl.hidden = false;
+      }
+    } finally {
+      if (btn) {
+        btn.disabled = false;
+        btn.textContent = "Сохранить";
+      }
+    }
+  }
+
+  async function deletePromo() {
+    const id = promoVal("promoId");
+    if (!id) return;
+    if (!confirm("Удалить эту акцию?")) return;
+    try {
+      await AdminAPI.deletePromotion(id);
+      promoState.selectedId = null;
+      showPromoEditor(false);
+      await loadPromos();
+    } catch (err) {
+      alert(err.data?.detail || err.message || "Не удалось удалить");
+    }
+  }
+
+  function renderPromoAiResult(result) {
+    const box = $("#promoAiBody");
+    if (!box) return;
+    if (!result) {
+      box.innerHTML =
+        '<div class="promos-ai-empty">Нажмите «Анализировать» — получите идеи акций и рассылок.</div>';
+      return;
+    }
+    const insights = (result.insights || [])
+      .map((t) => `<li>${esc(t)}</li>`)
+      .join("");
+    const risks = (result.risks || [])
+      .map((t) => `<li>${esc(t)}</li>`)
+      .join("");
+    const ideas = (result.mailing_ideas || [])
+      .map(
+        (m) => `<div class="promos-suggest">
+          <div>
+            <div class="promos-suggest-title">${esc(m.title || "")}
+              <span class="promos-badge muted">${esc(m.segment || "")}</span>
+            </div>
+            <div class="promos-suggest-meta">${esc(m.hook || "")}</div>
+            <div class="promos-suggest-why">${esc(m.why || "")}</div>
+          </div>
+        </div>`
+      )
+      .join("");
+    const suggestions = (result.suggestions || [])
+      .map((s, idx) => {
+        const conf = Math.round((Number(s.confidence) || 0.7) * 100);
+        const disc = s.discount_text || (s.discount_pct != null ? s.discount_pct + "%" : "—");
+        return `<div class="promos-suggest" data-suggest-idx="${idx}">
+          <div>
+            <div class="promos-suggest-title">${esc(s.emoji || "🎁")} ${esc(s.title || "")}
+              <span class="promos-badge">${esc(PROMO_TYPE_LABELS[s.promo_type] || s.promo_type || "")}</span>
+              <span class="promos-badge ok">${esc(disc)}</span>
+              <span class="promos-badge muted">${esc(conf)}%</span>
+            </div>
+            <div class="promos-suggest-meta">сегмент ${esc(s.segment || "all")}${
+              s.use_in_auto_mail ? " · автопоздравления" : ""
+            }${s.use_in_mailing ? " · {скидка}" : ""}</div>
+            <div class="promos-suggest-why">${esc(s.rationale || s.description || "")}</div>
+          </div>
+          <div class="promos-suggest-actions">
+            <button type="button" class="btn primary" data-apply-suggest="${idx}">В черновик</button>
+            <button type="button" class="btn" data-edit-suggest="${idx}">Открыть</button>
+          </div>
+        </div>`;
+      })
+      .join("");
+    box.innerHTML = `
+      <div class="promos-ai-summary">
+        <h4>Сводка</h4>
+        <p>${esc(result.summary || "—")}</p>
+      </div>
+      ${
+        insights
+          ? `<div class="promos-ai-summary"><h4>Инсайты</h4><ul style="margin:0;padding-left:18px">${insights}</ul></div>`
+          : ""
+      }
+      <div class="promos-ai-list">${suggestions || '<div class="promos-ai-empty">Нет предложений акций</div>'}</div>
+      ${
+        ideas
+          ? `<div class="promos-ai-summary"><h4>Идеи рассылок</h4></div><div class="promos-ai-list">${ideas}</div>`
+          : ""
+      }
+      ${
+        risks
+          ? `<div class="promos-ai-summary"><h4>Риски</h4><ul style="margin:0;padding-left:18px">${risks}</ul></div>`
+          : ""
+      }
+    `;
+  }
+
+  async function runPromoAnalyze() {
+    const errEl = $("#promoAiError");
+    const body = $("#promoAiBody");
+    const btn = $("#promoAiRun");
+    if (errEl) errEl.hidden = true;
+    if (body)
+      body.innerHTML =
+        '<div class="promos-ai-loading">Анализирую CRM и акции… обычно 10–30 сек</div>';
+    if (btn) {
+      btn.disabled = true;
+      btn.textContent = "Анализ…";
+    }
+    try {
+      const result = await AdminAPI.analyzePromotions({
+        focus: promoVal("promoAiFocus").trim(),
+        horizon_days: Number(promoVal("promoAiHorizon") || 14),
+      });
+      promoState.aiResult = result;
+      renderPromoAiResult(result);
+    } catch (err) {
+      const detail =
+        err.data?.detail || err.data?.error || err.message || "Ошибка анализа";
+      if (errEl) {
+        errEl.textContent = detail;
+        errEl.hidden = false;
+      }
+      if (body) {
+        body.innerHTML = `<div class="promos-ai-empty">${esc(detail)}${
+          err.status === 503
+            ? ' <button type="button" class="linkish" onclick="go(\'settings\')">Настройки → Сервисы</button>'
+            : ""
+        }</div>`;
+      }
+    } finally {
+      if (btn) {
+        btn.disabled = false;
+        btn.textContent = "Анализировать";
+      }
+    }
+  }
+
+  async function applyPromoSuggestion(idx, { openOnly = false } = {}) {
+    const s = (promoState.aiResult?.suggestions || [])[idx];
+    if (!s) return;
+    if (openOnly) {
+      openNewPromo({
+        ...s,
+        status: "draft",
+        notes: s.rationale ? `ИИ: ${s.rationale}` : "",
+      });
+      return;
+    }
+    try {
+      const res = await AdminAPI.applyPromoSuggestion({
+        suggestion: s,
+        status: "draft",
+      });
+      const item = res.item || res;
+      await loadPromos();
+      promoState.selectedId = item.id;
+      fillPromoForm(item);
+      renderPromoList();
+    } catch (err) {
+      alert(err.data?.detail || err.message || "Не удалось создать");
+    }
+  }
+
+  function initPromosPanel() {
+    if (!promoState.inited) {
+      $("#promoCreateBtn")?.addEventListener("click", () => openNewPromo());
+      $("#promoEmptyCreate")?.addEventListener("click", () => openNewPromo());
+      $("#promoDeleteBtn")?.addEventListener("click", () => deletePromo());
+      $("#promoForm")?.addEventListener("submit", (e) => savePromo(e));
+      ["promoTemplate", "promoDiscountText", "promoDiscountPct", "promoTitle"].forEach(
+        (id) => {
+          $(`#${id}`)?.addEventListener("input", updatePromoPreview);
+        }
+      );
+      $("#promoList")?.addEventListener("click", (e) => {
+        const row = e.target.closest("[data-promo-id]");
+        if (!row) return;
+        selectPromo(row.getAttribute("data-promo-id"));
+      });
+      $("#promoStatusTabs")?.addEventListener("click", (e) => {
+        const tab = e.target.closest("[data-status]");
+        if (!tab) return;
+        promoState.status = tab.getAttribute("data-status") || "all";
+        $$("#promoStatusTabs .promos-tab").forEach((el) =>
+          el.classList.toggle("active", el === tab)
+        );
+        loadPromos();
+      });
+      $("#promoSearch")?.addEventListener("input", (e) => {
+        clearTimeout(promoState.searchTimer);
+        promoState.searchTimer = setTimeout(() => {
+          promoState.search = (e.target.value || "").trim();
+          loadPromos();
+        }, 280);
+      });
+      $("#promoAnalyzeBtn")?.addEventListener("click", () => {
+        const panel = $("#promoAiPanel");
+        if (!panel) return;
+        panel.hidden = !panel.hidden;
+        if (!panel.hidden && !promoState.aiResult) {
+          /* keep empty state */
+        }
+      });
+      $("#promoAiClose")?.addEventListener("click", () => {
+        const panel = $("#promoAiPanel");
+        if (panel) panel.hidden = true;
+      });
+      $("#promoAiRun")?.addEventListener("click", () => runPromoAnalyze());
+      $("#promoAiBody")?.addEventListener("click", (e) => {
+        const apply = e.target.closest("[data-apply-suggest]");
+        if (apply) {
+          applyPromoSuggestion(Number(apply.getAttribute("data-apply-suggest")));
+          return;
+        }
+        const edit = e.target.closest("[data-edit-suggest]");
+        if (edit) {
+          applyPromoSuggestion(Number(edit.getAttribute("data-edit-suggest")), {
+            openOnly: true,
+          });
+        }
+      });
+      promoState.inited = true;
+    }
+    loadPromos();
+  }
+  window.initPromosPanel = initPromosPanel;
 
   // boot
   tryAuth();

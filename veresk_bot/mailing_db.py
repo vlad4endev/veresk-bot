@@ -195,6 +195,33 @@ CREATE INDEX IF NOT EXISTS idx_fortune_plays_created
     ON fortune_plays (created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_fortune_plays_channel
     ON fortune_plays (channel, created_at DESC);
+
+CREATE TABLE IF NOT EXISTS promotions (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    title TEXT NOT NULL,
+    emoji TEXT NOT NULL DEFAULT '🎁',
+    promo_type TEXT NOT NULL DEFAULT 'discount',
+    discount_pct REAL,
+    discount_text TEXT NOT NULL DEFAULT '',
+    description TEXT NOT NULL DEFAULT '',
+    message_template TEXT NOT NULL DEFAULT '',
+    segment TEXT NOT NULL DEFAULT 'all',
+    channels TEXT NOT NULL DEFAULT 'tg,max',
+    status TEXT NOT NULL DEFAULT 'draft',
+    starts_at TEXT,
+    ends_at TEXT,
+    use_in_auto_mail INTEGER NOT NULL DEFAULT 1,
+    use_in_mailing INTEGER NOT NULL DEFAULT 1,
+    priority INTEGER NOT NULL DEFAULT 0,
+    tags TEXT NOT NULL DEFAULT '',
+    notes TEXT NOT NULL DEFAULT '',
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_promotions_status ON promotions (status);
+CREATE INDEX IF NOT EXISTS idx_promotions_dates ON promotions (starts_at, ends_at);
+CREATE INDEX IF NOT EXISTS idx_promotions_priority ON promotions (priority DESC);
 """
 
 
@@ -1683,6 +1710,7 @@ ADMIN_PERMISSION_DEFS: tuple[tuple[str, str], ...] = (
     ("home", "Главная"),
     ("chats", "Чаты"),
     ("clients", "Клиенты"),
+    ("promos", "Акции"),
     ("wheel", "Фортуна"),
     ("aichat", "ИИ чат"),
     ("bots", "Боты"),
@@ -2606,3 +2634,596 @@ async def list_fortune_plays(*, limit: int = 100, offset: int = 0) -> dict[str, 
         }
 
     return await _run_db(_list)
+
+
+# ── promotions (акции / скидки) ─────────────────────────────────────────────
+
+PROMO_TYPES = (
+    "discount",
+    "gift",
+    "seasonal",
+    "welcome",
+    "reactivation",
+    "birthday",
+    "anniversary",
+    "other",
+)
+PROMO_STATUSES = ("draft", "active", "paused", "archived")
+PROMO_SEGMENTS = (
+    "all",
+    "regular",
+    "new",
+    "inactive",
+    "channel_subscribers",
+    "channel_subscribers_new",
+)
+
+
+def _promo_tags_to_storage(raw: Any) -> str:
+    if raw is None:
+        return ""
+    if isinstance(raw, str):
+        text = raw.strip()
+        if not text:
+            return ""
+        if text.startswith("["):
+            try:
+                parsed = json.loads(text)
+                if isinstance(parsed, list):
+                    return json.dumps(
+                        [str(x).strip() for x in parsed if str(x).strip()],
+                        ensure_ascii=False,
+                    )
+            except json.JSONDecodeError:
+                pass
+        parts = [p.strip() for p in re.split(r"[,;]+", text) if p.strip()]
+        return json.dumps(parts, ensure_ascii=False) if parts else ""
+    if isinstance(raw, (list, tuple, set)):
+        parts = [str(x).strip() for x in raw if str(x).strip()]
+        return json.dumps(parts, ensure_ascii=False) if parts else ""
+    return ""
+
+
+def _promo_tags_from_storage(raw: Any) -> list[str]:
+    if raw is None:
+        return []
+    if isinstance(raw, list):
+        return [str(x).strip() for x in raw if str(x).strip()]
+    text = str(raw or "").strip()
+    if not text:
+        return []
+    try:
+        parsed = json.loads(text)
+        if isinstance(parsed, list):
+            return [str(x).strip() for x in parsed if str(x).strip()]
+    except json.JSONDecodeError:
+        pass
+    return [p.strip() for p in re.split(r"[,;]+", text) if p.strip()]
+
+
+def _format_discount_text(pct: float | None, text: str | None = None) -> str:
+    t = (text or "").strip()
+    if t:
+        return t
+    if pct is None:
+        return ""
+    try:
+        n = float(pct)
+    except (TypeError, ValueError):
+        return ""
+    if n <= 0:
+        return ""
+    if abs(n - round(n)) < 1e-9:
+        return f"{int(round(n))}%"
+    return f"{n:g}%"
+
+
+def _serialize_promo(row: dict[str, Any] | sqlite3.Row) -> dict[str, Any]:
+    d = dict(row)
+    d["tags"] = _promo_tags_from_storage(d.get("tags"))
+    d["use_in_auto_mail"] = bool(int(d.get("use_in_auto_mail") or 0))
+    d["use_in_mailing"] = bool(int(d.get("use_in_mailing") or 0))
+    try:
+        d["priority"] = int(d.get("priority") or 0)
+    except (TypeError, ValueError):
+        d["priority"] = 0
+    pct = d.get("discount_pct")
+    if pct is not None:
+        try:
+            d["discount_pct"] = float(pct)
+        except (TypeError, ValueError):
+            d["discount_pct"] = None
+    disc = _format_discount_text(d.get("discount_pct"), d.get("discount_text"))
+    d["discount_display"] = disc
+    d["is_live"] = _promo_is_live(d)
+    return d
+
+
+def _promo_date_only(value: str | None) -> str | None:
+    raw = (value or "").strip()
+    if not raw:
+        return None
+    return raw[:10]
+
+
+def _promo_is_live(promo: dict[str, Any], *, today: str | None = None) -> bool:
+    if (promo.get("status") or "").strip() != "active":
+        return False
+    day = today or datetime.now().date().isoformat()
+    start = _promo_date_only(promo.get("starts_at"))
+    end = _promo_date_only(promo.get("ends_at"))
+    if start and day < start:
+        return False
+    if end and day > end:
+        return False
+    return True
+
+
+def _normalize_promo_payload(data: dict[str, Any], *, partial: bool = False) -> dict[str, Any]:
+    out: dict[str, Any] = {}
+
+    if "title" in data or not partial:
+        title = str(data.get("title") or "").strip()
+        if not title:
+            raise ValueError("Укажите название акции")
+        if len(title) > 120:
+            raise ValueError("Название слишком длинное (макс. 120)")
+        out["title"] = title
+
+    if "emoji" in data or not partial:
+        emoji = str(data.get("emoji") or "🎁").strip() or "🎁"
+        out["emoji"] = emoji[:16]
+
+    if "promo_type" in data or not partial:
+        ptype = str(data.get("promo_type") or "discount").strip().lower() or "discount"
+        if ptype not in PROMO_TYPES:
+            raise ValueError(f"Неизвестный тип акции: {ptype}")
+        out["promo_type"] = ptype
+
+    if "discount_pct" in data or not partial:
+        raw_pct = data.get("discount_pct")
+        if raw_pct is None or raw_pct == "":
+            out["discount_pct"] = None
+        else:
+            try:
+                pct = float(raw_pct)
+            except (TypeError, ValueError) as exc:
+                raise ValueError("Скидка должна быть числом") from exc
+            if pct < 0 or pct > 100:
+                raise ValueError("Скидка должна быть от 0 до 100%")
+            out["discount_pct"] = pct
+
+    if "discount_text" in data or not partial:
+        out["discount_text"] = str(data.get("discount_text") or "").strip()[:40]
+
+    if "description" in data or not partial:
+        out["description"] = str(data.get("description") or "").strip()[:2000]
+
+    if "message_template" in data or not partial:
+        out["message_template"] = str(data.get("message_template") or "").strip()[:4000]
+
+    if "segment" in data or not partial:
+        segment = str(data.get("segment") or "all").strip() or "all"
+        if segment not in PROMO_SEGMENTS:
+            raise ValueError(f"Неизвестный сегмент: {segment}")
+        out["segment"] = segment
+
+    if "channels" in data or not partial:
+        channels_raw = data.get("channels")
+        if isinstance(channels_raw, (list, tuple)):
+            parts = [str(c).strip().lower() for c in channels_raw if str(c).strip()]
+        else:
+            parts = [
+                p.strip().lower()
+                for p in re.split(r"[,;\s]+", str(channels_raw or "tg,max"))
+                if p.strip()
+            ]
+        norm: list[str] = []
+        for p in parts:
+            if p == "telegram":
+                p = "tg"
+            if p in ("tg", "max") and p not in norm:
+                norm.append(p)
+        if not norm:
+            norm = ["tg", "max"]
+        out["channels"] = ",".join(norm)
+
+    if "status" in data or not partial:
+        status = str(data.get("status") or "draft").strip().lower() or "draft"
+        if status not in PROMO_STATUSES:
+            raise ValueError(f"Неизвестный статус: {status}")
+        out["status"] = status
+
+    for key in ("starts_at", "ends_at"):
+        if key in data or not partial:
+            raw = data.get(key)
+            if raw is None or str(raw).strip() == "":
+                out[key] = None
+            else:
+                day = _promo_date_only(str(raw))
+                if not day or len(day) < 10:
+                    raise ValueError(f"Некорректная дата: {key}")
+                out[key] = day
+
+    if "use_in_auto_mail" in data or not partial:
+        out["use_in_auto_mail"] = 1 if data.get("use_in_auto_mail", True) else 0
+
+    if "use_in_mailing" in data or not partial:
+        out["use_in_mailing"] = 1 if data.get("use_in_mailing", True) else 0
+
+    if "priority" in data or not partial:
+        try:
+            out["priority"] = int(data.get("priority") or 0)
+        except (TypeError, ValueError) as exc:
+            raise ValueError("Приоритет должен быть целым числом") from exc
+        out["priority"] = max(-100, min(100, out["priority"]))
+
+    if "tags" in data or not partial:
+        out["tags"] = _promo_tags_to_storage(data.get("tags"))
+
+    if "notes" in data or not partial:
+        out["notes"] = str(data.get("notes") or "").strip()[:2000]
+
+    if not partial:
+        start = out.get("starts_at")
+        end = out.get("ends_at")
+        if start and end and start > end:
+            raise ValueError("Дата начала позже даты окончания")
+
+    if "discount_text" in out and not out["discount_text"] and out.get("discount_pct") is not None:
+        out["discount_text"] = _format_discount_text(out.get("discount_pct"))
+
+    return out
+
+
+async def list_promotions(
+    *,
+    status: str | None = None,
+    promo_type: str | None = None,
+    search: str = "",
+    limit: int = 100,
+    offset: int = 0,
+) -> dict[str, Any]:
+    lim = max(1, min(int(limit or 100), 300))
+    off = max(0, int(offset or 0))
+    st = (status or "").strip().lower() or None
+    pt = (promo_type or "").strip().lower() or None
+    q = (search or "").strip()
+
+    def _list() -> dict[str, Any]:
+        clauses: list[str] = []
+        params: list[Any] = []
+        if st and st != "all":
+            if st == "live":
+                today = datetime.now().date().isoformat()
+                clauses.append("status = 'active'")
+                clauses.append("(starts_at IS NULL OR starts_at = '' OR starts_at <= ?)")
+                clauses.append("(ends_at IS NULL OR ends_at = '' OR ends_at >= ?)")
+                params.extend([today, today])
+            elif st in PROMO_STATUSES:
+                clauses.append("status = ?")
+                params.append(st)
+        if pt and pt in PROMO_TYPES:
+            clauses.append("promo_type = ?")
+            params.append(pt)
+        if q:
+            like = f"%{q}%"
+            clauses.append(
+                "(title LIKE ? OR description LIKE ? OR discount_text LIKE ? OR tags LIKE ?)"
+            )
+            params.extend([like, like, like, like])
+        where = (" WHERE " + " AND ".join(clauses)) if clauses else ""
+        with _connect() as db:
+            total = db.execute(
+                f"SELECT COUNT(*) FROM promotions{where}", params
+            ).fetchone()[0]
+            rows = db.execute(
+                f"""
+                SELECT * FROM promotions{where}
+                ORDER BY
+                    CASE status
+                        WHEN 'active' THEN 0
+                        WHEN 'draft' THEN 1
+                        WHEN 'paused' THEN 2
+                        ELSE 3
+                    END,
+                    priority DESC,
+                    datetime(updated_at) DESC,
+                    id DESC
+                LIMIT ? OFFSET ?
+                """,
+                [*params, lim, off],
+            ).fetchall()
+            counts = {
+                r["status"]: int(r["c"])
+                for r in db.execute(
+                    "SELECT status, COUNT(*) AS c FROM promotions GROUP BY status"
+                ).fetchall()
+            }
+        items = [_serialize_promo(r) for r in rows]
+        live_n = sum(1 for x in items if x.get("is_live"))
+        return {
+            "total": int(total),
+            "items": items,
+            "limit": lim,
+            "offset": off,
+            "counts": {
+                "all": sum(counts.values()),
+                "draft": counts.get("draft", 0),
+                "active": counts.get("active", 0),
+                "paused": counts.get("paused", 0),
+                "archived": counts.get("archived", 0),
+                "live": live_n if not st else None,
+            },
+        }
+
+    return await _run_db(_list)
+
+
+async def get_promotion(promo_id: int) -> dict[str, Any] | None:
+    def _get() -> dict[str, Any] | None:
+        with _connect() as db:
+            row = db.execute(
+                "SELECT * FROM promotions WHERE id = ?", (int(promo_id),)
+            ).fetchone()
+        return _serialize_promo(row) if row else None
+
+    return await _run_db(_get)
+
+
+async def create_promotion(data: dict[str, Any]) -> dict[str, Any]:
+    payload = _normalize_promo_payload(data, partial=False)
+    now = _now()
+
+    def _create() -> dict[str, Any]:
+        with _connect() as db:
+            cur = db.execute(
+                """
+                INSERT INTO promotions (
+                    title, emoji, promo_type, discount_pct, discount_text,
+                    description, message_template, segment, channels, status,
+                    starts_at, ends_at, use_in_auto_mail, use_in_mailing,
+                    priority, tags, notes, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    payload["title"],
+                    payload["emoji"],
+                    payload["promo_type"],
+                    payload.get("discount_pct"),
+                    payload.get("discount_text") or "",
+                    payload.get("description") or "",
+                    payload.get("message_template") or "",
+                    payload.get("segment") or "all",
+                    payload.get("channels") or "tg,max",
+                    payload.get("status") or "draft",
+                    payload.get("starts_at"),
+                    payload.get("ends_at"),
+                    int(payload.get("use_in_auto_mail", 1)),
+                    int(payload.get("use_in_mailing", 1)),
+                    int(payload.get("priority") or 0),
+                    payload.get("tags") or "",
+                    payload.get("notes") or "",
+                    now,
+                    now,
+                ),
+            )
+            db.commit()
+            row = db.execute(
+                "SELECT * FROM promotions WHERE id = ?", (cur.lastrowid,)
+            ).fetchone()
+        return _serialize_promo(row)
+
+    return await _run_db(_create)
+
+
+async def update_promotion(promo_id: int, data: dict[str, Any]) -> dict[str, Any] | None:
+    existing = await get_promotion(promo_id)
+    if not existing:
+        return None
+    patch = _normalize_promo_payload(data, partial=True)
+    if "tags" not in patch:
+        patch["tags"] = _promo_tags_to_storage(existing.get("tags"))
+    start = patch.get("starts_at", existing.get("starts_at"))
+    end = patch.get("ends_at", existing.get("ends_at"))
+    start_d = _promo_date_only(start) if start else None
+    end_d = _promo_date_only(end) if end else None
+    if start_d and end_d and start_d > end_d:
+        raise ValueError("Дата начала позже даты окончания")
+    if "discount_text" in patch and not patch["discount_text"]:
+        pct = patch.get("discount_pct", existing.get("discount_pct"))
+        patch["discount_text"] = _format_discount_text(pct)
+    now = _now()
+
+    def _update() -> dict[str, Any] | None:
+        fields = []
+        values: list[Any] = []
+        for key in (
+            "title",
+            "emoji",
+            "promo_type",
+            "discount_pct",
+            "discount_text",
+            "description",
+            "message_template",
+            "segment",
+            "channels",
+            "status",
+            "starts_at",
+            "ends_at",
+            "use_in_auto_mail",
+            "use_in_mailing",
+            "priority",
+            "tags",
+            "notes",
+        ):
+            if key in patch:
+                fields.append(f"{key} = ?")
+                values.append(patch[key])
+        if not fields:
+            return existing
+        fields.append("updated_at = ?")
+        values.append(now)
+        values.append(int(promo_id))
+        with _connect() as db:
+            db.execute(
+                f"UPDATE promotions SET {', '.join(fields)} WHERE id = ?",
+                values,
+            )
+            db.commit()
+            row = db.execute(
+                "SELECT * FROM promotions WHERE id = ?", (int(promo_id),)
+            ).fetchone()
+        return _serialize_promo(row) if row else None
+
+    return await _run_db(_update)
+
+
+async def delete_promotion(promo_id: int) -> bool:
+    def _del() -> bool:
+        with _connect() as db:
+            cur = db.execute(
+                "DELETE FROM promotions WHERE id = ?", (int(promo_id),)
+            )
+            db.commit()
+            return cur.rowcount > 0
+
+    return await _run_db(_del)
+
+
+async def list_live_promotions(
+    *,
+    for_mailing: bool = False,
+    for_auto_mail: bool = False,
+    promo_type: str | None = None,
+    segment: str | None = None,
+) -> list[dict[str, Any]]:
+    """Активные акции в окне дат, отсортированные по приоритету."""
+    today = datetime.now().date().isoformat()
+    pt = (promo_type or "").strip().lower() or None
+
+    def _list() -> list[dict[str, Any]]:
+        clauses = [
+            "status = 'active'",
+            "(starts_at IS NULL OR starts_at = '' OR starts_at <= ?)",
+            "(ends_at IS NULL OR ends_at = '' OR ends_at >= ?)",
+        ]
+        params: list[Any] = [today, today]
+        if for_mailing:
+            clauses.append("use_in_mailing = 1")
+        if for_auto_mail:
+            clauses.append("use_in_auto_mail = 1")
+        if pt and pt in PROMO_TYPES:
+            clauses.append("promo_type = ?")
+            params.append(pt)
+        where = " AND ".join(clauses)
+        with _connect() as db:
+            rows = db.execute(
+                f"""
+                SELECT * FROM promotions
+                WHERE {where}
+                ORDER BY priority DESC, datetime(updated_at) DESC, id DESC
+                """,
+                params,
+            ).fetchall()
+        items = [_serialize_promo(r) for r in rows]
+        if segment and segment != "all":
+            exact = [x for x in items if x.get("segment") == segment]
+            general = [x for x in items if x.get("segment") == "all"]
+            return exact + general
+        return items
+
+    return await _run_db(_list)
+
+
+async def get_active_discount_text(
+    *,
+    segment: str | None = None,
+    fallback: str | None = None,
+) -> str:
+    """Текст для плейсхолдера {скидка}: живая акция или fallback из env."""
+    from config import MAILING_DISCOUNT_TEXT
+
+    promos = await list_live_promotions(for_mailing=True, segment=segment)
+    for p in promos:
+        disc = (p.get("discount_display") or p.get("discount_text") or "").strip()
+        if disc:
+            return disc
+        if p.get("discount_pct") is not None:
+            formatted = _format_discount_text(p.get("discount_pct"))
+            if formatted:
+                return formatted
+    if fallback is not None:
+        return fallback
+    return (MAILING_DISCOUNT_TEXT or "15%").strip() or "15%"
+
+
+async def pick_auto_mail_promo(kind: str | None = None) -> dict[str, Any] | None:
+    """Подобрать акцию для автопоздравления (ДР / годовщина / общее)."""
+    kind_l = (kind or "").strip().lower()
+    type_map = {
+        "bday": "birthday",
+        "birthday": "birthday",
+        "anniv": "anniversary",
+        "anniversary": "anniversary",
+    }
+    preferred_type = type_map.get(kind_l)
+
+    if preferred_type:
+        typed = await list_live_promotions(
+            for_auto_mail=True, promo_type=preferred_type
+        )
+        if typed:
+            return typed[0]
+
+    all_live = await list_live_promotions(for_auto_mail=True)
+    if not all_live:
+        return None
+
+    tag_hints = {
+        "bday": ("birthday", "bday", "др", "день рождения"),
+        "birthday": ("birthday", "bday", "др", "день рождения"),
+        "anniv": ("anniversary", "anniv", "годовщина"),
+        "anniversary": ("anniversary", "anniv", "годовщина"),
+    }
+    hints = tag_hints.get(kind_l) or ()
+    if hints:
+        for p in all_live:
+            tags = [t.lower() for t in (p.get("tags") or [])]
+            blob = " ".join(tags + [str(p.get("title") or "").lower()])
+            if any(h in blob for h in hints):
+                return p
+
+    for p in all_live:
+        if p.get("promo_type") in ("discount", "seasonal", "gift", "other"):
+            return p
+    return all_live[0]
+
+
+async def promotions_overview() -> dict[str, Any]:
+    """Краткая сводка для ИИ-анализатора и KPI панели."""
+    data = await list_promotions(limit=200, offset=0)
+    items = data.get("items") or []
+    today = datetime.now().date()
+    ending_soon = []
+    for p in items:
+        if not p.get("is_live"):
+            continue
+        end = _promo_date_only(p.get("ends_at"))
+        if not end:
+            continue
+        try:
+            end_d = datetime.strptime(end, "%Y-%m-%d").date()
+        except ValueError:
+            continue
+        days = (end_d - today).days
+        if 0 <= days <= 7:
+            ending_soon.append({**p, "days_left": days})
+    live = [p for p in items if p.get("is_live")]
+    return {
+        "counts": data.get("counts") or {},
+        "live": live[:20],
+        "ending_soon": ending_soon[:10],
+        "auto_mail_enabled": sum(1 for p in live if p.get("use_in_auto_mail")),
+        "mailing_enabled": sum(1 for p in live if p.get("use_in_mailing")),
+    }

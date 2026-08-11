@@ -93,6 +93,13 @@ from mailing_db import (
     list_fortune_plays,
     record_fortune_play,
     reveal_fortune_play,
+    create_promotion,
+    delete_promotion,
+    get_active_discount_text,
+    get_promotion,
+    list_promotions,
+    promotions_overview,
+    update_promotion,
     append_customer_notes,
     get_fortune_plays_for_customer,
     get_customer_by_max_user_id,)
@@ -2860,8 +2867,9 @@ async def _build_ai_chat_context(
 
     lines.append(
         "Инструменты: lookup_customer, list_upcoming_events, list_segment_customers, "
-        "get_shop_overview, list_recent_campaigns, list_fortune_plays. "
-        "Панель: Клиенты, События, Главная, Чаты (TG/MAX), Колесо. "
+        "get_shop_overview, list_recent_campaigns, list_fortune_plays, "
+        "list_promotions, analyze_promotions. "
+        "Панель: Клиенты, События, Главная, Акции, Чаты (TG/MAX), Колесо. "
         "Сайт: veresk.flowers."
     )
     return "\n".join(lines), found_customers
@@ -4929,6 +4937,226 @@ async def handle_max_webhook_status(request: web.Request) -> web.Response:
 
 
 
+# ── promotions (акции) ──────────────────────────────────────────────────────
+
+
+async def handle_promotions_list(request: web.Request) -> web.Response:
+    err = await _require_perm(request, "promos")
+    if err:
+        return err
+    status = (request.query.get("status") or "").strip() or None
+    promo_type = (request.query.get("type") or "").strip() or None
+    search = (request.query.get("q") or request.query.get("search") or "").strip()
+    try:
+        limit = int(request.query.get("limit") or 100)
+    except ValueError:
+        limit = 100
+    try:
+        offset = int(request.query.get("offset") or 0)
+    except ValueError:
+        offset = 0
+    data = await list_promotions(
+        status=status,
+        promo_type=promo_type,
+        search=search,
+        limit=limit,
+        offset=offset,
+    )
+    try:
+        overview = await promotions_overview()
+    except Exception:
+        overview = {}
+    try:
+        discount = await get_active_discount_text()
+    except Exception:
+        discount = None
+    return _json(
+        {
+            **data,
+            "overview": overview,
+            "active_discount": discount,
+        }
+    )
+
+
+async def handle_promotions_overview(request: web.Request) -> web.Response:
+    err = await _require_perm(request, "promos")
+    if err:
+        return err
+    overview = await promotions_overview()
+    try:
+        discount = await get_active_discount_text()
+    except Exception:
+        discount = None
+    return _json({**overview, "active_discount": discount})
+
+
+async def handle_promotion_get(request: web.Request) -> web.Response:
+    err = await _require_perm(request, "promos")
+    if err:
+        return err
+    try:
+        promo_id = int(request.match_info["id"])
+    except (KeyError, TypeError, ValueError):
+        return _json({"error": "invalid_id"}, status=400)
+    row = await get_promotion(promo_id)
+    if not row:
+        return _json({"error": "not_found"}, status=404)
+    return _json(row)
+
+
+async def handle_promotion_create(request: web.Request) -> web.Response:
+    err = await _require_perm(request, "promos")
+    if err:
+        return err
+    try:
+        body = await request.json()
+    except Exception:
+        return _json({"error": "invalid_json"}, status=400)
+    if not isinstance(body, dict):
+        return _json({"error": "invalid_json"}, status=400)
+    try:
+        row = await create_promotion(body)
+    except ValueError as exc:
+        return _json({"error": "validation_error", "detail": str(exc)}, status=400)
+    return _json({"ok": True, "item": row}, status=201)
+
+
+async def handle_promotion_patch(request: web.Request) -> web.Response:
+    err = await _require_perm(request, "promos")
+    if err:
+        return err
+    try:
+        promo_id = int(request.match_info["id"])
+    except (KeyError, TypeError, ValueError):
+        return _json({"error": "invalid_id"}, status=400)
+    try:
+        body = await request.json()
+    except Exception:
+        return _json({"error": "invalid_json"}, status=400)
+    if not isinstance(body, dict):
+        return _json({"error": "invalid_json"}, status=400)
+    try:
+        row = await update_promotion(promo_id, body)
+    except ValueError as exc:
+        return _json({"error": "validation_error", "detail": str(exc)}, status=400)
+    if not row:
+        return _json({"error": "not_found"}, status=404)
+    return _json({"ok": True, "item": row})
+
+
+async def handle_promotion_delete(request: web.Request) -> web.Response:
+    err = await _require_perm(request, "promos")
+    if err:
+        return err
+    try:
+        promo_id = int(request.match_info["id"])
+    except (KeyError, TypeError, ValueError):
+        return _json({"error": "invalid_id"}, status=400)
+    ok = await delete_promotion(promo_id)
+    if not ok:
+        return _json({"error": "not_found"}, status=404)
+    return _json({"ok": True})
+
+
+async def handle_promotions_analyze(request: web.Request) -> web.Response:
+    """POST /api/admin/promotions/analyze — ИИ-анализатор акций."""
+    err = await _require_perm(request, "promos")
+    if err:
+        return err
+    from ai_compose import AiComposeError, is_ai_configured
+    from promo_ai import analyze_promotions
+
+    if not is_ai_configured():
+        return _json(
+            {
+                "error": "ai_not_configured",
+                "detail": "Подключите ИИ в Настройках → Сервисы",
+            },
+            status=503,
+        )
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    if not isinstance(body, dict):
+        body = {}
+    focus = str(body.get("focus") or "").strip()
+    try:
+        horizon = int(body.get("horizon_days") or 14)
+    except (TypeError, ValueError):
+        horizon = 14
+    try:
+        result = await analyze_promotions(focus=focus, horizon_days=horizon)
+    except AiComposeError as exc:
+        status = 503 if getattr(exc, "code", "") == "ai_not_configured" else 502
+        if getattr(exc, "code", "") in ("prompt_required", "ai_parse_error"):
+            status = 400
+        return _json(
+            {
+                "error": getattr(exc, "code", "ai_error"),
+                "detail": getattr(exc, "message", str(exc)),
+            },
+            status=status,
+        )
+    except Exception:
+        logger.exception("promotions analyze failed")
+        return _json(
+            {"error": "ai_error", "detail": "Не удалось выполнить анализ"},
+            status=502,
+        )
+    return _json(result)
+
+
+async def handle_promotions_analyze_apply(request: web.Request) -> web.Response:
+    """POST /api/admin/promotions/analyze/apply — создать черновик из предложения ИИ."""
+    err = await _require_perm(request, "promos")
+    if err:
+        return err
+    try:
+        body = await request.json()
+    except Exception:
+        return _json({"error": "invalid_json"}, status=400)
+    if not isinstance(body, dict):
+        return _json({"error": "invalid_json"}, status=400)
+    suggestion = (
+        body.get("suggestion") if isinstance(body.get("suggestion"), dict) else body
+    )
+    payload = {
+        "title": suggestion.get("title"),
+        "emoji": suggestion.get("emoji") or "🎁",
+        "promo_type": suggestion.get("promo_type") or "discount",
+        "discount_pct": suggestion.get("discount_pct"),
+        "discount_text": suggestion.get("discount_text") or "",
+        "description": suggestion.get("description")
+        or suggestion.get("rationale")
+        or "",
+        "message_template": suggestion.get("message_template") or "",
+        "segment": suggestion.get("segment") or "all",
+        "channels": suggestion.get("channels") or "tg,max",
+        "status": body.get("status") or "draft",
+        "starts_at": suggestion.get("starts_at"),
+        "ends_at": suggestion.get("ends_at"),
+        "use_in_auto_mail": suggestion.get("use_in_auto_mail", True),
+        "use_in_mailing": suggestion.get("use_in_mailing", True),
+        "priority": suggestion.get("priority") or 0,
+        "tags": suggestion.get("tags") or [],
+        "notes": (
+            "Создано из ИИ-анализатора"
+            + (
+                f": {suggestion.get('rationale')}"
+                if suggestion.get("rationale")
+                else ""
+            )
+        )[:2000],
+    }
+    try:
+        row = await create_promotion(payload)
+    except ValueError as exc:
+        return _json({"error": "validation_error", "detail": str(exc)}, status=400)
+    return _json({"ok": True, "item": row}, status=201)
+
+
 async def handle_wheel_get(request: web.Request) -> web.Response:
     err = await _require_perm(request, "wheel")
     if err:
@@ -5569,6 +5797,14 @@ def setup_admin_routes(app: web.Application) -> None:
         ("/api/admin/ai/chat", handle_ai_chat, "POST"),
         ("/api/admin/ai/settings", handle_ai_settings_get, "GET"),
         ("/api/admin/ai/settings", handle_ai_settings_save, "POST"),
+        ("/api/admin/promotions", handle_promotions_list, "GET"),
+        ("/api/admin/promotions", handle_promotion_create, "POST"),
+        ("/api/admin/promotions/overview", handle_promotions_overview, "GET"),
+        ("/api/admin/promotions/analyze", handle_promotions_analyze, "POST"),
+        ("/api/admin/promotions/analyze/apply", handle_promotions_analyze_apply, "POST"),
+        ("/api/admin/promotions/{id}", handle_promotion_get, "GET"),
+        ("/api/admin/promotions/{id}", handle_promotion_patch, "PATCH"),
+        ("/api/admin/promotions/{id}", handle_promotion_delete, "DELETE"),
         ("/api/admin/wheel", handle_wheel_get, "GET"),
         ("/api/admin/wheel", handle_wheel_save, "POST"),
         ("/api/admin/wheel/plays", handle_wheel_plays_list, "GET"),

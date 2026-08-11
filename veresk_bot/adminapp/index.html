@@ -16,6 +16,7 @@
 <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,500;9..144,600;9..144,700&family=Manrope:wght@400;500;600;700&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="css/admin.css?v=68">
 <link rel="stylesheet" href="css/wheel.css?v=11">
+<link rel="stylesheet" href="css/promos.css?v=1">
 <!-- Критичный CSS до paint: иначе логин мелькнёт, пока качается admin.css -->
 <style>
   #authBoot{display:none;position:fixed;inset:0;z-index:50;flex-direction:column;align-items:center;justify-content:center;gap:18px}
@@ -104,6 +105,7 @@
       <button class="nav-item active" data-nav="home" onclick="go('home')"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="m3 11 18-8-8 18-2-8z"/></svg>Главная</button>
       <button class="nav-item" data-nav="chats" onclick="go('chats')"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M21 11.5a8.4 8.4 0 01-.9 3.8 8.5 8.5 0 01-7.6 4.7 8.4 8.4 0 01-3.8-.9L3 21l1.9-5.7a8.4 8.4 0 01-.9-3.8 8.5 8.5 0 014.7-7.6 8.4 8.4 0 013.8-.9h.5a8.5 8.5 0 018 8v.5z"/></svg>Чаты</button>
       <button class="nav-item" data-nav="clients" onclick="go('clients')"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="9" cy="8" r="3"/><path d="M3 20c0-3 3-5 6-5s6 2 6 5"/><path d="M16 6a3 3 0 010 6"/><path d="M18 20c0-2-.6-3.5-2-4.5"/></svg>Клиенты</button>
+      <button class="nav-item" data-nav="promos" onclick="go('promos')"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M20.6 12.6 12.6 20.6a2 2 0 01-2.8 0L3.4 14.2a2 2 0 010-2.8L11.4 3.4a2 2 0 012.8 0l7.4 7.4a2 2 0 010 2.8z"/><circle cx="8.5" cy="8.5" r="1.2" fill="currentColor" stroke="none"/></svg>Акции</button>
       <button class="nav-item" data-nav="wheel" onclick="go('wheel')"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="2"/><path d="M12 3v3M12 18v3M3 12h3M18 12h3M5.6 5.6l2.1 2.1M16.3 16.3l2.1 2.1M18.4 5.6l-2.1 2.1M7.7 16.3l-2.1 2.1"/></svg>Фортуна</button>
       <button class="nav-item" data-nav="aichat" onclick="go('aichat')"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M21 15a2 2 0 01-2 2H7l-4 4V5a2 2 0 012-2h14a2 2 0 012 2z"/></svg>ИИ чат</button>
       <button class="nav-item" data-nav="bots" onclick="go('bots')"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3" y="11" width="18" height="10" rx="2"/><circle cx="8.5" cy="16" r="1"/><circle cx="15.5" cy="16" r="1"/><path d="M12 11V7"/><path d="M8 7h8"/></svg>Боты</button>
@@ -1320,6 +1322,199 @@
       </div>
     </section>
 
+
+    <!-- PROMOS -->
+    <section class="panel" id="promos">
+      <button type="button" class="back mob" onclick="go('home')"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M15 18l-6-6 6-6"/></svg>Главная</button>
+      <div class="promos-head">
+        <div>
+          <div class="page-title page-title-tight">Акции и скидки</div>
+          <p class="page-desc">Управляйте предложениями для авторассылки и плейсхолдера <code>{скидка}</code>. ИИ подскажет, что запустить.</p>
+        </div>
+        <div class="promos-head-actions">
+          <button type="button" class="btn" id="promoAnalyzeBtn" title="ИИ-анализ">ИИ-анализ</button>
+          <button type="button" class="btn primary" id="promoCreateBtn">Новая акция</button>
+        </div>
+      </div>
+
+      <div class="promos-kpis" id="promoKpis" aria-live="polite"></div>
+
+      <div class="promos-ai" id="promoAiPanel" hidden>
+        <div class="promos-ai-head">
+          <div>
+            <h3 class="subh">ИИ-анализатор</h3>
+            <p class="wsub">Смотрит сегменты, события, рассылки и текущие акции — предлагает, что запустить.</p>
+          </div>
+          <button type="button" class="btn" id="promoAiClose" aria-label="Скрыть">✕</button>
+        </div>
+        <div class="promos-ai-form">
+          <input type="text" class="promos-inp" id="promoAiFocus" maxlength="200" placeholder="Фокус: например «вернуть inactive» или «ДР на неделю»" autocomplete="off">
+          <select class="promos-inp promos-select" id="promoAiHorizon" title="Горизонт">
+            <option value="7">7 дней</option>
+            <option value="14" selected>14 дней</option>
+            <option value="30">30 дней</option>
+          </select>
+          <button type="button" class="btn primary" id="promoAiRun">Анализировать</button>
+        </div>
+        <p class="msg-error" id="promoAiError" hidden></p>
+        <div class="promos-ai-body" id="promoAiBody">
+          <div class="promos-ai-empty">Нажмите «Анализировать» — получите идеи акций и рассылок.</div>
+        </div>
+      </div>
+
+      <div class="promos-layout">
+        <aside class="promos-list-col">
+          <div class="promos-filters">
+            <div class="promos-tabs" id="promoStatusTabs" role="tablist">
+              <button type="button" class="promos-tab active" data-status="all">Все</button>
+              <button type="button" class="promos-tab" data-status="live">Живые</button>
+              <button type="button" class="promos-tab" data-status="active">Активные</button>
+              <button type="button" class="promos-tab" data-status="draft">Черновики</button>
+              <button type="button" class="promos-tab" data-status="paused">Пауза</button>
+              <button type="button" class="promos-tab" data-status="archived">Архив</button>
+            </div>
+            <input type="search" class="promos-inp" id="promoSearch" placeholder="Поиск…" autocomplete="off">
+          </div>
+          <div class="promos-list" id="promoList" role="list"></div>
+        </aside>
+
+        <div class="promos-editor-col">
+          <form class="promos-editor" id="promoForm" hidden>
+            <input type="hidden" id="promoId" value="">
+            <div class="promos-editor-head">
+              <h3 class="subh" id="promoFormTitle">Новая акция</h3>
+              <div class="promos-editor-actions">
+                <button type="button" class="btn danger-ghost" id="promoDeleteBtn" hidden>Удалить</button>
+                <button type="submit" class="btn primary" id="promoSaveBtn">Сохранить</button>
+              </div>
+            </div>
+            <p class="msg-error" id="promoFormError" hidden></p>
+
+            <div class="promos-grid">
+              <label class="field promos-emoji-field">
+                <span>Эмодзи</span>
+                <input type="text" id="promoEmoji" maxlength="8" value="🎁" autocomplete="off">
+              </label>
+              <label class="field promos-grow">
+                <span>Название</span>
+                <input type="text" id="promoTitle" maxlength="120" placeholder="Весенняя −15%" required autocomplete="off">
+              </label>
+            </div>
+
+            <div class="promos-grid">
+              <label class="field">
+                <span>Тип</span>
+                <select id="promoType">
+                  <option value="discount">Скидка</option>
+                  <option value="gift">Подарок</option>
+                  <option value="seasonal">Сезонная</option>
+                  <option value="welcome">Приветственная</option>
+                  <option value="reactivation">Возврат клиентов</option>
+                  <option value="birthday">День рождения</option>
+                  <option value="anniversary">Годовщина</option>
+                  <option value="other">Другое</option>
+                </select>
+              </label>
+              <label class="field">
+                <span>Статус</span>
+                <select id="promoStatus">
+                  <option value="draft">Черновик</option>
+                  <option value="active">Активна</option>
+                  <option value="paused">На паузе</option>
+                  <option value="archived">В архиве</option>
+                </select>
+              </label>
+              <label class="field">
+                <span>Сегмент</span>
+                <select id="promoSegment">
+                  <option value="all">Все</option>
+                  <option value="regular">Постоянные</option>
+                  <option value="new">Новые</option>
+                  <option value="inactive">Неактивные</option>
+                  <option value="channel_subscribers">Подписчики канала</option>
+                  <option value="channel_subscribers_new">Новые подписчики</option>
+                </select>
+              </label>
+              <label class="field">
+                <span>Приоритет</span>
+                <input type="number" id="promoPriority" value="0" min="-100" max="100" step="1">
+              </label>
+            </div>
+
+            <div class="promos-grid">
+              <label class="field">
+                <span>Скидка, %</span>
+                <input type="number" id="promoDiscountPct" min="0" max="100" step="1" placeholder="15">
+              </label>
+              <label class="field">
+                <span>Текст для {скидка}</span>
+                <input type="text" id="promoDiscountText" maxlength="40" placeholder="15% или −20%">
+              </label>
+              <label class="field">
+                <span>Начало</span>
+                <input type="date" id="promoStarts">
+              </label>
+              <label class="field">
+                <span>Конец</span>
+                <input type="date" id="promoEnds">
+              </label>
+            </div>
+
+            <div class="promos-checks">
+              <label class="promos-check">
+                <input type="checkbox" id="promoUseMailing" checked>
+                <span>В плейсхолдере <code>{скидка}</code> в рассылках</span>
+              </label>
+              <label class="promos-check">
+                <input type="checkbox" id="promoUseAuto" checked>
+                <span>В автопоздравлениях (ДР / годовщины)</span>
+              </label>
+              <label class="promos-check">
+                <input type="checkbox" id="promoChTg" checked>
+                <span>Telegram</span>
+              </label>
+              <label class="promos-check">
+                <input type="checkbox" id="promoChMax" checked>
+                <span>MAX</span>
+              </label>
+            </div>
+
+            <label class="field">
+              <span>Описание для команды</span>
+              <textarea id="promoDesc" rows="2" maxlength="2000" placeholder="Кому и зачем эта акция"></textarea>
+            </label>
+
+            <label class="field">
+              <span>Шаблон сообщения</span>
+              <textarea id="promoTemplate" rows="5" maxlength="4000" placeholder="Здравствуйте, {имя}! Для вас скидка {скидка}…"></textarea>
+              <span class="field-hint">Плейсхолдеры: <code>{имя}</code>, <code>{скидка}</code>. Для автопоздравлений подставится автоматически.</span>
+            </label>
+
+            <div class="promos-grid">
+              <label class="field promos-grow">
+                <span>Теги</span>
+                <input type="text" id="promoTags" maxlength="200" placeholder="весна, др, inactive" autocomplete="off">
+              </label>
+            </div>
+
+            <label class="field">
+              <span>Внутренние заметки</span>
+              <textarea id="promoNotes" rows="2" maxlength="2000" placeholder="Только для сотрудников"></textarea>
+            </label>
+
+            <div class="promos-preview" id="promoPreview" aria-live="polite"></div>
+          </form>
+
+          <div class="promos-empty-editor" id="promoEmptyEditor">
+            <div class="promos-empty-illu" aria-hidden="true">🎁</div>
+            <h3>Выберите акцию или создайте новую</h3>
+            <p>Активные акции подставляются в рассылки и автопоздравления. ИИ поможет придумать следующие шаги.</p>
+            <button type="button" class="btn primary" id="promoEmptyCreate">Создать акцию</button>
+          </div>
+        </div>
+      </div>
+    </section>
+
     <!-- WHEEL -->
     <section class="panel" id="wheel">
       <button type="button" class="back" id="wheelExit"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M15 18l-6-6 6-6"/></svg>Назад</button>
@@ -1497,8 +1692,8 @@
 
 <script>window.__VERESK_BUILD__="auth-boot-v41";</script>
 <script src="js/qrcode.min.js?v=1"></script>
-<script src="js/api.js?v=40"></script>
+<script src="js/api.js?v=41"></script>
 <script src="js/wheel-widget.js?v=13"></script>
-<script src="js/app.js?v=73"></script>
+<script src="js/app.js?v=74"></script>
 </body>
 </html>

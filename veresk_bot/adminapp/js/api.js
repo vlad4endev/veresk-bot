@@ -311,6 +311,34 @@ const AdminAPI = (() => {
       const q = new URLSearchParams(params).toString();
       return request("/api/admin/wheel/plays" + (q ? "?" + q : ""));
     },
+    promotions: (params = {}) => {
+      const q = new URLSearchParams(params).toString();
+      return request("/api/admin/promotions" + (q ? "?" + q : ""));
+    },
+    promotionsOverview: () => request("/api/admin/promotions/overview"),
+    promotion: (id) => request("/api/admin/promotions/" + id),
+    createPromotion: (body) =>
+      request("/api/admin/promotions", {
+        method: "POST",
+        body: JSON.stringify(body),
+      }),
+    updatePromotion: (id, body) =>
+      request("/api/admin/promotions/" + id, {
+        method: "PATCH",
+        body: JSON.stringify(body),
+      }),
+    deletePromotion: (id) =>
+      request("/api/admin/promotions/" + id, { method: "DELETE" }),
+    analyzePromotions: (body) =>
+      request("/api/admin/promotions/analyze", {
+        method: "POST",
+        body: JSON.stringify(body || {}),
+      }),
+    applyPromoSuggestion: (body) =>
+      request("/api/admin/promotions/analyze/apply", {
+        method: "POST",
+        body: JSON.stringify(body || {}),
+      }),
     chatAccounts: () => request("/api/admin/chats/accounts"),
     chatDialogs: (params = {}) => {
       const q = new URLSearchParams(params).toString();

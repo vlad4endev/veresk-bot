@@ -22,10 +22,12 @@ from mailing_db import (
     create_personal_message,
     fetch_pending_personal,
     fetch_pending_recipients,
+    get_active_discount_text,
     list_auto_events_for_today,
     mark_event_auto_sent,
     mark_personal_status,
     mark_recipient_status,
+    pick_auto_mail_promo,
     pick_ready_account,
 )
 from senders.matching import normalize_channel, resolve_max_user_id_sync
@@ -109,7 +111,11 @@ async def _send_via_channel(
     media_mime: str | None = None,
 ) -> tuple[bool, str, str | None]:
     """Возвращает (ok, status, error). status: sent | failed | deferred."""
-    body = _personalize(text, name)
+    try:
+        discount = await get_active_discount_text()
+    except Exception:
+        discount = MAILING_DISCOUNT_TEXT or "15%"
+    body = _personalize(text, name, discount=discount)
     ch = normalize_channel(channel) or channel
     media = (media_path or "").strip() or None
 
@@ -358,15 +364,34 @@ async def process_auto_greetings() -> int:
         kind = ev.get("kind") or "other"
         name = ev.get("customer_name") or ""
         first = name.split()[0] if name else "друг"
-        if kind == "bday":
+        promo = None
+        try:
+            promo = await pick_auto_mail_promo(kind)
+        except Exception:
+            logger.debug("Авто-поздравление: не удалось взять акцию", exc_info=True)
+        try:
+            discount = await get_active_discount_text()
+        except Exception:
+            discount = MAILING_DISCOUNT_TEXT or "15%"
+        if promo and (promo.get("discount_display") or promo.get("discount_text")):
+            discount = (
+                promo.get("discount_display")
+                or promo.get("discount_text")
+                or discount
+            )
+        template = (promo.get("message_template") or "").strip() if promo else ""
+        if template:
+            text = _personalize(template, name, discount=discount)
+        elif kind == "bday":
             text = (
                 f"С днём рождения, {first}! 🎂💐\n\n"
-                "Дарим вам скидку 15% на любой букет всю неделю. Ваш Veresk."
+                f"Дарим вам скидку {discount} на любой букет всю неделю. Ваш Veresk."
             )
         elif kind == "anniv":
             text = (
                 f"{first}, поздравляем с годовщиной! 💍\n\n"
-                "Отметьте этот день красивым букетом — дарим −15%. Ваш Veresk."
+                f"Отметьте этот день красивым букетом — дарим −{discount.lstrip('−-')}. "
+                "Ваш Veresk."
             )
         else:
             text = f"Здравствуйте, {first}! 🌷\n\nВаш Veresk напоминает о важной дате."

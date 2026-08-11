@@ -149,6 +149,49 @@ AGENT_TOOLS: list[dict[str, Any]] = [
             },
         },
     },
+    {
+        "type": "function",
+        "function": {
+            "name": "list_promotions",
+            "description": (
+                "Список акций и скидок салона: статус, сегмент, процент, "
+                "использование в авторассылке и плейсхолдере {скидка}."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "limit": {
+                        "type": "integer",
+                        "description": "1–40, по умолчанию 20",
+                    },
+                },
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "analyze_promotions",
+            "description": (
+                "ИИ-анализ CRM: предложить акции, скидки, идеи рассылок "
+                "и риски на ближайшие дни. Используй, когда спрашивают "
+                "«какие акции сделать», «что предложить клиентам»."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "focus": {
+                        "type": "string",
+                        "description": "Фокус: inactive, ДР, весна и т.п.",
+                    },
+                    "horizon_days": {
+                        "type": "integer",
+                        "description": "Горизонт 3–60 дней, по умолчанию 14",
+                    },
+                },
+            },
+        },
+    },
 ]
 
 
@@ -586,7 +629,7 @@ async def tool_get_shop_overview(_args: dict[str, Any]) -> str:
         pass
 
     lines.append(
-        "Панель: Клиенты, События, Главная (рассылки), Чаты (TG/MAX), "
+        "Панель: Клиенты, События, Главная (рассылки), Акции, Чаты (TG/MAX), "
         "Колесо. Сайт: veresk.flowers"
     )
     return _clip("\n".join(lines))
@@ -636,6 +679,52 @@ async def tool_list_fortune_plays(args: dict[str, Any]) -> str:
     return _clip("\n".join(lines))
 
 
+async def tool_list_promotions(args: dict[str, Any]) -> str:
+    from promo_ai import list_promotions_for_agent
+
+    try:
+        limit = int(args.get("limit") or 20)
+    except (TypeError, ValueError):
+        limit = 20
+    return await list_promotions_for_agent(limit=limit)
+
+
+async def tool_analyze_promotions(args: dict[str, Any]) -> str:
+    from promo_ai import analyze_promotions
+
+    focus = str(args.get("focus") or "").strip()
+    try:
+        horizon = int(args.get("horizon_days") or 14)
+    except (TypeError, ValueError):
+        horizon = 14
+    try:
+        result = await analyze_promotions(focus=focus, horizon_days=horizon)
+    except Exception as exc:
+        return f"Анализ акций недоступен: {exc}"
+    lines = [
+        f"Сводка: {result.get('summary') or '—'}",
+        "Инсайты:",
+    ]
+    for tip in result.get("insights") or []:
+        lines.append(f"• {tip}")
+    lines.append("Предложения акций:")
+    for s in result.get("suggestions") or []:
+        lines.append(
+            f"• {s.get('emoji') or ''} «{s.get('title')}» "
+            f"type={s.get('promo_type')} скидка={s.get('discount_text') or s.get('discount_pct') or '—'} "
+            f"сегмент={s.get('segment')} · {s.get('rationale') or ''}"
+        )
+    if result.get("mailing_ideas"):
+        lines.append("Идеи рассылок:")
+        for m in result["mailing_ideas"]:
+            lines.append(
+                f"• [{m.get('segment')}] {m.get('title')}: {m.get('hook') or ''}"
+            )
+    if result.get("risks"):
+        lines.append("Риски: " + "; ".join(result["risks"]))
+    return _clip("\n".join(lines))
+
+
 TOOL_HANDLERS: dict[str, ToolHandler] = {
     "lookup_customer": tool_lookup_customer,
     "list_upcoming_events": tool_list_upcoming_events,
@@ -643,6 +732,8 @@ TOOL_HANDLERS: dict[str, ToolHandler] = {
     "get_shop_overview": tool_get_shop_overview,
     "list_recent_campaigns": tool_list_recent_campaigns,
     "list_fortune_plays": tool_list_fortune_plays,
+    "list_promotions": tool_list_promotions,
+    "analyze_promotions": tool_analyze_promotions,
 }
 
 
