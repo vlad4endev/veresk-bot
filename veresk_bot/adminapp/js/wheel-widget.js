@@ -29,9 +29,9 @@
   const HUB_MARK_SVG = `
     <svg class="vw-hub-mark" viewBox="0 0 120 128" aria-hidden="true" focusable="false">
       <g transform="translate(60 66)" fill="none">
-        <circle cx="0" cy="0" r="48" stroke="#E879B0" stroke-width="7"/>
-        <path d="M0 50 C -8 22 -18 -8 -24 -42" stroke="#E879B0" stroke-width="3.8" stroke-linecap="round"/>
-        <g fill="#E879B0">
+        <circle cx="0" cy="0" r="48" stroke="#F3C4DC" stroke-width="7"/>
+        <path d="M0 50 C -8 22 -18 -8 -24 -42" stroke="#F3C4DC" stroke-width="3.8" stroke-linecap="round"/>
+        <g fill="#F3C4DC">
           <path d="M0 -9 C 6 -4.5 6 4.5 0 9 C -6 4.5 -6 -4.5 0 -9 Z" transform="translate(-24,-38) rotate(-32) scale(1.02)"/>
           <path d="M0 -9 C 6 -4.5 6 4.5 0 9 C -6 4.5 -6 -4.5 0 -9 Z" transform="translate(-21,-22) rotate(-38) scale(1.02)"/>
           <path d="M0 -9 C 6 -4.5 6 4.5 0 9 C -6 4.5 -6 -4.5 0 -9 Z" transform="translate(-18,-6) rotate(-44) scale(1.02)"/>
@@ -41,8 +41,8 @@
           <path d="M0 -9 C 6 -4.5 6 4.5 0 9 C -6 4.5 -6 -4.5 0 -9 Z" transform="translate(-8,0) rotate(14) scale(1.02)"/>
           <path d="M0 -9 C 6 -4.5 6 4.5 0 9 C -6 4.5 -6 -4.5 0 -9 Z" transform="translate(-6,16) rotate(8) scale(1.02)"/>
         </g>
-        <path d="M0 50 C 8 22 18 -8 24 -42" stroke="#E879B0" stroke-width="3.8" stroke-linecap="round"/>
-        <g fill="#E879B0">
+        <path d="M0 50 C 8 22 18 -8 24 -42" stroke="#F3C4DC" stroke-width="3.8" stroke-linecap="round"/>
+        <g fill="#F3C4DC">
           <path d="M0 -9 C 6 -4.5 6 4.5 0 9 C -6 4.5 -6 -4.5 0 -9 Z" transform="translate(24,-38) rotate(32) scale(1.02)"/>
           <path d="M0 -9 C 6 -4.5 6 4.5 0 9 C -6 4.5 -6 -4.5 0 -9 Z" transform="translate(21,-22) rotate(38) scale(1.02)"/>
           <path d="M0 -9 C 6 -4.5 6 4.5 0 9 C -6 4.5 -6 -4.5 0 -9 Z" transform="translate(18,-6) rotate(44) scale(1.02)"/>
