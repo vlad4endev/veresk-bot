@@ -2560,6 +2560,20 @@
     return $(`#autoMailKinds [data-kind="${kind}"]`);
   }
 
+  function setAutoMailKindTab(kind) {
+    const want = ["bday", "anniv", "other"].includes(kind) ? kind : "bday";
+    $$("#autoMailKindTabs [data-am-tab]").forEach((btn) => {
+      const on = btn.dataset.amTab === want;
+      btn.classList.toggle("on", on);
+      btn.setAttribute("aria-selected", on ? "true" : "false");
+    });
+    $$("#autoMailKinds [data-kind]").forEach((panel) => {
+      const on = panel.dataset.kind === want;
+      panel.classList.toggle("on", on);
+      panel.hidden = !on;
+    });
+  }
+
   function syncAutoMailKindSourceUi(card) {
     if (!card) return;
     const source = card.querySelector("[data-am-source]")?.value === "promo" ? "promo" : "custom";
@@ -2626,6 +2640,9 @@
       syncAutoMailKindSourceUi(card);
       fillAutoMailPromoSelect(promo, cfg.promo_id, kind);
     });
+    setAutoMailKindTab(
+      document.querySelector("#autoMailKindTabs [data-am-tab].on")?.dataset.amTab || "bday"
+    );
     const on = s.enabled !== false;
     const hint = $("#autoMailHint");
     if (hint) {
@@ -2680,6 +2697,12 @@
       console.warn("auto-mail settings", err);
     }
   }
+
+  $("#autoMailKindTabs")?.addEventListener("click", (ev) => {
+    const btn = ev.target.closest("[data-am-tab]");
+    if (!btn) return;
+    setAutoMailKindTab(btn.dataset.amTab);
+  });
 
   $("#autoMailKinds")?.addEventListener("change", (ev) => {
     const src = ev.target.closest("[data-am-source]");

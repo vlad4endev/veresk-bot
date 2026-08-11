@@ -14,7 +14,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,500;9..144,600;9..144,700&family=Manrope:wght@400;500;600;700&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="css/admin.css?v=77">
+<link rel="stylesheet" href="css/admin.css?v=78">
 <link rel="stylesheet" href="css/login.css?v=2">
 <link rel="stylesheet" href="css/wheel.css?v=11">
 <link rel="stylesheet" href="css/promos.css?v=1">
@@ -926,27 +926,24 @@
             <div class="set-hero">
               <div>
                 <h3>Автопоздравления</h3>
-                <p>В день события с включённым «Авто» — личное сообщение по вашим правилам и акциям.</p>
+                <p>В день события с тумблером «Авто» — личное сообщение по правилам ниже.</p>
               </div>
               <div class="set-hero-status" id="autoMailStatus"></div>
             </div>
 
-            <div class="subs-card automail-card" id="autoMailGlobal">
-              <div class="subs-card-head">
-                <h3>Общие правила</h3>
-                <p>Мастер-выключатель, время отправки и канал, если доступны и Telegram, и MAX.</p>
-              </div>
-              <div class="subs-welcome-body">
-                <div class="subs-welcome-enable">
-                  <label class="subs-welcome-toggle">
-                    <input type="checkbox" id="autoMailEnabled">
-                    <span>Включить автопоздравления</span>
-                  </label>
-                  <span class="subs-welcome-status" id="autoMailHint">загрузка…</span>
+            <div class="automail-stack">
+              <section class="automail-block" id="autoMailGlobal">
+                <div class="automail-block-head">
+                  <h4>Когда и куда</h4>
+                  <span class="automail-hint" id="autoMailHint">загрузка…</span>
                 </div>
-                <div class="automail-global-grid">
+                <label class="automail-switch">
+                  <input type="checkbox" id="autoMailEnabled">
+                  <span>Включить автопоздравления</span>
+                </label>
+                <div class="automail-row">
                   <label class="field">
-                    <span>Время отправки</span>
+                    <span>Время</span>
                     <input type="time" id="autoMailSendTime" value="10:00">
                   </label>
                   <label class="field">
@@ -957,123 +954,110 @@
                     </select>
                   </label>
                 </div>
-                <p class="hint">Уходит в день события после указанного времени. На главной у события должен быть включён тумблер «Авто».</p>
+                <p class="hint automail-note">Отправка в день события после указанного времени. На главной у события нужен «Авто».</p>
+              </section>
+
+              <section class="automail-block" id="autoMailKindsBlock">
+                <div class="automail-block-head">
+                  <h4>Текст по типу события</h4>
+                </div>
+                <div class="seg automail-kind-tabs" id="autoMailKindTabs" role="tablist" aria-label="Тип события">
+                  <button type="button" class="on" data-am-tab="bday" role="tab" aria-selected="true">День рождения</button>
+                  <button type="button" data-am-tab="anniv" role="tab" aria-selected="false">Годовщина</button>
+                  <button type="button" data-am-tab="other" role="tab" aria-selected="false">Другое</button>
+                </div>
+
+                <div class="automail-kinds" id="autoMailKinds">
+                  <div class="automail-kind on" data-kind="bday" role="tabpanel">
+                    <p class="automail-kind-desc">События с типом ДР — акция из «Акции» или свой текст.</p>
+                    <label class="automail-switch">
+                      <input type="checkbox" data-am-enabled>
+                      <span>Включено</span>
+                    </label>
+                    <label class="field">
+                      <span>Источник</span>
+                      <select data-am-source>
+                        <option value="promo">Из раздела Акции</option>
+                        <option value="custom">Свой текст</option>
+                      </select>
+                    </label>
+                    <div class="automail-promo" data-am-promo-wrap hidden>
+                      <label class="field">
+                        <span>Акция</span>
+                        <select data-am-promo>
+                          <option value="">Авто · живая «День рождения»</option>
+                        </select>
+                      </label>
+                      <button type="button" class="btn ghost" data-am-pull>Подтянуть текст в запасной</button>
+                    </div>
+                    <label class="field">
+                      <span data-am-text-label>Запасной текст</span>
+                      <textarea data-am-text rows="4" placeholder="С днём рождения, {имя}!…"></textarea>
+                    </label>
+                  </div>
+
+                  <div class="automail-kind" data-kind="anniv" role="tabpanel" hidden>
+                    <p class="automail-kind-desc">Свадьбы и другие годовщины из Posiflora.</p>
+                    <label class="automail-switch">
+                      <input type="checkbox" data-am-enabled>
+                      <span>Включено</span>
+                    </label>
+                    <label class="field">
+                      <span>Источник</span>
+                      <select data-am-source>
+                        <option value="promo">Из раздела Акции</option>
+                        <option value="custom">Свой текст</option>
+                      </select>
+                    </label>
+                    <div class="automail-promo" data-am-promo-wrap hidden>
+                      <label class="field">
+                        <span>Акция</span>
+                        <select data-am-promo>
+                          <option value="">Авто · живая «Годовщина»</option>
+                        </select>
+                      </label>
+                      <button type="button" class="btn ghost" data-am-pull>Подтянуть текст в запасной</button>
+                    </div>
+                    <label class="field">
+                      <span data-am-text-label>Запасной текст</span>
+                      <textarea data-am-text rows="4" placeholder="{имя}, поздравляем с годовщиной!…"></textarea>
+                    </label>
+                  </div>
+
+                  <div class="automail-kind" data-kind="other" role="tabpanel" hidden>
+                    <p class="automail-kind-desc">Поводы без типа ДР/годовщина.</p>
+                    <label class="automail-switch">
+                      <input type="checkbox" data-am-enabled>
+                      <span>Включено</span>
+                    </label>
+                    <label class="field">
+                      <span>Источник</span>
+                      <select data-am-source>
+                        <option value="custom">Свой текст</option>
+                        <option value="promo">Из раздела Акции</option>
+                      </select>
+                    </label>
+                    <div class="automail-promo" data-am-promo-wrap hidden>
+                      <label class="field">
+                        <span>Акция</span>
+                        <select data-am-promo>
+                          <option value="">Авто · любая живая акция</option>
+                        </select>
+                      </label>
+                      <button type="button" class="btn ghost" data-am-pull>Подтянуть текст в запасной</button>
+                    </div>
+                    <label class="field">
+                      <span data-am-text-label>Текст</span>
+                      <textarea data-am-text rows="4" placeholder="Здравствуйте, {имя}!…"></textarea>
+                    </label>
+                  </div>
+                </div>
+              </section>
+
+              <div class="automail-footer">
+                <p class="hint">Плейсхолдеры <code>{имя}</code>, <code>{скидка}</code></p>
+                <button type="button" class="btn primary" id="btnAutoMailSave">Сохранить</button>
               </div>
-            </div>
-
-            <div class="automail-kinds" id="autoMailKinds">
-              <section class="subs-card automail-card" data-kind="bday">
-                <div class="subs-card-head">
-                  <h3>День рождения</h3>
-                  <p>События с типом ДР — шаблон или акция из раздела «Акции».</p>
-                </div>
-                <div class="subs-welcome-body">
-                  <div class="subs-welcome-enable">
-                    <label class="subs-welcome-toggle">
-                      <input type="checkbox" data-am-enabled>
-                      <span>Включено для дней рождения</span>
-                    </label>
-                  </div>
-                  <label class="field">
-                    <span>Источник текста</span>
-                    <select data-am-source>
-                      <option value="promo">Из раздела Акции</option>
-                      <option value="custom">Свой текст</option>
-                    </select>
-                  </label>
-                  <div class="subs-welcome-promo" data-am-promo-wrap hidden>
-                    <label class="field">
-                      <span>Акция</span>
-                      <select data-am-promo>
-                        <option value="">Авто · живая «День рождения»</option>
-                      </select>
-                    </label>
-                    <button type="button" class="btn ghost subs-welcome-pull" data-am-pull>Подтянуть текст</button>
-                    <p class="hint">В личку уйдёт шаблон акции. Ниже — запасной текст, если акции нет.</p>
-                  </div>
-                  <label class="field subs-welcome-text">
-                    <span data-am-text-label>Запасной текст</span>
-                    <textarea data-am-text rows="5" placeholder="С днём рождения, {имя}!…"></textarea>
-                  </label>
-                </div>
-              </section>
-
-              <section class="subs-card automail-card" data-kind="anniv">
-                <div class="subs-card-head">
-                  <h3>Годовщина</h3>
-                  <p>Свадьбы и другие годовщины из Posiflora.</p>
-                </div>
-                <div class="subs-welcome-body">
-                  <div class="subs-welcome-enable">
-                    <label class="subs-welcome-toggle">
-                      <input type="checkbox" data-am-enabled>
-                      <span>Включено для годовщин</span>
-                    </label>
-                  </div>
-                  <label class="field">
-                    <span>Источник текста</span>
-                    <select data-am-source>
-                      <option value="promo">Из раздела Акции</option>
-                      <option value="custom">Свой текст</option>
-                    </select>
-                  </label>
-                  <div class="subs-welcome-promo" data-am-promo-wrap hidden>
-                    <label class="field">
-                      <span>Акция</span>
-                      <select data-am-promo>
-                        <option value="">Авто · живая «Годовщина»</option>
-                      </select>
-                    </label>
-                    <button type="button" class="btn ghost subs-welcome-pull" data-am-pull>Подтянуть текст</button>
-                    <p class="hint">В личку уйдёт шаблон акции. Ниже — запасной текст, если акции нет.</p>
-                  </div>
-                  <label class="field subs-welcome-text">
-                    <span data-am-text-label>Запасной текст</span>
-                    <textarea data-am-text rows="5" placeholder="{имя}, поздравляем с годовщиной!…"></textarea>
-                  </label>
-                </div>
-              </section>
-
-              <section class="subs-card automail-card" data-kind="other">
-                <div class="subs-card-head">
-                  <h3>Другие события</h3>
-                  <p>Поводы без типа ДР/годовщина — напоминание о важной дате.</p>
-                </div>
-                <div class="subs-welcome-body">
-                  <div class="subs-welcome-enable">
-                    <label class="subs-welcome-toggle">
-                      <input type="checkbox" data-am-enabled>
-                      <span>Включено для прочих событий</span>
-                    </label>
-                  </div>
-                  <label class="field">
-                    <span>Источник текста</span>
-                    <select data-am-source>
-                      <option value="custom">Свой текст</option>
-                      <option value="promo">Из раздела Акции</option>
-                    </select>
-                  </label>
-                  <div class="subs-welcome-promo" data-am-promo-wrap hidden>
-                    <label class="field">
-                      <span>Акция</span>
-                      <select data-am-promo>
-                        <option value="">Авто · любая живая акция</option>
-                      </select>
-                    </label>
-                    <button type="button" class="btn ghost subs-welcome-pull" data-am-pull>Подтянуть текст</button>
-                    <p class="hint">В личку уйдёт шаблон акции. Ниже — запасной текст, если акции нет.</p>
-                  </div>
-                  <label class="field subs-welcome-text">
-                    <span data-am-text-label>Текст</span>
-                    <textarea data-am-text rows="5" placeholder="Здравствуйте, {имя}!…"></textarea>
-                  </label>
-                </div>
-              </section>
-            </div>
-
-            <div class="automail-footer">
-              <p class="hint">Плейсхолдеры <code>{имя}</code>, <code>{скидка}</code>. Нужен Telegram- или MAX-аккаунт в Настройках.</p>
-              <button type="button" class="btn primary" id="btnAutoMailSave">Сохранить</button>
             </div>
           </div>
 
@@ -1981,6 +1965,6 @@
 <script src="js/api.js?v=43"></script>
 <script src="js/login-ui.js?v=1"></script>
 <script src="js/wheel-widget.js?v=13"></script>
-<script src="js/app.js?v=86"></script>
+<script src="js/app.js?v=87"></script>
 </body>
 </html>
