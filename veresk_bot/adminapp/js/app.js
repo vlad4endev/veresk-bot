@@ -1272,6 +1272,14 @@
   let subsAutoDiscoverDone = false;
 
   async function discoverSubsChannel({ silent = false } = {}) {
+    if (typeof AdminAPI.discoverChannelSubscribers !== "function") {
+      if (!silent) {
+        alert(
+          "Страница со старым кэшем JS. Обновите админку жёстко (Ctrl+Shift+R) или подождите деплой api.js?v=40."
+        );
+      }
+      return null;
+    }
     const btn = $("#btnSubsDiscover");
     if (btn) {
       btn.disabled = true;
