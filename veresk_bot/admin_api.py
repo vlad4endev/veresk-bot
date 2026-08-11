@@ -2978,8 +2978,9 @@ async def handle_chats_dialogs(request: web.Request) -> web.Response:
     only_users = clients_only or _truthy_query(request.query.get("only_users"))
     from senders.telegram_chat import list_dialogs
 
-    # При фильтре по клиентам берём больше диалогов, потом отсекаем
-    fetch_limit = min(limit * 4, 200) if clients_only else limit
+    # При фильтре по клиентам раньше брали limit*4 → Telethon scan до 400.
+    # Достаточно чуть расширить выборку; CRM отфильтрует поверх.
+    fetch_limit = min(limit + 40, 120) if clients_only else min(limit, 100)
     try:
         items = await list_dialogs(
             str(acc["session_file"]),
@@ -3052,6 +3053,7 @@ async def handle_chats_messages(request: web.Request) -> web.Response:
     except (TypeError, ValueError):
         offset_id = 0
     mark_read = request.query.get("mark_read", "1") != "0"
+    enrich_peer = request.query.get("enrich_peer", "1") != "0"
     from senders.telegram_chat import get_dialog_messages
 
     try:
@@ -3062,6 +3064,7 @@ async def handle_chats_messages(request: web.Request) -> web.Response:
             limit=limit,
             offset_id=offset_id,
             mark_read=mark_read,
+            enrich_peer=enrich_peer,
         )
     except Exception as exc:
         logger.exception("get messages failed")

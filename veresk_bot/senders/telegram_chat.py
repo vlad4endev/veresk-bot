@@ -42,17 +42,33 @@ def _session_base(session_file: str) -> str:
 
 
 class _PoolEntry:
-    __slots__ = ("client", "lock", "account_id", "session_file")
+    __slots__ = ("client", "lock", "account_id", "session_file", "me_id")
 
     def __init__(self, client: Any, account_id: int | None, session_file: str):
         self.client = client
         self.lock = asyncio.Lock()
         self.account_id = account_id
         self.session_file = session_file
+        self.me_id: int | None = None
 
 
 _pool: dict[str, _PoolEntry] = {}
 _pool_guard = asyncio.Lock()
+_avatar_mem: dict[str, tuple[float, bytes, str]] = {}
+_AVATAR_MEM_TTL = 6 * 3600
+_AVATAR_MEM_MAX = 256
+_dialogs_cache: dict[str, tuple[float, list[dict[str, Any]]]] = {}
+_DIALOGS_CACHE_TTL = 4.0
+
+
+def _dialogs_cache_key(
+    session_file: str,
+    account_id: int | None,
+    limit: int,
+    query: str,
+    only_users: bool,
+) -> str:
+    return f"{_session_key(session_file)}|{account_id or 0}|{limit}|{query}|{int(only_users)}"
 
 
 async def _ensure_entry(session_file: str, account_id: int | None = None) -> _PoolEntry:
@@ -82,7 +98,20 @@ async def _ensure_entry(session_file: str, account_id: int | None = None) -> _Po
         if not await entry.client.is_user_authorized():
             await release_session(session_file=session_file)
             raise RuntimeError("Сессия не авторизована — переподключите аккаунт")
+        if entry.me_id is None:
+            try:
+                me = await entry.client.get_me()
+                entry.me_id = int(me.id) if me else None
+            except Exception:
+                logger.debug("warmup get_me failed", exc_info=True)
     return entry
+
+
+def _invalidate_dialogs_cache(session_file: str) -> None:
+    prefix = _session_key(session_file) + "|"
+    dead = [k for k in _dialogs_cache if k.startswith(prefix)]
+    for k in dead:
+        _dialogs_cache.pop(k, None)
 
 
 @asynccontextmanager
@@ -98,6 +127,53 @@ async def telegram_session(
         if not await entry.client.is_user_authorized():
             raise RuntimeError("Сессия не авторизована — переподключите аккаунт")
         yield entry.client
+
+
+async def _cached_me_id(session_file: str, account_id: int | None, client: Any) -> int | None:
+    key = _session_key(session_file)
+    entry = _pool.get(key)
+    if entry is not None and entry.me_id is not None:
+        return entry.me_id
+    me = await client.get_me()
+    me_id = int(me.id) if me else None
+    if entry is not None:
+        entry.me_id = me_id
+    return me_id
+
+
+def _avatar_cache_dir() -> Path:
+    from senders.telegram_userbot import sessions_path
+
+    path = sessions_path() / "avatar_cache"
+    path.mkdir(parents=True, exist_ok=True)
+    return path
+
+
+def _avatar_cache_key(account_id: int | None, peer_id: int) -> str:
+    return f"{account_id or 0}_{int(peer_id)}"
+
+
+def _avatar_from_mem(key: str) -> tuple[bytes, str] | None:
+    import time
+
+    hit = _avatar_mem.get(key)
+    if not hit:
+        return None
+    ts, data, mime = hit
+    if time.time() - ts > _AVATAR_MEM_TTL:
+        _avatar_mem.pop(key, None)
+        return None
+    return data, mime
+
+
+def _avatar_to_mem(key: str, data: bytes, mime: str) -> None:
+    import time
+
+    if len(_avatar_mem) >= _AVATAR_MEM_MAX:
+        # выкинем самый старый
+        oldest = min(_avatar_mem.items(), key=lambda kv: kv[1][0])[0]
+        _avatar_mem.pop(oldest, None)
+    _avatar_mem[key] = (time.time(), data, mime)
 
 
 async def release_session(
@@ -345,10 +421,23 @@ async def list_dialogs(
     query: str = "",
     only_users: bool = False,
 ) -> list[dict[str, Any]]:
-    limit = max(1, min(int(limit or 80), 200))
+    import time
+
+    limit = max(1, min(int(limit or 80), 120))
     q = (query or "").strip().lower()
-    # При фильтре/поиске обходим больше диалогов, чтобы набрать limit
-    scan = min(limit * (4 if only_users or q else 1), 400)
+    cache_key = _dialogs_cache_key(session_file, account_id, limit, q, only_users)
+    hit = _dialogs_cache.get(cache_key)
+    if hit and time.monotonic() - hit[0] < _DIALOGS_CACHE_TTL:
+        return [dict(row) for row in hit[1]]
+
+    # Раньше scan доходил до 400 и блокировал чаты надолго.
+    # Для UI достаточно недавних диалогов; CRM-фильтр добирает сверху.
+    if q:
+        scan = min(max(limit * 2, limit), 160)
+    elif only_users:
+        scan = min(max(limit + 40, limit), 140)
+    else:
+        scan = limit
     async with telegram_session(session_file, account_id) as client:
         items: list[dict[str, Any]] = []
         async for dialog in client.iter_dialogs(limit=scan):
@@ -372,6 +461,10 @@ async def list_dialogs(
             items.append(row)
             if len(items) >= limit:
                 break
+        _dialogs_cache[cache_key] = (time.monotonic(), items)
+        if len(_dialogs_cache) > 64:
+            oldest = min(_dialogs_cache.items(), key=lambda kv: kv[1][0])[0]
+            _dialogs_cache.pop(oldest, None)
         return items
 
 
@@ -383,13 +476,16 @@ async def get_dialog_messages(
     limit: int = 50,
     offset_id: int = 0,
     mark_read: bool = True,
+    enrich_peer: bool = True,
 ) -> dict[str, Any]:
     limit = max(1, min(int(limit or 50), 100))
     offset_id = max(0, int(offset_id or 0))
     async with telegram_session(session_file, account_id) as client:
-        entity = await client.get_entity(peer_id)
-        me = await client.get_me()
-        me_id = int(me.id) if me else None
+        try:
+            entity = await client.get_input_entity(peer_id)
+        except Exception:
+            entity = await client.get_entity(peer_id)
+        me_id = await _cached_me_id(session_file, account_id, client)
         kwargs: dict[str, Any] = {"limit": limit}
         if offset_id:
             kwargs["offset_id"] = offset_id
@@ -404,15 +500,30 @@ async def get_dialog_messages(
                 await client.send_read_acknowledge(entity)
             except Exception:
                 logger.debug("mark read failed for %s", peer_id, exc_info=True)
-        return {
-            "peer": {
+        peer: dict[str, Any] = {
+            "id": str(peer_id),
+            "peer_id": int(peer_id),
+            "title": "",
+            "kind": "user",
+            "username": None,
+            "phone": None,
+        }
+        if enrich_peer:
+            # Для заголовка нужен полный entity (username/phone/title)
+            try:
+                full = await client.get_entity(peer_id)
+            except Exception:
+                full = entity
+            peer = {
                 "id": str(peer_id),
                 "peer_id": int(peer_id),
-                "title": _entity_title(entity),
-                "kind": _entity_kind(entity),
-                "username": getattr(entity, "username", None),
-                "phone": getattr(entity, "phone", None),
-            },
+                "title": _entity_title(full),
+                "kind": _entity_kind(full),
+                "username": getattr(full, "username", None),
+                "phone": getattr(full, "phone", None),
+            }
+        return {
+            "peer": peer,
             "messages": rows,
             "has_more": len(msg_list) >= limit,
         }
@@ -431,10 +542,13 @@ async def send_dialog_message(
     if len(body) > 4096:
         raise ValueError("Сообщение длиннее 4096 символов")
     async with telegram_session(session_file, account_id) as client:
-        entity = await client.get_entity(peer_id)
-        me = await client.get_me()
-        me_id = int(me.id) if me else None
+        try:
+            entity = await client.get_input_entity(peer_id)
+        except Exception:
+            entity = await client.get_entity(peer_id)
+        me_id = await _cached_me_id(session_file, account_id, client)
         sent = await client.send_message(entity, body)
+        _invalidate_dialogs_cache(session_file)
         return _serialize_message(sent, me_id=me_id)
 
 
@@ -488,9 +602,11 @@ async def send_dialog_media(
             paths.append(tmp.name)
 
         async with telegram_session(session_file, account_id) as client:
-            entity = await client.get_entity(peer_id)
-            me = await client.get_me()
-            me_id = int(me.id) if me else None
+            try:
+                entity = await client.get_input_entity(peer_id)
+            except Exception:
+                entity = await client.get_entity(peer_id)
+            me_id = await _cached_me_id(session_file, account_id, client)
 
             # Один файл или альбом
             send_path: str | list[str] = paths[0] if len(paths) == 1 else paths
@@ -503,6 +619,7 @@ async def send_dialog_media(
             )
             if not isinstance(sent, list):
                 sent = [sent]
+            _invalidate_dialogs_cache(session_file)
             return [_serialize_message(m, me_id=me_id) for m in sent if m is not None]
     finally:
         for p in paths:
@@ -572,10 +689,10 @@ async def create_or_open_dialog(
         sent = None
         body = (first_message or "").strip()
         if body:
-            me = await client.get_me()
-            me_id = int(me.id) if me else None
+            me_id = await _cached_me_id(session_file, account_id, client)
             msg = await client.send_message(entity, body)
             sent = _serialize_message(msg, me_id=me_id)
+            _invalidate_dialogs_cache(session_file)
 
         return {
             "peer": {
@@ -640,12 +757,40 @@ async def download_peer_avatar(
     account_id: int | None = None,
 ) -> tuple[bytes, str]:
     """Скачать аватар диалога. FileNotFoundError если фото нет."""
+    cache_key = _avatar_cache_key(account_id, peer_id)
+    cached = _avatar_from_mem(cache_key)
+    if cached:
+        return cached
+
+    disk = _avatar_cache_dir() / f"{cache_key}.bin"
+    meta = _avatar_cache_dir() / f"{cache_key}.mime"
+    if disk.is_file():
+        try:
+            data = disk.read_bytes()
+            mime = meta.read_text().strip() if meta.is_file() else "image/jpeg"
+            if data:
+                _avatar_to_mem(cache_key, data, mime)
+                return data, mime
+        except OSError:
+            pass
+
     async with telegram_session(session_file, account_id) as client:
-        entity = await client.get_entity(peer_id)
+        try:
+            entity = await client.get_input_entity(peer_id)
+        except Exception:
+            entity = await client.get_entity(peer_id)
         data = await client.download_profile_photo(entity, file=bytes)
         if not data:
             raise FileNotFoundError("no_avatar")
-        return bytes(data), _guess_mime(bytes(data), "image/jpeg")
+        raw = bytes(data)
+        mime = _guess_mime(raw, "image/jpeg")
+        _avatar_to_mem(cache_key, raw, mime)
+        try:
+            disk.write_bytes(raw)
+            meta.write_text(mime)
+        except OSError:
+            logger.debug("avatar disk cache write failed", exc_info=True)
+        return raw, mime
 
 
 async def download_message_media(

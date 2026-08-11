@@ -5524,10 +5524,14 @@
     sending: false,
     searchTimer: null,
     pollTimer: null,
+    pollTick: 0,
+    dialogsInflight: null,
+    messagesInflight: null,
     maxEs: null,
     lastQuery: "",
     onlyUsers: localStorage.getItem(TG_ONLY_USERS_KEY) !== "0",
     historyHint: "",
+    avatarObserver: null,
   };
 
   function isMaxChannel() {
@@ -5673,20 +5677,25 @@
 
   function startTgPoll() {
     stopTgPoll();
+    tgState.pollTick = 0;
+    const interval = isMaxChannel() && !isMaxUserbot() ? 20000 : 10000;
     tgState.pollTimer = setInterval(() => {
       if (!$("#chats")?.classList.contains("active")) return;
+      tgState.pollTick = (tgState.pollTick || 0) + 1;
+      const tick = tgState.pollTick;
       if (isMaxChannel()) {
         if (!tgState.maxConfigured) return;
-        refreshTgDialogs({ silent: true });
+        // Список диалогов — реже; открытый чат — чаще
+        if (tick % 2 === 0) refreshTgDialogs({ silent: true });
         if (isMaxUserbot() && tgState.peerId) {
           openTgPeer(tgState.peerId, { silent: true, keepScroll: true });
         }
         return;
       }
       if (!tgState.accountId) return;
-      refreshTgDialogs({ silent: true });
+      if (tick % 2 === 0) refreshTgDialogs({ silent: true });
       if (tgState.peerId) openTgPeer(tgState.peerId, { silent: true, keepScroll: true });
-    }, isMaxChannel() && !isMaxUserbot() ? 20000 : 8000);
+    }, interval);
   }
 
   function tgInitials(title) {
@@ -5704,6 +5713,63 @@
     const url = avatarUrl || fallbackUrl || "";
     if (!url) return initials;
     return `<img class="tg-av-img" src="${esc(url)}" alt="" loading="lazy" decoding="async" referrerpolicy="no-referrer" onerror="this.classList.add('broken')">${initials}`;
+  }
+
+  /** Инициалы сразу; аватар подгружаем только для видимых строк (не N+1 под лок Telethon). */
+  function tgAvatarLazyShell(title, avatarUrl) {
+    const initials = `<span class="tg-av-fallback">${esc(tgInitials(title))}</span>`;
+    const url = (avatarUrl || "").trim();
+    if (!url) return initials;
+    return `<span class="tg-av-lazy" data-avatar-src="${esc(url)}">${initials}</span>`;
+  }
+
+  function ensureTgAvatarObserver() {
+    if (tgState.avatarObserver || typeof IntersectionObserver === "undefined") return;
+    tgState.avatarObserver = new IntersectionObserver(
+      (entries) => {
+        for (const entry of entries) {
+          if (!entry.isIntersecting) continue;
+          const host = entry.target;
+          tgState.avatarObserver.unobserve(host);
+          const src = host.getAttribute("data-avatar-src");
+          if (!src || host.querySelector("img.tg-av-img")) continue;
+          const img = document.createElement("img");
+          img.className = "tg-av-img";
+          img.alt = "";
+          img.loading = "lazy";
+          img.decoding = "async";
+          img.referrerPolicy = "no-referrer";
+          img.onerror = () => img.classList.add("broken");
+          img.src = src;
+          host.prepend(img);
+        }
+      },
+      { root: $("#tgDialogList"), rootMargin: "80px 0px", threshold: 0.01 }
+    );
+  }
+
+  function observeTgDialogAvatars() {
+    ensureTgAvatarObserver();
+    if (!tgState.avatarObserver) {
+      // Fallback без IO: подгружаем видимые сразу
+      $$("#tgDialogList .tg-av-lazy[data-avatar-src]").forEach((host) => {
+        const src = host.getAttribute("data-avatar-src");
+        if (!src || host.querySelector("img")) return;
+        const img = document.createElement("img");
+        img.className = "tg-av-img";
+        img.alt = "";
+        img.loading = "lazy";
+        img.decoding = "async";
+        img.referrerPolicy = "no-referrer";
+        img.onerror = () => img.classList.add("broken");
+        img.src = src;
+        host.prepend(img);
+      });
+      return;
+    }
+    $$("#tgDialogList .tg-av-lazy[data-avatar-src]").forEach((el) => {
+      tgState.avatarObserver.observe(el);
+    });
   }
 
   function tgTimeLabel(iso) {
@@ -5856,11 +5922,14 @@
           d.unread > 0
             ? `<span class="tg-unread">${d.unread > 99 ? "99+" : d.unread}</span>`
             : "";
-        let avInner = tgAvatarInner(
-          d.title,
-          d.avatar_url,
-          !maxMode && accountId ? AdminAPI.chatAvatarUrl(d.peer_id, accountId) : ""
-        );
+        // Не ставим src аватара сразу на все строки — иначе N запросов /avatar
+        // сериализуются под одним Telethon-локом и подвешивают чаты.
+        const avatarUrl =
+          d.avatar_url ||
+          (!maxMode && accountId && d.peer_id != null
+            ? AdminAPI.chatAvatarUrl(d.peer_id, accountId)
+            : "");
+        const avInner = tgAvatarLazyShell(d.title, avatarUrl);
         return `
           <button type="button" class="tg-dialog${active}" data-peer="${esc(peerKey)}">
             <span class="tg-dialog-av ${esc(maxMode && !maxUserbot ? "user" : kind)}">
@@ -5879,6 +5948,7 @@
           </button>`;
       })
       .join("");
+    observeTgDialogAvatars();
   }
 
   function tgMediaBlock(m) {
@@ -6250,6 +6320,22 @@
   }
 
   async function refreshTgDialogs({ silent = false } = {}) {
+    if (tgState.dialogsInflight) {
+      if (silent) return tgState.dialogsInflight;
+      try {
+        await tgState.dialogsInflight;
+      } catch (_) {
+        /* previous silent may fail quietly */
+      }
+    }
+    const run = _refreshTgDialogsInner({ silent });
+    tgState.dialogsInflight = run.finally(() => {
+      if (tgState.dialogsInflight === run) tgState.dialogsInflight = null;
+    });
+    return tgState.dialogsInflight;
+  }
+
+  async function _refreshTgDialogsInner({ silent = false } = {}) {
     if (isMaxChannel()) {
       if (!tgState.maxConfigured) {
         tgState.dialogs = [];
@@ -6266,7 +6352,7 @@
         if (!silent) tgState.loadingDialogs = true;
         if (!silent) renderTgDialogs();
         try {
-          const params = { account_id: accountId, limit: 100 };
+          const params = { account_id: accountId, limit: 60 };
           if (tgState.lastQuery) params.q = tgState.lastQuery;
           if (tgState.onlyUsers) params.clients_only = "1";
           const data = await AdminAPI.maxChatDialogs(params);
@@ -6298,7 +6384,7 @@
       if (!silent) tgState.loadingDialogs = true;
       if (!silent) renderTgDialogs();
       try {
-        const params = { limit: 100 };
+        const params = { limit: 60 };
         if (tgState.lastQuery) params.q = tgState.lastQuery;
         if (tgState.onlyUsers) params.clients_only = "1";
         const data = await AdminAPI.maxChatDialogs(params);
@@ -6335,7 +6421,7 @@
     if (!silent) tgState.loadingDialogs = true;
     if (!silent) renderTgDialogs();
     try {
-      const params = { account_id: accountId, limit: 100 };
+      const params = { account_id: accountId, limit: 60 };
       if (tgState.lastQuery) params.q = tgState.lastQuery;
       if (tgState.onlyUsers) params.clients_only = "1";
       const data = await AdminAPI.chatDialogs(params);
@@ -6360,8 +6446,26 @@
     renderTgDialogs();
   }
 
+  function tgMessagesFingerprint(messages) {
+    if (!messages || !messages.length) return "";
+    const last = messages[messages.length - 1];
+    return `${messages.length}:${last?.id || ""}:${last?.date || ""}`;
+  }
+
   async function openTgPeer(peerId, { silent = false, keepScroll = false } = {}) {
     if (peerId == null || peerId === "") return;
+    if (silent && tgState.messagesInflight) return tgState.messagesInflight;
+    const run = _openTgPeerInner(peerId, { silent, keepScroll });
+    if (silent) {
+      tgState.messagesInflight = run.finally(() => {
+        if (tgState.messagesInflight === run) tgState.messagesInflight = null;
+      });
+      return tgState.messagesInflight;
+    }
+    return run;
+  }
+
+  async function _openTgPeerInner(peerId, { silent = false, keepScroll = false } = {}) {
     if (isMaxChannel()) {
       const switched = String(tgState.peerId) !== String(peerId);
       tgState.peerId = peerId;
@@ -6385,17 +6489,21 @@
         if (data.peer?.peer_id && String(data.peer.peer_id) !== String(peerId)) {
           tgState.peerId = data.peer.peer_id;
         }
-        setTgPeerHeader(data.peer);
-        tgState.messages = data.messages || [];
-        tgState.historyHint = data.history_unavailable
-          ? data.hint || "История появится после следующего сообщения клиента"
-          : "";
-        renderTgMessages({ stickBottom: !keepScroll, keepScroll });
+        if (!silent || data.peer?.title) setTgPeerHeader(data.peer);
+        const next = data.messages || [];
+        const changed = tgMessagesFingerprint(next) !== tgMessagesFingerprint(tgState.messages);
+        if (changed || !silent) {
+          tgState.messages = next;
+          tgState.historyHint = data.history_unavailable
+            ? data.hint || "История появится после следующего сообщения клиента"
+            : "";
+          renderTgMessages({ stickBottom: !keepScroll, keepScroll });
+        }
         mergePeerIntoDialogs(data.peer);
-        renderTgDialogs();
+        if (!silent) renderTgDialogs();
         showTgThread(true);
-        focusTgComposer();
-        refreshTgClientStatus({ silent: true });
+        if (!silent) focusTgComposer();
+        if (!silent) refreshTgClientStatus({ silent: true });
       } catch (err) {
         if (!silent) {
           alert("Не удалось открыть чат: " + (err.data?.error || err.message));
@@ -6427,18 +6535,25 @@
     try {
       const data = await AdminAPI.chatMessages(peerId, {
         account_id: accountId,
-        limit: 50,
-        mark_read: "1",
+        limit: silent ? 40 : 50,
+        mark_read: silent ? "0" : "1",
+        enrich_peer: silent ? "0" : "1",
       });
-      setTgPeerHeader(data.peer);
-      tgState.messages = data.messages || [];
-      tgState.historyHint = "";
-      renderTgMessages({ stickBottom: !keepScroll, keepScroll });
-      mergePeerIntoDialogs(data.peer);
-      renderTgDialogs();
-      showTgThread(true);
-      focusTgComposer();
-      refreshTgClientStatus({ silent: true });
+      if (!silent && data.peer) setTgPeerHeader(data.peer);
+      const next = data.messages || [];
+      const changed = tgMessagesFingerprint(next) !== tgMessagesFingerprint(tgState.messages);
+      if (changed || !silent) {
+        tgState.messages = next;
+        tgState.historyHint = "";
+        renderTgMessages({ stickBottom: !keepScroll, keepScroll });
+      }
+      if (!silent) {
+        mergePeerIntoDialogs(data.peer);
+        renderTgDialogs();
+        showTgThread(true);
+        focusTgComposer();
+        refreshTgClientStatus({ silent: true });
+      }
     } catch (err) {
       if (!silent) {
         alert("Не удалось открыть чат: " + (err.data?.error || err.message));

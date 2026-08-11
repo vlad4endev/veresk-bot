@@ -22,6 +22,10 @@ logger = logging.getLogger(__name__)
 
 T = TypeVar("T")
 
+# Короткий TTL-кэш для фильтра «Клиенты» в чатах (частый poll).
+_customer_contact_cache: tuple[float, tuple[set[int], set[str], set[int]]] | None = None
+_CUSTOMER_CONTACT_TTL = 45.0
+
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS customers (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -424,6 +428,14 @@ async def get_customer_by_max_user_id(max_user_id: int) -> dict[str, Any] | None
 
 async def customer_contact_sets() -> tuple[set[int], set[str], set[int]]:
     """Наборы tg_user_id, телефонов (10 цифр) и max_user_id для фильтрации чатов."""
+    import time
+
+    global _customer_contact_cache
+    now = time.monotonic()
+    if _customer_contact_cache is not None:
+        ts, payload = _customer_contact_cache
+        if now - ts < _CUSTOMER_CONTACT_TTL:
+            return payload
 
     def _sets() -> tuple[set[int], set[str], set[int]]:
         with _connect() as db:
@@ -451,7 +463,9 @@ async def customer_contact_sets() -> tuple[set[int], set[str], set[int]]:
                 phones.add(digits)
         return tg_ids, phones, max_ids
 
-    return await _run_db(_sets)
+    payload = await _run_db(_sets)
+    _customer_contact_cache = (now, payload)
+    return payload
 
 
 async def get_customer_by_phone(phone: str) -> dict[str, Any] | None:

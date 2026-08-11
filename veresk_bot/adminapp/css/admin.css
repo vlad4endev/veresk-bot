@@ -1836,6 +1836,7 @@
     position:absolute;inset:0;width:100%;height:100%;object-fit:cover;border-radius:inherit;z-index:1;
   }
   .tg-av-img.broken{display:none;}
+  .tg-av-lazy{position:absolute;inset:0;display:grid;place-items:center;}
   .tg-av-fallback{position:relative;z-index:0;line-height:1;}
   .tg-dialog-main{min-width:0;}
   .tg-dialog-top{display:flex;align-items:baseline;justify-content:space-between;gap:8px;}
