@@ -2,13 +2,13 @@
 
 (function () {
   const DEFAULT_CONFIG = {
-    title: "Весенний розыгрыш",
-    note: "крутите колесо — получите подарок от Veresk",
+    title: "Розыгрыш месяца",
+    note: "Анкета пройдена. Крутите один раз и забирайте подарок.",
     segments: [
-      { id: "s1", label: "Скидка 10%", color: "#F47CB8", weight: 30 },
+      { id: "s1", label: "Скидка 10%", color: "#FF92CE", weight: 30 },
       { id: "s2", label: "Скидка 15%", color: "#402C60", weight: 18 },
       { id: "s3", label: "Бесплатная доставка", color: "#FFFFFF", weight: 22 },
-      { id: "s4", label: "Попробуйте ещё", color: "#F47CB8", weight: 20 },
+      { id: "s4", label: "Попробуйте ещё", color: "#FF92CE", weight: 20 },
       { id: "s5", label: "Мини-букет", color: "#402C60", weight: 10 },
     ],
   };
@@ -58,16 +58,11 @@
   }
 
   function setWheelHeader(mode) {
-    const title = document.querySelector("#screen-wheel .header-title");
-    const sub = document.querySelector("#screen-wheel .header-sub");
-    if (!title || !sub) return;
-    if (mode === "prize") {
-      title.textContent = "Ваш приз";
-      sub.textContent = "Закреплён после анкеты";
-    } else {
-      title.textContent = "Колесо фортуны";
-      sub.textContent = "Один подарок после анкеты";
-    }
+    const screen = document.getElementById("screen-wheel");
+    const header = document.querySelector("#screen-wheel .screen-header");
+    if (screen) screen.classList.toggle("is-prize", mode === "prize");
+    /* шапка экрана скрыта — брендовый UI внутри виджета */
+    if (header) header.hidden = true;
   }
 
   function destroyWidget() {
@@ -94,10 +89,6 @@
       play?.prize_label || play?.label || opts?.segment?.label,
       play?.discount_pct ?? opts?.discount_pct
     );
-    const whenRaw = String(play?.created_at || "").trim();
-    const when = whenRaw
-      ? whenRaw.slice(0, 16).replace("T", " ")
-      : "";
 
     cachedPlay = play || cachedPlay;
     lastPrize = {
@@ -108,22 +99,15 @@
 
     root.innerHTML = `
       <div class="vw-prize-panel" role="status" aria-live="polite">
-        <div class="vw-prize-glow" aria-hidden="true"></div>
-        <div class="vw-prize-seal">
-          <img src="${esc(LOGO_SRC)}" alt="" width="72" height="72" decoding="async">
+        <div class="vw-prize-hero">
+          <div class="vw-prize-logo-wrap">
+            <img class="vw-prize-logo" src="${esc(LOGO_SRC)}" alt="Veresk" width="88" height="88" decoding="async">
+          </div>
         </div>
-        <p class="vw-prize-kicker">Поздравляем</p>
-        <h2 class="vw-prize-title">Ваш подарок от Veresk</h2>
-        <div class="vw-prize-card">
-          <span class="vw-prize-card-label">Приз</span>
-          <strong class="vw-prize-card-value">${esc(prizeLabel)}</strong>
-        </div>
-        <p class="vw-prize-note">
-          Колесо доступно один раз после анкеты. Приз уже закреплён —
-          покажите это окно флористу при заказе.
-        </p>
-        ${when ? `<p class="vw-prize-when">Получен · ${esc(when)}</p>` : ""}
-        <p class="vw-prize-brand">Veresk · trail of happiness</p>
+        <p class="vw-prize-hi">Ваш подарок</p>
+        <h2 class="vw-prize-name">${esc(prizeLabel)}</h2>
+        <p class="vw-prize-note">Покажите этот экран флористу при заказе</p>
+        <p class="vw-prize-brand">trail of happiness</p>
       </div>
     `;
   }

@@ -124,6 +124,28 @@ body::before {
   }
 }
 
+/* MAX / колесо: заполняем доступную ширину webview, без «крошечной колонки» */
+html.is-max #app,
+html.is-wheel-host #app,
+html.is-wheel-screen #app {
+  max-width: min(100%, 720px);
+}
+
+html.is-max,
+html.is-max body,
+html.is-wheel-host,
+html.is-wheel-host body,
+html.is-wheel-screen,
+html.is-wheel-screen body {
+  background: #FFFFFF;
+}
+
+html.is-max body::before,
+html.is-wheel-host body::before,
+html.is-wheel-screen body::before {
+  display: none;
+}
+
 body:has(.tg-guard:not(.hidden)) #app {
   padding-top: 96px;
 }
@@ -1207,86 +1229,76 @@ body:has(.tg-guard:not(.hidden)) #app {
   overflow-wrap: anywhere;
 }
 
-/* Fortune wheel screen — фирменный стиль Veresk */
+/* Fortune wheel — тёмный брендовый экран */
 #screen-wheel.active {
-  background:
-    url("assets/leaf-burst.svg") center 42% / min(120vw, 640px) no-repeat,
-    #FFFFFF;
+  background: #1b1129;
 }
 
-#screen-wheel .screen-header--solo {
+#screen-wheel.active::before {
+  display: none;
+}
+
+#screen-wheel.is-prize.active {
+  background: #1b1129;
+}
+
+#screen-wheel.is-prize .wheel-screen-body {
   justify-content: center;
-  text-align: center;
-  background: rgba(255, 255, 255, 0.92);
-  border-bottom: 1px solid rgba(64, 44, 96, 0.1);
+  align-items: center;
+  min-height: calc(100dvh - 24px);
 }
 
-#screen-wheel .screen-header--solo > div {
-  width: 100%;
+html.is-max #screen-wheel.is-prize .wheel-screen-body,
+html.is-wheel-host #screen-wheel.is-prize .wheel-screen-body {
+  min-height: 100dvh;
+  padding-inline: var(--v-gutter);
 }
 
-#screen-wheel .header-title {
-  font-family: "Orchidea Pro", Georgia, "Times New Roman", serif;
-  font-weight: 600;
-  color: #402C60;
-}
-
-#screen-wheel .header-sub {
-  font-family: "XO Thames", system-ui, sans-serif;
-  font-style: italic;
-  text-transform: lowercase;
-  color: #F47CB8;
+#screen-wheel .screen-header--solo[hidden] {
+  display: none !important;
 }
 
 .wheel-screen-body {
   display: flex;
   flex-direction: column;
-  align-items: center;
-  justify-content: flex-start;
+  align-items: stretch;
+  justify-content: stretch;
   flex: 1;
   min-height: 0;
   width: 100%;
-  padding-top: clamp(6px, 1.5dvh, 14px);
-  padding-bottom: calc(18px + var(--v-safe-bottom));
-  overflow-y: auto;
-  -webkit-overflow-scrolling: touch;
+  padding: 0;
+  overflow: hidden;
 }
 
 #miniWheelMount {
   width: 100%;
-  max-width: min(100%, 520px);
+  flex: 1;
+  min-height: 0;
   display: flex;
   justify-content: center;
-  align-items: flex-start;
-  margin: 0 auto;
+  align-items: stretch;
 }
 
-.wheel-screen-body .vw-root,
-.wheel-screen-body .vw-prize-panel {
-  max-width: min(100%, 480px);
+.wheel-screen-body .vw-root {
+  max-width: 460px;
   width: 100%;
+  min-height: 100%;
 }
 
-@media (min-width: 768px) {
-  #miniWheelMount {
-    max-width: 560px;
-  }
-  .wheel-screen-body .vw-root,
-  .wheel-screen-body .vw-prize-panel {
-    max-width: 500px;
-  }
+.wheel-screen-body .vw-prize-panel {
+  max-width: min(100%, 400px);
+  width: 100%;
+  margin: auto;
+}
+
+html.is-max .wheel-screen-body .vw-root,
+html.is-wheel-host .wheel-screen-body .vw-root {
+  max-width: 460px;
 }
 
 @media (max-height: 640px) {
-  #screen-wheel .screen-header {
-    padding-top: calc(8px + var(--v-safe-top));
-    padding-bottom: 8px;
-  }
   .wheel-screen-body {
-    padding-top: 2px;
-  }
-  #screen-wheel.active {
-    background-size: min(100vw, 480px);
+    padding-top: 0;
   }
 }
 

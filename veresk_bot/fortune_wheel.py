@@ -10,24 +10,24 @@ import runtime_settings
 SETTINGS_KEY = "fortune_wheel"
 
 DEFAULT_COLORS = (
-    "#F47CB8",
+    "#FF92CE",
     "#402C60",
     "#FFFFFF",
-    "#F47CB8",
+    "#FF92CE",
     "#402C60",
     "#FFFFFF",
-    "#F47CB8",
+    "#FF92CE",
     "#402C60",
 )
 
 DEFAULT_CONFIG: dict[str, Any] = {
-    "title": "Весенний розыгрыш",
-    "note": "крутите колесо — получите подарок от Veresk",
+    "title": "Розыгрыш месяца",
+    "note": "Анкета пройдена. Крутите один раз и забирайте подарок.",
     "segments": [
-        {"id": "s1", "label": "Скидка 10%", "color": "#F47CB8", "weight": 30},
+        {"id": "s1", "label": "Скидка 10%", "color": "#FF92CE", "weight": 30},
         {"id": "s2", "label": "Скидка 15%", "color": "#402C60", "weight": 18},
         {"id": "s3", "label": "Бесплатная доставка", "color": "#FFFFFF", "weight": 22},
-        {"id": "s4", "label": "Попробуйте ещё", "color": "#F47CB8", "weight": 20},
+        {"id": "s4", "label": "Попробуйте ещё", "color": "#FF92CE", "weight": 20},
         {"id": "s5", "label": "Мини-букет", "color": "#402C60", "weight": 10},
     ],
 }

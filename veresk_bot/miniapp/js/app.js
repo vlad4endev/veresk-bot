@@ -1,59 +1,103 @@
 /* global VereskStatus, VereskOrder */
 
 const tg = window.Telegram?.WebApp;
+const maxApp = window.WebApp;
 window.tg = tg;
+window.maxApp = maxApp;
 
 const SCREEN_ORDER = ["home", "order", "status", "done", "wheel"];
 
-function hasTelegramAuth() {
-  return Boolean(tg?.initData);
+function isMaxHost() {
+  // MAX Bridge: window.WebApp с initData, без Telegram.WebApp.initData
+  return Boolean(maxApp?.initData) && !tg?.initData;
 }
 
-function updateTelegramGuard() {
+function hasMessengerAuth() {
+  return Boolean(tg?.initData || maxApp?.initData);
+}
+
+function updateMessengerGuard() {
   const guard = document.getElementById("tg-guard");
   if (!guard) return;
-  guard.classList.toggle("hidden", hasTelegramAuth());
+  guard.classList.toggle("hidden", hasMessengerAuth());
+}
+
+function applyHostClass() {
+  const root = document.documentElement;
+  root.classList.toggle("is-max", isMaxHost());
+  root.classList.toggle("is-telegram", Boolean(tg?.initData));
+  if (isMaxHost() || location.search.includes("wheel=1") || location.hash === "#wheel") {
+    root.classList.add("is-wheel-host");
+  }
 }
 
 window.VereskTelegram = {
-  getInitData: () => tg?.initData || "",
-  apiHeaders: () => ({
-    "Content-Type": "application/json",
-    "X-Telegram-Init-Data": tg?.initData || "",
-  }),
-  hasAuth: hasTelegramAuth,
+  getInitData: () => tg?.initData || maxApp?.initData || "",
+  apiHeaders: () => {
+    const headers = { "Content-Type": "application/json" };
+    if (tg?.initData) headers["X-Telegram-Init-Data"] = tg.initData;
+    if (maxApp?.initData) {
+      headers["X-Max-Init-Data"] = maxApp.initData;
+      headers["X-Max-WebApp-Init-Data"] = maxApp.initData;
+    }
+    return headers;
+  },
+  hasAuth: hasMessengerAuth,
+  isMax: isMaxHost,
 };
 
-if (tg) {
-  tg.ready();
-  tg.expand();
-  tg.setHeaderColor("#402C60");
-  tg.setBackgroundColor("#FAF7FF");
-  updateTelegramGuard();
+function bootMessengerShell() {
+  applyHostClass();
+  updateMessengerGuard();
 
-  try {
-    tg.BackButton.onClick(() => {
-      const current = getCurrentScreen();
-      if (current === "wheel") {
-        // Колесо — отдельный экран после анкеты, без возврата на главную Mini App
-        try {
-          tg.close();
-        } catch (_) {
-          /* ignore */
+  if (tg?.initData) {
+    try {
+      tg.ready();
+      tg.expand();
+      tg.setHeaderColor?.("#402C60");
+      tg.setBackgroundColor?.("#FFFFFF");
+    } catch (e) {
+      console.warn("Telegram WebApp init", e);
+    }
+    try {
+      tg.BackButton?.onClick?.(() => {
+        const current = getCurrentScreen();
+        if (current === "wheel") {
+          try {
+            tg.close();
+          } catch (_) {
+            /* ignore */
+          }
+          return;
         }
-        return;
-      }
-      if (current === "order" && window.VereskOrder?.getStep?.() > 1) {
-        window.VereskOrder.prevStep();
-        return;
-      }
-      if (current !== "home") goTo("home");
-    });
-  } catch (e) {
-    console.warn("BackButton unavailable", e);
+        if (current === "order" && window.VereskOrder?.getStep?.() > 1) {
+          window.VereskOrder.prevStep();
+          return;
+        }
+        if (current !== "home") goTo("home");
+      });
+    } catch (e) {
+      console.warn("BackButton unavailable", e);
+    }
+    return;
   }
+
+  if (maxApp?.initData) {
+    try {
+      maxApp.ready?.();
+      maxApp.expand?.();
+      // часть клиентов MAX — requestFullscreen / viewport
+      maxApp.requestFullscreen?.();
+    } catch (e) {
+      console.warn("MAX WebApp init", e);
+    }
+  }
+}
+
+if (document.readyState === "loading") {
+  document.addEventListener("DOMContentLoaded", bootMessengerShell);
 } else {
-  document.addEventListener("DOMContentLoaded", updateTelegramGuard);
+  bootMessengerShell();
 }
 
 function getCurrentScreen() {
@@ -76,6 +120,7 @@ function goTo(screenName) {
   });
 
   document.getElementById(`screen-${screenName}`).classList.add("active");
+  document.documentElement.classList.toggle("is-wheel-screen", screenName === "wheel");
 
   if (tg?.BackButton) {
     if (screenName === "home" || screenName === "wheel") tg.BackButton.hide();
@@ -101,12 +146,17 @@ document.getElementById("btn-open-status")?.addEventListener("click", () => goTo
 document.getElementById("btn-go-home")?.addEventListener("click", () => goTo("home"));
 document.getElementById("btn-go-status")?.addEventListener("click", () => goTo("status"));
 
-// Старт с колесом: ?wheel=1, #wheel или Telegram start_param=wheel
+// Старт с колесом: ?wheel=1, #wheel, Telegram/MAX start_param=wheel
 (function bootWheelDeepLink() {
   try {
     const params = new URLSearchParams(location.search);
     const hash = (location.hash || "").replace(/^#/, "");
-    const startParam = String(tg?.initDataUnsafe?.start_param || "").toLowerCase();
+    const startParam = String(
+      tg?.initDataUnsafe?.start_param ||
+        maxApp?.initDataUnsafe?.start_param ||
+        params.get("WebAppStartParam") ||
+        ""
+    ).toLowerCase();
     const wantWheel =
       params.get("wheel") === "1" ||
       params.get("screen") === "wheel" ||
@@ -114,12 +164,10 @@ document.getElementById("btn-go-status")?.addEventListener("click", () => goTo("
       startParam === "wheel" ||
       startParam.startsWith("wheel_");
     if (wantWheel) {
-      document.addEventListener("DOMContentLoaded", () => {
-        window.VereskFortuneWheel?.open?.();
-      });
-      if (document.readyState !== "loading") {
-        window.VereskFortuneWheel?.open?.();
-      }
+      document.documentElement.classList.add("is-wheel-host");
+      const open = () => window.VereskFortuneWheel?.open?.();
+      document.addEventListener("DOMContentLoaded", open);
+      if (document.readyState !== "loading") open();
     }
   } catch (e) {
     console.warn("wheel deeplink", e);
