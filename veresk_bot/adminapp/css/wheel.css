@@ -138,8 +138,8 @@
   inset:50% auto auto 50%;
   z-index:6;
   transform:translate(-50%,-50%);
-  width:104px;
-  height:104px;
+  width:64px;
+  height:64px;
   border-radius:50%;
   border:2px solid rgba(255,255,255,.95);
   background:#fff;
@@ -147,17 +147,17 @@
   align-items:center;
   justify-content:center;
   box-shadow:
-    0 0 0 4px rgba(255,255,255,.7),
-    0 0 0 5px rgba(232,121,176,.22),
-    0 10px 24px rgba(61,42,85,.2);
+    0 0 0 3px rgba(255,255,255,.7),
+    0 0 0 4px rgba(232,121,176,.22),
+    0 8px 18px rgba(61,42,85,.18);
   cursor:pointer;
   padding:0;
   overflow:hidden;
   transition:transform .22s ease,box-shadow .22s ease;
 }
 .vw-hub-logo{
-  width:94%;
-  height:94%;
+  width:72%;
+  height:72%;
   object-fit:contain;
   display:block;
   pointer-events:none;
@@ -165,9 +165,9 @@
 }
 .vw-hub:hover{
   box-shadow:
-    0 0 0 4px rgba(255,255,255,.85),
-    0 0 0 6px rgba(232,121,176,.34),
-    0 12px 28px rgba(201,79,147,.22);
+    0 0 0 3px rgba(255,255,255,.85),
+    0 0 0 5px rgba(232,121,176,.34),
+    0 10px 22px rgba(201,79,147,.2);
 }
 .vw-hub:active{transform:translate(-50%,-50%) scale(.96);}
 .vw-hub:disabled{cursor:default;}
@@ -176,9 +176,9 @@
 }
 .vw-hub.is-win{
   box-shadow:
-    0 0 0 4px rgba(255,255,255,.95),
-    0 0 0 8px rgba(232,121,176,.42),
-    0 14px 32px rgba(201,79,147,.3);
+    0 0 0 3px rgba(255,255,255,.95),
+    0 0 0 6px rgba(232,121,176,.42),
+    0 12px 26px rgba(201,79,147,.28);
 }
 
 .vw-result{

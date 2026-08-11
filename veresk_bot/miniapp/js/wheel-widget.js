@@ -133,7 +133,7 @@
       );
 
       const lines = labelLines(s.label, spanDeg);
-      const [tx, ty] = polar(cx, cy, r * 0.62, midDeg);
+      const [tx, ty] = polar(cx, cy, r * 0.68, midDeg);
       const flip = midDeg > 90 && midDeg < 270;
       const rot = flip ? midDeg + 180 : midDeg;
       const fs = spanDeg < 45 ? 10 : spanDeg < 60 ? 11.5 : 13;
@@ -231,7 +231,7 @@
         <div class="vw-pointer" aria-hidden="true"><span></span></div>
         <div class="vw-disc"></div>
         <button type="button" class="vw-hub" aria-label="Крутить колесо">
-          <img class="vw-hub-logo" src="${esc(logoUrl)}" alt="Veresk" width="96" height="96" decoding="async">
+          <img class="vw-hub-logo" src="${esc(logoUrl)}" alt="Veresk" width="48" height="48" decoding="async">
         </button>
       </div>
       <div class="vw-result" hidden>
