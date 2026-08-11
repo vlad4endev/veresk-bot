@@ -66,10 +66,34 @@
 
   function shortenLabel(label, span) {
     const raw = String(label || "").trim();
-    if (span < 18) return raw.slice(0, 8);
-    if (span < 28) return raw.slice(0, 12);
-    if (span < 40) return raw.slice(0, 16);
-    return raw.slice(0, 20);
+    if (span < 40) return raw.slice(0, 10);
+    if (span < 55) return raw.slice(0, 14);
+    return raw.slice(0, 18);
+  }
+
+  /** Визуально все сектора равные — вес влияет только на шанс. */
+  function visualSlices(segments) {
+    const n = Math.max(segments.length, 1);
+    const span = 360 / n;
+    return segments.map((s, i) => ({
+      segment: s,
+      index: i,
+      startDeg: i * span,
+      spanDeg: span,
+      midDeg: i * span + span / 2,
+    }));
+  }
+
+  function labelLines(text, span) {
+    const raw = shortenLabel(text, span);
+    if (raw.length <= 9 || span < 48) return [raw];
+    const parts = raw.split(/\s+/);
+    if (parts.length >= 2) {
+      const mid = Math.ceil(parts.length / 2);
+      return [parts.slice(0, mid).join(" "), parts.slice(mid).join(" ")].filter(Boolean);
+    }
+    const cut = Math.ceil(raw.length / 2);
+    return [raw.slice(0, cut).trim(), raw.slice(cut).trim()].filter(Boolean);
   }
 
   function buildSvg(segments) {
@@ -77,40 +101,45 @@
     const cx = size / 2;
     const cy = size / 2;
     const r = 138;
-    const total = totalWeight(segments);
-    if (!segments.length || total <= 0) {
+    if (!segments.length) {
       return `<svg class="vw-svg" viewBox="0 0 ${size} ${size}" aria-hidden="true">
         <circle cx="${cx}" cy="${cy}" r="${r}" fill="#F7F0F8"/>
         <text x="${cx}" y="${cy}" text-anchor="middle" dominant-baseline="middle" fill="#9A8AAD" font-size="13" font-family="system-ui,sans-serif">Нет секторов</text>
       </svg>`;
     }
 
-    let angle = 0;
+    const slices = visualSlices(segments);
     const parts = [];
     const labels = [];
     const ticks = [];
-    segments.forEach((s) => {
-      const span = (Math.max(0, Number(s.weight) || 0) / total) * 360;
-      const start = angle;
-      const end = angle + span;
-      const mid = start + span / 2;
+
+    slices.forEach((sl) => {
+      const s = sl.segment;
+      const { startDeg, midDeg, spanDeg } = sl;
       parts.push(
-        `<path d="${slicePath(cx, cy, r, start, end)}" fill="${esc(s.color)}" stroke="rgba(255,255,255,.72)" stroke-width="2"/>`
+        `<path d="${slicePath(cx, cy, r, startDeg, startDeg + spanDeg)}" fill="${esc(s.color)}" stroke="rgba(255,255,255,.85)" stroke-width="2.5"/>`
       );
 
-      const [t1x, t1y] = polar(cx, cy, r - 1, start);
-      const [t2x, t2y] = polar(cx, cy, r + 8, start);
-      ticks.push(`<line x1="${t1x}" y1="${t1y}" x2="${t2x}" y2="${t2y}" stroke="rgba(255,255,255,.55)" stroke-width="2" stroke-linecap="round"/>`);
+      const [t1x, t1y] = polar(cx, cy, r - 1, startDeg);
+      const [t2x, t2y] = polar(cx, cy, r + 8, startDeg);
+      ticks.push(
+        `<line x1="${t1x}" y1="${t1y}" x2="${t2x}" y2="${t2y}" stroke="rgba(255,255,255,.7)" stroke-width="2.5" stroke-linecap="round"/>`
+      );
 
-      if (span >= 14) {
-        const [tx, ty] = polar(cx, cy, r * 0.64, mid);
-        const text = shortenLabel(s.label, span);
-        const fs = span < 24 ? 9.5 : span < 36 ? 11 : 12.5;
-        labels.push(
-          `<text class="vw-label" x="${tx}" y="${ty}" fill="${contrastText(s.color)}" font-size="${fs}" text-anchor="middle" dominant-baseline="middle" transform="rotate(${mid} ${tx} ${ty})">${esc(text)}</text>`
-        );
-      }
-      angle = end;
+      const lines = labelLines(s.label, spanDeg);
+      const [tx, ty] = polar(cx, cy, r * 0.62, midDeg);
+      const flip = midDeg > 90 && midDeg < 270;
+      const rot = flip ? midDeg + 180 : midDeg;
+      const fs = spanDeg < 45 ? 10 : spanDeg < 60 ? 11.5 : 13;
+      const lineH = fs + 2;
+      const startY = ty - ((lines.length - 1) * lineH) / 2;
+      const fill = contrastText(s.color);
+      const tspans = lines
+        .map((line, i) => `<tspan x="${tx}" y="${startY + i * lineH}">${esc(line)}</tspan>`)
+        .join("");
+      labels.push(
+        `<text class="vw-label" fill="${fill}" font-size="${fs}" text-anchor="middle" dominant-baseline="middle" transform="rotate(${rot} ${tx} ${ty})">${tspans}</text>`
+      );
     });
 
     const uid = "vw" + Math.random().toString(36).slice(2, 8);
@@ -132,30 +161,33 @@
       <circle cx="${cx}" cy="${cy}" r="${r + 11}" fill="none" stroke="rgba(61,42,85,.08)" stroke-width="1"/>
       <g>${parts.join("")}</g>
       <circle cx="${cx}" cy="${cy}" r="${r}" fill="url(#${uid}-glow)"/>
-      <g opacity=".9">${ticks.join("")}</g>
+      <g opacity=".95">${ticks.join("")}</g>
       ${labels.join("")}
-      <circle cx="${cx}" cy="${cy}" r="${r}" fill="none" stroke="rgba(255,255,255,.4)" stroke-width="1.5"/>
+      <circle cx="${cx}" cy="${cy}" r="${r}" fill="none" stroke="rgba(255,255,255,.45)" stroke-width="1.5"/>
     </svg>`;
   }
 
   function pickWinner(segments) {
     const total = totalWeight(segments);
     if (!segments.length || total <= 0) return { index: -1, segment: null, startDeg: 0, spanDeg: 0 };
+    const slices = visualSlices(segments);
     const roll = Math.random() * total;
     let acc = 0;
-    let startDeg = 0;
     for (let i = 0; i < segments.length; i++) {
       const w = Math.max(0, Number(segments[i].weight) || 0);
-      const spanDeg = (w / total) * 360;
       if (roll < acc + w) {
-        return { index: i, segment: segments[i], startDeg, spanDeg };
+        const sl = slices[i];
+        return { index: i, segment: segments[i], startDeg: sl.startDeg, spanDeg: sl.spanDeg };
       }
       acc += w;
-      startDeg += spanDeg;
     }
-    const last = segments.length - 1;
-    const spanDeg = (Math.max(0, Number(segments[last].weight) || 0) / total) * 360;
-    return { index: last, segment: segments[last], startDeg: 360 - spanDeg, spanDeg };
+    const last = slices[slices.length - 1];
+    return {
+      index: last.index,
+      segment: last.segment,
+      startDeg: last.startDeg,
+      spanDeg: last.spanDeg,
+    };
   }
 
   /**
@@ -240,20 +272,23 @@
 
       let picked;
       if (typeof so.winnerIndex === "number" && segments[so.winnerIndex]) {
-        const total = totalWeight(segments);
-        let startDeg = 0;
-        for (let i = 0; i < so.winnerIndex; i++) {
-          startDeg += (Math.max(0, Number(segments[i].weight) || 0) / total) * 360;
-        }
-        const spanDeg = (Math.max(0, Number(segments[so.winnerIndex].weight) || 0) / total) * 360;
-        picked = { index: so.winnerIndex, segment: segments[so.winnerIndex], startDeg, spanDeg };
+        const slices = visualSlices(segments);
+        const sl = slices[so.winnerIndex];
+        picked = {
+          index: so.winnerIndex,
+          segment: segments[so.winnerIndex],
+          startDeg: sl.startDeg,
+          spanDeg: sl.spanDeg,
+        };
       } else {
         picked = pickWinner(segments);
       }
 
-      const mid = picked.startDeg + picked.spanDeg / 2;
+      // Останавливаем указатель в случайной точке внутри равного сектора
+      const jitter = (Math.random() * 0.7 + 0.15) * picked.spanDeg;
+      const stopAt = picked.startDeg + jitter;
       const extraTurns = so.turns != null ? so.turns : 4 + Math.floor(Math.random() * 3);
-      const target = extraTurns * 360 + (360 - mid);
+      const target = extraTurns * 360 + (360 - stopAt);
       rotation = (rotation % 360) + target;
       spinning = true;
       root.classList.add("is-spinning");
