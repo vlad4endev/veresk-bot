@@ -1290,6 +1290,31 @@
     openChatWithClient(c);
   });
 
+  async function askAiAboutClient(customer) {
+    const c = customer || state.curClient;
+    if (!c?.id) return alert("Сначала откройте карточку клиента");
+    aiChat.focusCustomerId = +c.id;
+    aiChat.focusCustomerName = String(c.name || "");
+    go("aichat");
+    await refreshAiChatConfig();
+    setAiChatEnabled(aiChat.configured);
+    const name = c.name || "клиент";
+    const phone = c.phone_masked || c.phone || "";
+    const prompt =
+      `Расскажи всё важное про клиента «${name}»` +
+      (phone ? ` (${phone})` : "") +
+      ` id=${c.id}: сегмент, заказы, события, заметки, сообщения, анкеты ботов. ` +
+      `Предложи, что написать лично, если уместно.`;
+    if (aiChat.configured) {
+      await sendAiChat(prompt);
+    } else {
+      alert("Подключите ИИ в Настройках → Сервисы");
+    }
+  }
+  window.askAiAboutClient = askAiAboutClient;
+
+  $("#clAskAi")?.addEventListener("click", () => askAiAboutClient());
+
   // ── personal ────────────────────────────────────────────────────────────
 
   /** Разбирает строку каналов клиента/события → ["tg"] | ["max"] | ["tg","max"]. */
@@ -4761,7 +4786,7 @@
 
   const AI_CHAT_KEY_BASE = "veresk_ai_chat_v2";
   const AI_WELCOME =
-    "Я помогу с текстами, поздравлениями, сегментами и карточками клиентов из CRM. Спросите имя или телефон — или выберите сценарий ниже.";
+    "Я вижу CRM, заказы, заметки, анкеты ботов, рассылки и колесо. Спросите имя/телефон клиента — или откройте карточку и нажмите «Спросить ИИ».";
 
   const AI_CHIP_SETS = {
     day: [
@@ -4802,7 +4827,7 @@
       {
         label: "Как искать клиента",
         prompt:
-          "Объясни коротко: как лучше спрашивать тебя про клиента (имя, фамилия, телефон) и что ты можешь рассказать из CRM.",
+          "Объясни коротко: как лучше спрашивать тебя про клиента (имя, телефон, или кнопка «Спросить ИИ» в карточке) и что ты видишь: CRM, заметки, заказы, анкеты ботов, колесо, чаты.",
       },
       {
         label: "Перед рассылкой",
@@ -4825,6 +4850,8 @@
     messages: [], // {role, content}
     suggestions: [],
     chipCat: "day",
+    focusCustomerId: null,
+    focusCustomerName: "",
   };
 
   function aiStorageKey() {
@@ -5046,7 +5073,9 @@
     if (stop) stop.hidden = !aiChat.busy;
     if (hint) {
       hint.innerHTML = on
-        ? "Ответы опираются на CRM. Готовые тексты — в блоке «Копировать». Проверяйте перед отправкой."
+        ? (aiChat.focusCustomerId
+            ? `Фокус: клиент #${aiChat.focusCustomerId}${aiChat.focusCustomerName ? " · " + esc(aiChat.focusCustomerName) : ""}. Агент видит полное досье и может запрашивать весь сервис.`
+            : "Агент имеет доступ к CRM, ботам, рассылкам и колесу. Готовые тексты — «Копировать».")
         : 'Подключите ИИ в <button type="button" class="linkish" onclick="go(\'settings\')">Настройки → Сервисы</button>.';
     }
   }
@@ -5133,8 +5162,12 @@
         role: m.role,
         content: m.content,
       }));
+      const payload = { messages: history };
+      if (aiChat.focusCustomerId) {
+        payload.customer_id = aiChat.focusCustomerId;
+      }
       const res = await AdminAPI.aiChat(
-        { messages: history },
+        payload,
         controller ? { signal: controller.signal } : undefined
       );
       const reply = String(res.reply || res.message || "").trim();
@@ -5209,7 +5242,10 @@
     $("#aiClearChat")?.addEventListener("click", () => {
       aiChat.messages = [];
       aiChat.suggestions = [];
+      aiChat.focusCustomerId = null;
+      aiChat.focusCustomerName = "";
       persistAiChat();
+      setAiChatEnabled(aiChat.configured);
       renderAiMessages();
     });
     $("#aiRegenBtn")?.addEventListener("click", () => regenerateAiChat());

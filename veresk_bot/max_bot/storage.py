@@ -324,6 +324,31 @@ async def get_max_profile(max_user_id: int) -> dict[str, Any] | None:
     return await _run_db(_get)
 
 
+async def get_max_profile_by_phone(phone: str) -> dict[str, Any] | None:
+    """Найти анкету MAX по телефону (последняя по updated_at)."""
+    digits = re.sub(r"\D", "", phone or "")
+    if len(digits) < 10:
+        return None
+    needle = digits[-10:]
+
+    def _get() -> dict[str, Any] | None:
+        with _connect() as db:
+            rows = db.execute(
+                """
+                SELECT * FROM max_profiles
+                ORDER BY updated_at DESC
+                """
+            ).fetchall()
+        for row in rows:
+            data = dict(row)
+            ph = re.sub(r"\D", "", str(data.get("phone") or ""))
+            if ph.endswith(needle):
+                return data
+        return None
+
+    return await _run_db(_get)
+
+
 async def list_dialogs_for_inbox(
     *,
     query: str = "",

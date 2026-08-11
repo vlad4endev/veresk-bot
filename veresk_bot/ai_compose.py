@@ -109,16 +109,28 @@ CHAT_SYSTEM_PROMPT = """Ты рабочий помощник сотрудник�
 Твоя задача — экономить время флориста и администратора: давать готовые ответы,
 конкретные имена из CRM и тексты, которые можно сразу скопировать и отправить.
 
+У тебя есть доступ ко всему сервису через инструменты (tools):
+- lookup_customer — полное досье клиента (заметки, заказы, события, сообщения,
+  анкеты TG/MAX-ботов, колесо фортуны, превью чата MAX);
+- list_upcoming_events — кого поздравить;
+- list_segment_customers — примеры сегментов regular/new/inactive/all;
+- get_shop_overview — сводка салона, сегменты, метрики ботов;
+- list_recent_campaigns — последние рассылки;
+- list_fortune_plays — розыгрыши колеса.
+
+Когда не хватает данных в блоке «Данные CRM» — сначала вызови нужный tool,
+потом отвечай. Для конкретного человека почти всегда начинай с lookup_customer.
+
 Помогаешь с:
 - текстами рассылок и личных сообщений клиентам;
 - кого поздравить (ДР, годовщины) и что написать;
-- сегментами (regular / new / inactive / all) и идеями возврата;
-- карточкой клиента: контакты, заказы, события — только из контекста;
+- сегментами и идеями возврата;
+- карточкой клиента: контакты, заказы, события, заметки, история переписки;
 - чек-листами перед рассылкой и мягкими формулировками без давления.
 
 Как отвечать:
 1) Сразу по делу (1–2 предложения).
-2) Конкретика из CRM: имена, даты, цифры — только из блока «Данные CRM».
+2) Конкретика из CRM/tools: имена, даты, цифры — только из фактов.
 3) Если нужен текст сообщения — оберни его в блок:
 ```текст
 ...готовый текст...
@@ -127,8 +139,8 @@ CHAT_SYSTEM_PROMPT = """Ты рабочий помощник сотрудник�
 
 Правила:
 - Язык: русский; тон тёплый, деловой, без канцелярита и без сюсюканья.
-- Не выдумывай клиентов, телефоны, суммы, скидки и акции — только из контекста или запроса.
-- Если данных нет или мало — честно скажи и укажи, куда смотреть: Клиенты / События / Главная.
+- Не выдумывай клиентов, телефоны, суммы, скидки и акции — только из данных или запроса.
+- Если данных нет или мало — честно скажи и укажи, куда смотреть: Клиенты / События / Главная / Чаты.
 - Плейсхолдеры: {имя}, при необходимости {скидка} (только если скидку задал сотрудник).
 - Можно: **жирный**, списки через «•» или «1.». Нельзя: markdown-таблицы, HTML, длинные простыни.
 - Готовые тексты — короткие (2–5 абзацев), на «вы», без эмодзи-спама (0–2 эмодзи).
@@ -431,12 +443,15 @@ def _build_user_content(
     return user_content
 
 
-async def _chat_completion(
-    messages: list[dict[str, str]],
+async def _chat_completion_raw(
+    messages: list[dict[str, Any]],
     *,
     temperature: float = 0.7,
     max_tokens: int = 1200,
-) -> str:
+    tools: list[dict[str, Any]] | None = None,
+    tool_choice: str | None = None,
+) -> dict[str, Any]:
+    """Сырой ответ chat/completions (включая tool_calls)."""
     if not is_ai_configured():
         raise AiComposeError(
             "ai_not_configured",
@@ -454,6 +469,10 @@ async def _chat_completion(
         "max_tokens": max_tokens,
         "messages": messages,
     }
+    if tools:
+        payload["tools"] = tools
+        if tool_choice:
+            payload["tool_choice"] = tool_choice
     # DeepSeek V4: thinking по умолчанию включён и съедает max_tokens —
     # ответ обрывается. Для админки отключаем CoT, весь лимит идёт в текст.
     if provider == "deepseek":
@@ -461,7 +480,7 @@ async def _chat_completion(
 
     headers = _request_headers(provider, api_key)
 
-    timeout_sec = 120 if provider == "deepseek" else 60
+    timeout_sec = 120 if provider == "deepseek" else 90
     timeout = aiohttp.ClientTimeout(total=timeout_sec)
     try:
         async with aiohttp.ClientSession(timeout=timeout) as session:
@@ -480,6 +499,22 @@ async def _chat_completion(
         logger.exception("AI chat unexpected error")
         raise AiComposeError("ai_error", "Ошибка генерации") from exc
 
+    if not isinstance(body, dict):
+        raise AiComposeError("ai_error", "Некорректный ответ ИИ")
+    return body
+
+
+async def _chat_completion(
+    messages: list[dict[str, Any]],
+    *,
+    temperature: float = 0.7,
+    max_tokens: int = 1200,
+) -> str:
+    body = await _chat_completion_raw(
+        messages,
+        temperature=temperature,
+        max_tokens=max_tokens,
+    )
     text = _extract_message(body)
     if not text:
         raise AiComposeError("ai_empty", "ИИ вернул пустой ответ")
@@ -493,7 +528,7 @@ async def _chat_completion(
         logger.warning(
             "AI reply truncated by max_tokens=%s (%s / %s)",
             max_tokens,
-            provider,
+            get_ai_provider(),
             resolve_model_uri(),
         )
 
@@ -568,31 +603,95 @@ async def admin_assistant_reply(
     messages: list[dict[str, str]],
     context: str = "",
     intent: str = "general",
+    enable_tools: bool = True,
 ) -> str:
-    """Ответ внутреннего ИИ-чата админки с CRM-контекстом."""
+    """Ответ внутреннего ИИ-чата админки с CRM-контекстом и tool-calling."""
     history = normalize_chat_messages(messages)
     if not history or history[-1]["role"] != "user":
         raise AiComposeError("prompt_required", "Напишите сообщение")
 
     system = CHAT_SYSTEM_PROMPT
     intent_hints = {
-        "events": "Фокус запроса: ближайшие события и тексты поздравлений.",
-        "inactive": "Фокус запроса: возврат неактивных клиентов, мягкий тон.",
+        "events": "Фокус запроса: ближайшие события и тексты поздравлений. При необходимости вызови list_upcoming_events.",
+        "inactive": "Фокус запроса: возврат неактивных клиентов, мягкий тон. Можно list_segment_customers(segment=inactive).",
         "copy": "Фокус запроса: готовый текст рассылки/сообщения в блоке ```текст.",
-        "customer": "Фокус запроса: конкретный клиент из CRM-контекста.",
-        "stats": "Фокус запроса: краткая сводка и практический чек-лист.",
-        "general": "Фокус запроса: общий рабочий вопрос сотрудника.",
+        "customer": "Фокус запроса: конкретный клиент — вызови lookup_customer, если досье неполное.",
+        "stats": "Фокус запроса: краткая сводка — get_shop_overview и практический чек-лист.",
+        "general": "Фокус запроса: общий рабочий вопрос сотрудника. Используй tools при нехватке фактов.",
     }
     system += "\n\n" + intent_hints.get(intent, intent_hints["general"])
     ctx = (context or "").strip()
     if ctx:
-        system += "\n\n=== Данные CRM (актуально сейчас) ===\n" + ctx[:10000]
+        system += "\n\n=== Данные CRM (актуально сейчас) ===\n" + ctx[:14000]
 
-    return await _chat_completion(
-        [{"role": "system", "content": system}, *history],
-        temperature=0.5,
-        max_tokens=4096,
+    convo: list[dict[str, Any]] = [{"role": "system", "content": system}, *history]
+
+    from ai_agent import (
+        AGENT_TOOLS,
+        MAX_TOOL_ROUNDS,
+        execute_tool,
+        provider_supports_tools,
     )
+
+    use_tools = enable_tools and provider_supports_tools(get_ai_provider())
+    if not use_tools:
+        return await _chat_completion(convo, temperature=0.5, max_tokens=4096)
+
+    for _round in range(MAX_TOOL_ROUNDS):
+        body = await _chat_completion_raw(
+            convo,
+            temperature=0.4,
+            max_tokens=4096,
+            tools=AGENT_TOOLS,
+            tool_choice="auto",
+        )
+        choice = ((body.get("choices") or [{}])[0] or {})
+        msg = choice.get("message") or {}
+        tool_calls = msg.get("tool_calls") or []
+        finish = str(choice.get("finish_reason") or "")
+
+        if tool_calls and finish in ("tool_calls", "function_call", ""):
+            # Сохраняем ответ ассистента с tool_calls
+            content = msg.get("content")
+            if content is None:
+                content = ""
+            assistant_msg: dict[str, Any] = {
+                "role": "assistant",
+                "content": content,
+                "tool_calls": tool_calls,
+            }
+            convo.append(assistant_msg)
+            for call in tool_calls:
+                if not isinstance(call, dict):
+                    continue
+                fn = call.get("function") or {}
+                name = str(fn.get("name") or "").strip()
+                raw_args = fn.get("arguments") or "{}"
+                call_id = str(call.get("id") or name or "tool")
+                result = await execute_tool(name, raw_args)
+                convo.append(
+                    {
+                        "role": "tool",
+                        "tool_call_id": call_id,
+                        "name": name,
+                        "content": result,
+                    }
+                )
+            continue
+
+        text = _extract_message(body)
+        if text:
+            if finish == "length":
+                logger.warning(
+                    "AI reply truncated by max_tokens (tools on, %s)",
+                    resolve_model_uri(),
+                )
+            return text
+        # Пустой текст без tool_calls — пробуем ещё раз без tools
+        break
+
+    # Финальный ответ без tools (после цикла или если модель молчала)
+    return await _chat_completion(convo, temperature=0.5, max_tokens=4096)
 
 
 def _request_headers(provider: str, api_key: str) -> dict[str, str]:

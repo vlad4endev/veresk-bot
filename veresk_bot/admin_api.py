@@ -2236,8 +2236,11 @@ async def _build_ai_chat_context(
     *,
     history_text: str = "",
     intent: str = "general",
+    focus_customer_id: int | None = None,
 ) -> tuple[str, bool]:
     """Снимок CRM под запрос сотрудника. Возвращает (текст, нашлись ли клиенты)."""
+    from ai_agent import build_customer_dossier, format_dossier_text
+
     lines: list[str] = []
     found_customers = False
 
@@ -2334,13 +2337,25 @@ async def _build_ai_chat_context(
         except Exception:
             logger.debug("AI chat: inactive sample failed", exc_info=True)
 
+    seen_ids: set[int] = set()
+
+    if focus_customer_id:
+        try:
+            dossier = await build_customer_dossier(int(focus_customer_id))
+            if dossier:
+                found_customers = True
+                seen_ids.add(int(focus_customer_id))
+                lines.append("=== Фокус: открытая карточка клиента ===")
+                lines.append(format_dossier_text(dossier))
+        except Exception:
+            logger.debug("AI chat: focus dossier failed", exc_info=True)
+
     # Поиск клиента: текущее сообщение + недавняя история диалога
     search_blob = f"{user_message}\n{history_text}".strip()
     queries = extract_customer_search_queries(user_message)
     if not queries and history_text:
         queries = extract_customer_search_queries(history_text)
 
-    seen_ids: set[int] = set()
     for search_q in queries[:4]:
         try:
             rows, total = await list_customers(search=search_q, page=1, page_size=5)
@@ -2353,56 +2368,37 @@ async def _build_ai_chat_context(
                 if not cid or cid in seen_ids:
                     continue
                 seen_ids.add(cid)
-                lines.append(
-                    f"• id={cid} {c.get('name') or '—'} "
-                    f"тел={c.get('phone') or '—'} сегмент={c.get('segment') or '—'} "
-                    f"tg={c.get('tg_user_id') or '—'} max={c.get('max_user_id') or '—'}"
-                )
                 try:
-                    ost = await get_order_stats_for_customer(cid)
-                    if ost:
+                    dossier = await build_customer_dossier(cid)
+                    if dossier:
+                        lines.append(format_dossier_text(dossier))
+                        lines.append("---")
+                    else:
                         lines.append(
-                            f"  заказы: count={ost.get('orders_count', 0)}, "
-                            f"sum={ost.get('total_spent', 0)}, "
-                            f"avg={ost.get('avg_order', 0)}, "
-                            f"last={ost.get('last_order_at') or '—'}"
+                            f"• id={cid} {c.get('name') or '—'} "
+                            f"тел={c.get('phone') or '—'}"
                         )
                 except Exception:
-                    pass
-                try:
-                    orders = await list_orders_for_customer(cid, limit=3)
-                    for o in orders or []:
-                        lines.append(
-                            f"  заказ: {o.get('ordered_at') or '—'} "
-                            f"сумма={o.get('amount') or 0} "
-                            f"№{o.get('number') or '—'} "
-                            f"{(o.get('comment') or o.get('status') or '')[:60]}"
-                        )
-                except Exception:
-                    pass
-                try:
-                    cev = await list_events_for_customer(cid)
-                    for ev in (cev or [])[:4]:
-                        lines.append(
-                            f"  событие: {ev.get('date_from') or '—'} "
-                            f"{ev.get('title') or ev.get('kind') or ''}"
-                        )
-                except Exception:
-                    pass
-            if len(seen_ids) >= 8:
+                    lines.append(
+                        f"• id={cid} {c.get('name') or '—'} "
+                        f"тел={c.get('phone') or '—'}"
+                    )
+            if len(seen_ids) >= 6:
                 break
         except Exception:
             logger.debug("AI chat: customer search failed", exc_info=True)
 
     if not found_customers and intent == "customer" and search_blob:
         lines.append(
-            "По запросу клиент в CRM не найден. Попросите уточнить имя или телефон."
+            "По запросу клиент в CRM не найден. Попросите уточнить имя или телефон "
+            "или вызовите lookup_customer."
         )
 
     lines.append(
-        "Панель: Клиенты (карточка), События (ДР/годовщины), Главная (кампании/рассылки), "
-        "Чаты (Telegram/MAX). Сайт заказа: veresk.flowers. "
-        "Каналы: Telegram (бот + userbot), MAX (бот + рассылки)."
+        "Инструменты: lookup_customer, list_upcoming_events, list_segment_customers, "
+        "get_shop_overview, list_recent_campaigns, list_fortune_plays. "
+        "Панель: Клиенты, События, Главная, Чаты (TG/MAX), Колесо. "
+        "Сайт: veresk.flowers."
     )
     return "\n".join(lines), found_customers
 
@@ -2411,10 +2407,6 @@ async def handle_ai_chat(request: web.Request) -> web.Response:
     """POST /api/admin/ai/chat — внутренний ИИ-помощник админки."""
     err = await _require_perm(request, "aichat")
     if err:
-        # Админы env-login и сотрудники с полными правами ок;
-        # если права нет — 403. Compose остаётся на _require_admin.
-        # Для совместимости: если у сессии нет ключа aichat в старых данных,
-        # _has_perm вернёт False — это ожидаемо.
         return err
     if not is_ai_configured():
         return _json(
@@ -2440,8 +2432,18 @@ async def handle_ai_chat(request: web.Request) -> web.Response:
                 status=400,
             )
 
+    focus_customer_id: int | None = None
+    raw_cid = body.get("customer_id")
+    if raw_cid is not None and str(raw_cid).strip() != "":
+        try:
+            focus_customer_id = int(raw_cid)
+        except (TypeError, ValueError):
+            focus_customer_id = None
+
     last_user = messages[-1]["content"]
     intent = detect_chat_intent(last_user)
+    if focus_customer_id and intent == "general":
+        intent = "customer"
     history_text = "\n".join(
         m["content"] for m in messages[:-1] if m.get("role") == "user"
     )[-1500:]
@@ -2449,12 +2451,14 @@ async def handle_ai_chat(request: web.Request) -> web.Response:
         last_user,
         history_text=history_text,
         intent=intent,
+        focus_customer_id=focus_customer_id,
     )
     try:
         reply = await admin_assistant_reply(
             messages=messages,
             context=context,
             intent=intent,
+            enable_tools=True,
         )
     except AiComposeError as exc:
         status = 400 if exc.code in ("prompt_required",) else 502
@@ -2470,6 +2474,8 @@ async def handle_ai_chat(request: web.Request) -> web.Response:
             "message": reply,
             "intent": intent,
             "suggestions": suggestions,
+            "customer_id": focus_customer_id,
+            "tools_enabled": True,
         }
     )
 

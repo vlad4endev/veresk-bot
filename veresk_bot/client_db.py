@@ -262,6 +262,36 @@ async def get_client_profile(tg_id: int) -> dict[str, Any] | None:
     return await _run_db(_get)
 
 
+async def get_profile_by_phone(phone: str) -> dict[str, Any] | None:
+    """Найти анкету TG-бота по телефону (последняя по updated_at)."""
+    digits = "".join(ch for ch in (phone or "") if ch.isdigit())
+    if len(digits) < 10:
+        return None
+    needle = digits[-10:]
+
+    def _get() -> dict[str, Any] | None:
+        with _connect() as db:
+            rows = db.execute(
+                """
+                SELECT tg_id, name, phone, budget, source, events_json, created_at, updated_at
+                FROM profiles
+                ORDER BY updated_at DESC
+                """
+            ).fetchall()
+        for row in rows:
+            data = dict(row)
+            ph = "".join(ch for ch in str(data.get("phone") or "") if ch.isdigit())
+            if ph.endswith(needle):
+                try:
+                    data["events"] = json.loads(data.pop("events_json", "[]"))
+                except json.JSONDecodeError:
+                    data["events"] = []
+                return data
+        return None
+
+    return await _run_db(_get)
+
+
 async def get_order_by_posiflora_id(
     tg_id: int, posiflora_order_id: str
 ) -> dict[str, Any] | None:
