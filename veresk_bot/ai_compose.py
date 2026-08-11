@@ -37,8 +37,11 @@ PROVIDER_PRESETS: dict[str, dict[str, str]] = {
     "openrouter": {
         "label": "OpenRouter",
         "api_base": "https://openrouter.ai/api/v1",
-        "model": "openai/gpt-4o-mini",
-        "hint": "Ключ с openrouter.ai/keys · модель вида provider/model",
+        "model": "deepseek/deepseek-v4-flash-0731",
+        "hint": (
+            "Ключ с openrouter.ai/keys · без OpenAI/Anthropic/Google "
+            "(санкции) — DeepSeek/Qwen/Mistral/Llama"
+        ),
     },
     "deepseek": {
         "label": "DeepSeek",
@@ -727,13 +730,34 @@ async def _chat_completion_raw(
                         url,
                         detail,
                     )
-                    if "access denied by security policy" in detail.lower():
+                    low = detail.lower()
+                    if "access denied by security policy" in low:
                         host = urlparse(url).netloc or "?"
                         detail = (
                             f"Отказ доступа ({host}). "
                             "Если видите yandex.net при выбранном OpenRouter — "
                             "на сервере старый код: сделайте ./deploy.sh. "
                             "Иначе проверьте ключ/кредиты OpenRouter или переключитесь на DeepSeek."
+                        )
+                    elif provider == "openrouter" and (
+                        "user not found" in low or resp.status == 401
+                    ):
+                        detail = (
+                            "OpenRouter: ключ недействителен (User not found). "
+                            "Создайте новый ключ на openrouter.ai/keys и вставьте в настройки. "
+                            "Модель: deepseek/… — не openai/anthropic/google (санкции)."
+                        )
+                    elif provider == "openrouter" and (
+                        "not available" in low
+                        or "sanction" in low
+                        or "region" in low
+                        or "openai/" in (resolve_model_uri() or "").lower()
+                        or "anthropic/" in (resolve_model_uri() or "").lower()
+                        or "google/" in (resolve_model_uri() or "").lower()
+                    ) and resp.status in (400, 403, 404):
+                        detail = (
+                            f"{detail} · В вашем регионе OpenRouter не даёт OpenAI/Anthropic/Google. "
+                            "Поставьте deepseek/deepseek-v4-flash-0731 (или Qwen/Mistral) и сохраните."
                         )
                     raise AiComposeError("ai_provider_error", detail)
     except AiComposeError:

@@ -2759,8 +2759,8 @@
           id: "openrouter",
           label: "OpenRouter",
           api_base: "https://openrouter.ai/api/v1",
-          model: "openai/gpt-4o-mini",
-          hint: "Один ключ — доступ к разным моделям",
+          model: "deepseek/deepseek-v4-flash-0731",
+          hint: "Без OpenAI/Anthropic/Google при санкциях — DeepSeek/Qwen/Mistral",
           needs_folder: false,
         },
         {
@@ -2971,7 +2971,7 @@
             }>Отключить</button>
             <button type="button" class="btn" onclick="go('aichat')">Открыть ИИ-чат</button>
           </div>
-          <p class="form-foot">DeepSeek: <code>deepseek-v4-pro</code>. OpenRouter: <code>openai/gpt-4o-mini</code>. YandexGPT: <code>yandexgpt-lite/latest</code>.</p>
+          <p class="form-foot">OpenRouter (РФ/санкции): <code>deepseek/deepseek-v4-flash-0731</code> или <code>deepseek/deepseek-v4-pro</code> — не OpenAI/Google. DeepSeek напрямую: <code>deepseek-v4-pro</code>. YandexGPT: <code>yandexgpt-lite/latest</code>.</p>
         </div>
       </div>`;
 
