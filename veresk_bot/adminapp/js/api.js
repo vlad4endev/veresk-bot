@@ -125,6 +125,29 @@ const AdminAPI = (() => {
       return request("/api/admin/clients" + (q ? "?" + q : ""));
     },
     client: (id) => request("/api/admin/clients/" + id),
+    channelSubscribers: (params = {}) => {
+      const q = new URLSearchParams(params).toString();
+      return request("/api/admin/channel-subscribers" + (q ? "?" + q : ""));
+    },
+    channelSubscribersSettings: () =>
+      request("/api/admin/channel-subscribers/settings"),
+    saveChannelSubscribersSettings: (body) =>
+      request("/api/admin/channel-subscribers/settings", {
+        method: "POST",
+        body: JSON.stringify(body || {}),
+      }),
+    syncChannelSubscribers: () =>
+      request("/api/admin/channel-subscribers/sync", { method: "POST" }),
+    discoverChannelSubscribers: (body = {}) =>
+      request("/api/admin/channel-subscribers/discover", {
+        method: "POST",
+        body: JSON.stringify(body || {}),
+      }),
+    ensureChannelSubscribers: (body = {}) =>
+      request("/api/admin/channel-subscribers/ensure", {
+        method: "POST",
+        body: JSON.stringify(body || {}),
+      }),
     events: (days = 14) => request("/api/admin/events/upcoming?days=" + days),
     setEventAuto: (id, auto_send) =>
       request("/api/admin/events/" + id, {

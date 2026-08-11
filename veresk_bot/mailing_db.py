@@ -261,6 +261,7 @@ async def init_mailing_db() -> None:
                 _ensure_column(db, "admin_sessions", col, typedef)
             _ensure_column(db, "admin_users", "permissions", "TEXT DEFAULT ''")
             _ensure_column(db, "customer_events", "last_auto_sent_on", "TEXT")
+            _ensure_column(db, "fortune_plays", "notified_at", "TEXT")
             for col, typedef in (
                 ("media_path", "TEXT"),
                 ("media_kind", "TEXT"),
@@ -2077,6 +2078,13 @@ async def get_stats() -> dict[str, Any]:
 
 
 async def customers_for_segment(segment: str) -> list[dict[str, Any]]:
+    if segment in ("channel_subscribers", "channel_subscribers_new"):
+        from channel_subscriptions import customers_for_channel_subscribers
+
+        return await customers_for_channel_subscribers(
+            only_new=(segment == "channel_subscribers_new")
+        )
+
     def _list() -> list[dict[str, Any]]:
         with _connect() as db:
             if segment and segment != "all":
@@ -2148,6 +2156,64 @@ async def get_fortune_play(channel: str, user_id: str) -> dict[str, Any] | None:
         return dict(row) if row else None
 
     return await _run_db(_get)
+
+
+async def delete_fortune_play(channel: str, user_id: str) -> bool:
+    """Удалить запись розыгрыша (например, после «Попробуйте ещё»)."""
+    ch = str(channel or "").strip().lower()
+    uid = str(user_id or "").strip()
+    if not ch or not uid:
+        return False
+
+    def _del() -> bool:
+        with _connect() as db:
+            cur = db.execute(
+                "DELETE FROM fortune_plays WHERE channel = ? AND user_id = ?",
+                (ch, uid),
+            )
+            db.commit()
+            return cur.rowcount > 0
+
+    return await _run_db(_del)
+
+
+async def claim_fortune_play_notified(
+    channel: str, user_id: str
+) -> dict[str, Any] | None:
+    """Пометить play как notified (один раз). Возвращает play или None, если уже слали."""
+    ch = str(channel or "").strip().lower()
+    uid = str(user_id or "").strip()
+    if not ch or not uid:
+        return None
+    now = _now()
+
+    def _claim() -> dict[str, Any] | None:
+        with _connect() as db:
+            _ensure_column(db, "fortune_plays", "notified_at", "TEXT")
+            row = db.execute(
+                "SELECT * FROM fortune_plays WHERE channel = ? AND user_id = ?",
+                (ch, uid),
+            ).fetchone()
+            if not row:
+                return None
+            if str(row["notified_at"] or "").strip():
+                return None
+            db.execute(
+                "UPDATE fortune_plays SET notified_at = ? "
+                "WHERE channel = ? AND user_id = ? "
+                "AND (notified_at IS NULL OR notified_at = '')",
+                (now, ch, uid),
+            )
+            db.commit()
+            claimed = db.execute(
+                "SELECT * FROM fortune_plays WHERE channel = ? AND user_id = ?",
+                (ch, uid),
+            ).fetchone()
+            if not claimed or str(claimed["notified_at"] or "") != now:
+                return None
+            return dict(claimed)
+
+    return await _run_db(_claim)
 
 
 async def record_fortune_play(

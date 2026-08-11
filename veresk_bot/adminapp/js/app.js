@@ -215,7 +215,10 @@
     }
     if (tab === "wheel" && typeof initWheelEditor === "function") initWheelEditor();
     if (tab === "home") loadHome();
-    if (tab === "clients") loadClients();
+    if (tab === "clients") {
+      if (clientsView === "subscribers") loadSubscribers();
+      else loadClients();
+    }
     if (tab === "bots") loadBotsStatus();
     if (tab === "settings") loadSettings();
     if (tab === "aichat") initAiChat();
@@ -996,6 +999,44 @@
   let clientSegment = "all";
   let clientSearch = "";
   let clientsSearchTimer = null;
+  let clientsView = "base"; // base | subscribers
+  let subsFilter = "member"; // member|new|left|survey|no_survey|all
+  let subsSearch = "";
+  let subsSearchTimer = null;
+
+  function setClientsView(view) {
+    clientsView = view === "subscribers" ? "subscribers" : "base";
+    $$(".clients-tab").forEach((tab) => {
+      const on = tab.dataset.clientsTab === clientsView;
+      tab.classList.toggle("on", on);
+      tab.setAttribute("aria-selected", on ? "true" : "false");
+    });
+    const basePane = $("#clientsPaneBase");
+    const subsPane = $("#clientsPaneSubs");
+    if (basePane) {
+      basePane.classList.toggle("active", clientsView === "base");
+      basePane.hidden = clientsView !== "base";
+    }
+    if (subsPane) {
+      subsPane.classList.toggle("active", clientsView === "subscribers");
+      subsPane.hidden = clientsView !== "subscribers";
+    }
+    const desc = $("#clientsPageDesc");
+    if (desc) {
+      desc.textContent =
+        clientsView === "subscribers"
+          ? "Подписчики Telegram-канала. Новые — за последние 3 дня."
+          : "База из Posiflora. Сегменты считаются автоматически.";
+    }
+    if ($("#btnSync")) $("#btnSync").hidden = clientsView !== "base";
+    if ($("#btnSubsSync")) $("#btnSubsSync").hidden = clientsView !== "subscribers";
+    if (clientsView === "subscribers") loadSubscribers();
+    else loadClients();
+  }
+
+  $$(".clients-tab").forEach((btn) => {
+    btn.addEventListener("click", () => setClientsView(btn.dataset.clientsTab || "base"));
+  });
 
   function clientPhoneUnderNameHtml(phone) {
     const raw = String(phone || "").trim();
@@ -1114,9 +1155,9 @@
     }
   }
 
-  $$("#clients .seg button").forEach((btn) => {
+  $$("#clientsPaneBase .seg button").forEach((btn) => {
     btn.addEventListener("click", () => {
-      $$("#clients .seg button").forEach((b) => b.classList.remove("on"));
+      $$("#clientsPaneBase .seg button").forEach((b) => b.classList.remove("on"));
       btn.classList.add("on");
       clientSegment = btn.dataset.seg || "all";
       loadClients();
@@ -1149,6 +1190,469 @@
     btn.disabled = false;
     btn.innerHTML =
       '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M12 3v12M8 11l4 4 4-4"/><path d="M4 17v2a2 2 0 002 2h12a2 2 0 002-2v-2"/></svg> Синхронизировать';
+  });
+
+  function applySubsChannelForm(channel) {
+    const ch = channel || {};
+    if ($("#subsChannelUsername")) {
+      $("#subsChannelUsername").value = ch.channel_username || "";
+    }
+    if ($("#subsChannelId")) {
+      $("#subsChannelId").value = ch.channel_id ? String(ch.channel_id) : "";
+    }
+    const nameEl = $("#subsChannelName");
+    const metaEl = $("#subsChannelMeta");
+    if (nameEl) {
+      if (ch.configured) {
+        nameEl.textContent =
+          ch.channel_title ||
+          (ch.channel_username ? "@" + ch.channel_username : "Канал " + ch.channel_id);
+      } else {
+        nameEl.textContent = "Не определён";
+      }
+    }
+    if (metaEl) {
+      if (ch.configured) {
+        const bits = [];
+        if (ch.channel_username) bits.push("@" + ch.channel_username);
+        if (ch.channel_id) bits.push("id " + ch.channel_id);
+        metaEl.textContent = bits.join(" · ");
+      } else {
+        metaEl.textContent = "Нажмите «Определить автоматически» или назначьте бота админом канала";
+      }
+    }
+  }
+
+  function renderSubsChannelPick(channels) {
+    const box = $("#subsChannelPick");
+    if (!box) return;
+    const list = Array.isArray(channels) ? channels : [];
+    if (!list.length) {
+      box.hidden = true;
+      box.innerHTML = "";
+      return;
+    }
+    box.hidden = false;
+    box.innerHTML =
+      `<div class="hint" style="margin:0 0 4px">Найдено несколько каналов — выберите нужный:</div>` +
+      list
+        .map((c) => {
+          const title = c.channel_title || (c.channel_username ? "@" + c.channel_username : "Канал");
+          const bits = [];
+          if (c.channel_username) bits.push("@" + c.channel_username);
+          if (c.channel_id) bits.push("id " + c.channel_id);
+          if (c.participants_count != null) bits.push(fmtNum(c.participants_count) + " подп.");
+          return `<button type="button" class="subs-pick-item"
+            data-id="${esc(String(c.channel_id || ""))}"
+            data-username="${esc(c.channel_username || "")}"
+            data-title="${esc(c.channel_title || "")}">
+            <span><div class="t">${esc(title)}</div><div class="s">${esc(bits.join(" · "))}</div></span>
+            <span class="badge-soft ok">Выбрать</span>
+          </button>`;
+        })
+        .join("");
+    box.querySelectorAll(".subs-pick-item").forEach((btn) => {
+      btn.addEventListener("click", async () => {
+        try {
+          const res = await AdminAPI.discoverChannelSubscribers({
+            channel_id: Number(btn.dataset.id),
+            channel_username: btn.dataset.username || "",
+            channel_title: btn.dataset.title || "",
+          });
+          applySubsChannelForm(res.channel);
+          renderSubsChannelPick([]);
+          await loadSubscribers({ skipDiscover: true });
+        } catch (err) {
+          alert("Не удалось сохранить канал: " + (err.data?.detail || err.data?.error || err.message));
+        }
+      });
+    });
+  }
+
+  let subsAutoDiscoverDone = false;
+
+  async function discoverSubsChannel({ silent = false } = {}) {
+    const btn = $("#btnSubsDiscover");
+    if (btn) {
+      btn.disabled = true;
+      btn.textContent = "Поиск…";
+    }
+    try {
+      const res = await AdminAPI.discoverChannelSubscribers({ auto_save: true });
+      if (!res.ok) {
+        if (!silent) {
+          alert(res.detail || res.error || "Не удалось найти каналы");
+        }
+        return res;
+      }
+      applySubsChannelForm(res.channel);
+      if (res.need_pick || ((res.channels || []).length > 1 && !res.channel?.configured)) {
+        renderSubsChannelPick(res.channels || []);
+        if (!silent && (res.channels || []).length > 1) {
+          /* выбор в UI */
+        }
+      } else {
+        renderSubsChannelPick([]);
+        if (!silent) {
+          if (res.auto_saved) {
+            alert(
+              "Канал найден и сохранён: " +
+                (res.channel?.channel_title ||
+                  res.channel?.channel_username ||
+                  res.channel?.channel_id)
+            );
+          } else if (!(res.channels || []).length) {
+            alert(
+              "Каналов, где бот админ, не найдено.\n\nДобавьте бота админом канала. Telegram-аккаунт из Настроек должен видеть этот канал в диалогах."
+            );
+          } else if (res.channel?.configured) {
+            alert(
+              "Канал уже настроен: " +
+                (res.channel.channel_title ||
+                  res.channel.channel_username ||
+                  res.channel.channel_id)
+            );
+          }
+        }
+      }
+      return res;
+    } catch (err) {
+      if (!silent) {
+        alert("Ошибка поиска: " + (err.data?.detail || err.data?.error || err.message));
+      }
+      return null;
+    } finally {
+      if (btn) {
+        btn.disabled = false;
+        btn.textContent = "Определить автоматически";
+      }
+    }
+  }
+
+  let subsSelected = new Set();
+  let subsItemsByTg = new Map();
+
+  function updateSubsNewBadge(n) {
+    const badge = $("#subsNewBadge");
+    if (!badge) return;
+    const count = Number(n) || 0;
+    if (count > 0) {
+      badge.hidden = false;
+      badge.textContent = count > 99 ? "99+" : String(count);
+    } else {
+      badge.hidden = true;
+      badge.textContent = "0";
+    }
+  }
+
+  function updateSubsFilterCounts(stats) {
+    const st = stats || {};
+    $$("#subsSeg [data-stat]").forEach((el) => {
+      const key = el.dataset.stat;
+      const n = Number(st[key] || 0);
+      el.textContent = n ? String(n) : "";
+      el.hidden = !n;
+    });
+  }
+
+  function syncSubsBulkUi() {
+    const bulk = $("#subsBulk");
+    const n = subsSelected.size;
+    if (bulk) bulk.hidden = false;
+    const countEl = $("#subsSelectedCount");
+    if (countEl) countEl.textContent = n ? `${n} выбрано` : "0 выбрано";
+    if ($("#btnSubsWrite")) $("#btnSubsWrite").disabled = n === 0;
+    if ($("#btnSubsToMailing")) $("#btnSubsToMailing").disabled = n === 0;
+    const allBoxes = $$("#subsBody input.subs-check");
+    const allOn = allBoxes.length > 0 && allBoxes.every((b) => b.checked);
+    if ($("#subsSelectAll")) $("#subsSelectAll").checked = allOn;
+  }
+
+  function subsTagsHtml(s) {
+    const tags = Array.isArray(s.tags) ? s.tags : [];
+    const show = tags.filter((t) => t.id !== "no_survey" || !s.has_survey);
+    // Не дублируем «Без анкеты» если уже есть Анкета; «Подписан» скрываем в фильтре member
+    const filtered = show.filter((t) => {
+      if (subsFilter === "member" && t.id === "member") return false;
+      if (subsFilter === "left" && t.id === "left") return false;
+      if (t.id === "no_survey" && s.has_survey) return false;
+      return true;
+    });
+    if (!filtered.length) return `<span class="muted">—</span>`;
+    return `<div class="subs-tags">${filtered
+      .map(
+        (t) =>
+          `<span class="subs-tag tone-${esc(t.tone || "soft")}">${esc(t.label)}</span>`
+      )
+      .join("")}</div>`;
+  }
+
+  async function ensureSubsCustomers(tgIds) {
+    const res = await AdminAPI.ensureChannelSubscribers({ tg_user_ids: tgIds });
+    return res.items || [];
+  }
+
+  async function writeToSubscriber(tgUserId) {
+    try {
+      const items = await ensureSubsCustomers([tgUserId]);
+      const c = items[0];
+      if (!c?.id) return alert("Не удалось подготовить карточку для сообщения");
+      openPersonal({
+        customer_id: c.id,
+        name: c.name || "Клиент",
+        availableChannels: ["tg"],
+        chanClass: "tg",
+        type: "plain",
+        contact: c.phone_masked || c.phone || "",
+      });
+    } catch (err) {
+      alert("Ошибка: " + (err.data?.detail || err.data?.error || err.message));
+    }
+  }
+
+  async function sendSelectedSubsToMailing(tgIds) {
+    if (!tgIds.length) return alert("Никого не выбрано");
+    try {
+      const items = await ensureSubsCustomers(tgIds);
+      if (!items.length) return alert("Не удалось подготовить получателей");
+      state.wizard.selectedCustomers = items.map((c) => ({
+        id: c.id,
+        name: c.name || "Клиент",
+        phone: c.phone || "",
+        phone_masked: c.phone_masked || c.phone || "",
+        messengers: c.messengers || { tg: true, max: false },
+      }));
+      setAudienceMode("pick");
+      go("compose");
+      setStep(0);
+      renderPickSelected?.();
+      refreshMatchPreview?.();
+      alert(`В рассылку добавлено: ${items.length}`);
+    } catch (err) {
+      alert("Ошибка: " + (err.data?.detail || err.data?.error || err.message));
+    }
+  }
+
+  async function loadSubscribers(opts = {}) {
+    const box = $("#subsBody");
+    if (!box) return;
+    box.innerHTML = '<tr><td colspan="5" class="loading">Загрузка…</td></tr>';
+    try {
+      const params = { page_size: 200, filter: subsFilter || "member" };
+      if (subsSearch) params.search = subsSearch;
+      const data = await AdminAPI.channelSubscribers(params);
+      applySubsChannelForm(data.channel);
+      updateSubsNewBadge(data.stats?.new || 0);
+      updateSubsFilterCounts(data.stats);
+      if ($("#subsBulk")) $("#subsBulk").hidden = false;
+
+      if (!opts.skipDiscover && !data.channel?.configured && !subsAutoDiscoverDone) {
+        subsAutoDiscoverDone = true;
+        const discovered = await discoverSubsChannel({ silent: true });
+        if (discovered?.auto_saved || discovered?.channel?.configured) {
+          return loadSubscribers({ skipDiscover: true });
+        }
+        if (discovered?.need_pick) {
+          renderSubsChannelPick(discovered.channels || []);
+        }
+      }
+
+      subsItemsByTg = new Map((data.items || []).map((s) => [String(s.tg_user_id), s]));
+      const keep = new Set();
+      subsSelected.forEach((id) => {
+        if (subsItemsByTg.has(String(id))) keep.add(String(id));
+      });
+      subsSelected = keep;
+
+      if (!data.items.length) {
+        const emptyMsg = subsSearch
+          ? "Никого не нашли по запросу"
+          : data.channel?.configured
+            ? "В этом фильтре пока пусто — смените фильтр или выгрузите подписчиков"
+            : "Канал не определён — нажмите «Определить автоматически»";
+        box.innerHTML = `<tr><td colspan="5"><div class="empty-state"><div class="t">${emptyMsg}</div></div></td></tr>`;
+        const members = data.stats?.members || 0;
+        const neu = data.stats?.new || 0;
+        $("#subsHint").textContent = data.channel?.configured
+          ? `${fmtNum(members)} подп. · ${fmtNum(neu)} нов. · ${fmtNum(data.stats?.survey || 0)} с анкетой`
+          : "Канал не настроен";
+        syncSubsBulkUi();
+        return;
+      }
+
+      box.innerHTML = data.items
+        .map((s) => {
+          const uname = s.username ? `@${esc(s.username)}` : `id ${esc(String(s.tg_user_id))}`;
+          const checked = subsSelected.has(String(s.tg_user_id)) ? " checked" : "";
+          const rowCls = s.is_new ? ' class="subs-row-new"' : "";
+          const cardBtn = s.customer_id
+            ? `<button type="button" class="mini-btn" data-customer="${s.customer_id}">Карточка</button>`
+            : "";
+          return `<tr${rowCls} data-tg="${s.tg_user_id}">
+            <td class="td-check"><input type="checkbox" class="subs-check" data-tg="${s.tg_user_id}"${checked}></td>
+            <td>
+              <div class="cl-who">
+                <span class="cl-who-av">${esc(initials(s.full_name))}</span>
+                <div class="cl-who-b">
+                  <div class="nm">${esc(s.full_name)}</div>
+                  <span class="ph">${uname}</span>
+                </div>
+              </div>
+            </td>
+            <td>${subsTagsHtml(s)}</td>
+            <td class="hide-mob">${esc(s.joined_label || "—")}</td>
+            <td>
+              <div class="subs-actions">
+                <button type="button" class="mini-btn" data-write="${s.tg_user_id}">Написать</button>
+                ${cardBtn}
+              </div>
+            </td>
+          </tr>`;
+        })
+        .join("");
+
+      box.querySelectorAll(".subs-check").forEach((inp) => {
+        inp.addEventListener("change", () => {
+          const id = String(inp.dataset.tg || "");
+          if (inp.checked) subsSelected.add(id);
+          else subsSelected.delete(id);
+          syncSubsBulkUi();
+        });
+      });
+      box.querySelectorAll("[data-write]").forEach((el) => {
+        el.addEventListener("click", (e) => {
+          e.stopPropagation();
+          writeToSubscriber(+el.dataset.write);
+        });
+      });
+      box.querySelectorAll("[data-customer]").forEach((el) => {
+        el.addEventListener("click", (e) => {
+          e.stopPropagation();
+          openClientById(+el.dataset.customer);
+        });
+      });
+
+      const shown = data.items.length;
+      const total = data.total;
+      const neu = data.stats?.new || 0;
+      const survey = data.stats?.survey || 0;
+      $("#subsHint").textContent =
+        shown === total
+          ? `${fmtNum(total)} · новых: ${fmtNum(neu)} · анкета: ${fmtNum(survey)}`
+          : `Показано ${fmtNum(shown)} из ${fmtNum(total)} · новых: ${fmtNum(neu)}`;
+      syncSubsBulkUi();
+    } catch (err) {
+      if (err.status === 401) return showLogin();
+      box.innerHTML = '<tr><td colspan="5" class="empty-state">Ошибка загрузки</td></tr>';
+    }
+  }
+
+  $$("#subsSeg button").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      $$("#subsSeg button").forEach((b) => b.classList.remove("on"));
+      btn.classList.add("on");
+      subsFilter = btn.dataset.subsFilter || "member";
+      loadSubscribers({ skipDiscover: true });
+    });
+  });
+
+  $("#subsSearch")?.addEventListener("input", () => {
+    clearTimeout(subsSearchTimer);
+    subsSearchTimer = setTimeout(() => {
+      subsSearch = ($("#subsSearch").value || "").trim();
+      loadSubscribers({ skipDiscover: true });
+    }, 280);
+  });
+
+  $("#subsSelectAll")?.addEventListener("change", () => {
+    const on = !!$("#subsSelectAll")?.checked;
+    $$("#subsBody input.subs-check").forEach((inp) => {
+      inp.checked = on;
+      const id = String(inp.dataset.tg || "");
+      if (on) subsSelected.add(id);
+      else subsSelected.delete(id);
+    });
+    syncSubsBulkUi();
+  });
+
+  $("#btnSubsWrite")?.addEventListener("click", async () => {
+    const ids = [...subsSelected];
+    if (!ids.length) return;
+    if (ids.length === 1) return writeToSubscriber(+ids[0]);
+    // Несколько: открываем рассылку (личное — только одному)
+    if (
+      confirm(
+        `Выбрано ${ids.length}. Личное сообщение — одному. Открыть их в мастере рассылки?`
+      )
+    ) {
+      await sendSelectedSubsToMailing(ids.map(Number));
+    }
+  });
+
+  $("#btnSubsToMailing")?.addEventListener("click", async () => {
+    await sendSelectedSubsToMailing([...subsSelected].map(Number));
+  });
+
+  $("#btnSubsDiscover")?.addEventListener("click", async () => {
+    await discoverSubsChannel({ silent: false });
+    await loadSubscribers({ skipDiscover: true });
+  });
+
+  $("#btnSubsManualToggle")?.addEventListener("click", () => {
+    const fields = $("#subsManualFields");
+    if (!fields) return;
+    fields.hidden = !fields.hidden;
+  });
+
+  $("#btnSubsSaveChannel")?.addEventListener("click", async () => {
+    const username = ($("#subsChannelUsername")?.value || "").trim().replace(/^@/, "");
+    const idRaw = ($("#subsChannelId")?.value || "").trim();
+    let channel_id = null;
+    if (idRaw) {
+      const n = Number(idRaw);
+      if (!Number.isFinite(n)) {
+        alert("ID канала должен быть числом (например -100123…)");
+        return;
+      }
+      channel_id = n;
+    } else {
+      channel_id = 0;
+    }
+    try {
+      const res = await AdminAPI.saveChannelSubscribersSettings({
+        channel_username: username,
+        channel_id,
+      });
+      applySubsChannelForm(res.channel);
+      renderSubsChannelPick([]);
+      alert(res.channel?.configured ? "Канал сохранён" : "Сохранено (канал пока не задан)");
+      await loadSubscribers({ skipDiscover: true });
+    } catch (err) {
+      alert("Не удалось сохранить: " + (err.data?.error || err.message));
+    }
+  });
+
+  $("#btnSubsSync")?.addEventListener("click", async () => {
+    const btn = $("#btnSubsSync");
+    btn.disabled = true;
+    btn.textContent = "Выгрузка…";
+    try {
+      const res = await AdminAPI.syncChannelSubscribers();
+      if (res.ok) {
+        let msg = `Готово: ${res.synced || 0} участников`;
+        if (res.marked_left) msg += `, отмечено отписок: ${res.marked_left}`;
+        if (res.note) msg += `\n\n${res.note}`;
+        alert(msg);
+        await loadSubscribers({ skipDiscover: true });
+      } else {
+        alert("Ошибка: " + (res.detail || res.error || "unknown"));
+      }
+    } catch (err) {
+      alert("Ошибка выгрузки: " + (err.data?.detail || err.data?.error || err.message));
+    }
+    btn.disabled = false;
+    btn.innerHTML =
+      '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M12 3v12M8 11l4 4 4-4"/><path d="M4 17v2a2 2 0 002 2h12a2 2 0 002-2v-2"/></svg> Выгрузить подписчиков';
   });
 
   async function openClientById(id) {
@@ -2987,47 +3491,97 @@
           </div>
           <p class="form-foot">OpenRouter (РФ/санкции): <code>deepseek/deepseek-v4-flash-0731</code> или <code>deepseek/deepseek-v4-pro</code> — не OpenAI/Google. DeepSeek напрямую: <code>deepseek-v4-pro</code>. YandexGPT: <code>yandexgpt-lite/latest</code>.</p>
 
-          <details class="ai-prompts-details" id="aiPromptsDetails" open>
-            <summary>
-              <span class="ai-prompts-sum-t">Промпты для генерации текстов</span>
-              <span class="ai-prompts-sum-s">${
+          <div class="ai-prompts-box" id="aiPromptsBox">
+            <div class="ai-prompts-head">
+              <div>
+                <h5>Промпты для текстов</h5>
+                <p>Как ИИ пишет рассылки, личные сообщения и отвечает в «ИИ чат». Меняйте тон и правила под салон — пустое поле вернёт стандарт.</p>
+              </div>
+              <span class="status-pill ${
                 [prompts.mailing, prompts.personal, prompts.chat].some((p) => p.customized)
-                  ? "есть свои правки"
-                  : "стандартные"
+                  ? "ok"
+                  : "warn"
+              }" id="aiPromptsStatus"><span class="d"></span>${
+                [prompts.mailing, prompts.personal, prompts.chat].some((p) => p.customized)
+                  ? "есть правки"
+                  : "стандарт"
               }</span>
-            </summary>
-            <p class="form-foot ai-prompts-lead">Системные инструкции для ИИ: рассылки, личные сообщения и ответы в разделе «ИИ чат». Пустое поле или «Сбросить» вернёт текст из кода.</p>
-            <div class="svc-field">
-              <label for="aiPromptMailing">Рассылка <span class="ai-key-status">${
-                prompts.mailing.customized ? "· свой" : "· по умолчанию"
-              }</span></label>
-              <textarea id="aiPromptMailing" class="ai-prompt-area" rows="8" spellcheck="true">${esc(
-                prompts.mailing.text || ""
-              )}</textarea>
             </div>
-            <div class="svc-field">
-              <label for="aiPromptPersonal">Личное сообщение <span class="ai-key-status">${
-                prompts.personal.customized ? "· свой" : "· по умолчанию"
-              }</span></label>
-              <textarea id="aiPromptPersonal" class="ai-prompt-area" rows="8" spellcheck="true">${esc(
-                prompts.personal.text || ""
-              )}</textarea>
+            <div class="ai-prompts-tabs" role="tablist" aria-label="Тип промпта">
+              <button type="button" class="ai-prompts-tab on${
+                prompts.mailing.customized ? " custom" : ""
+              }" role="tab" aria-selected="true" data-prompt-kind="mailing">
+                <span class="dot" aria-hidden="true"></span>Рассылка
+              </button>
+              <button type="button" class="ai-prompts-tab${
+                prompts.personal.customized ? " custom" : ""
+              }" role="tab" aria-selected="false" data-prompt-kind="personal">
+                <span class="dot" aria-hidden="true"></span>Личное
+              </button>
+              <button type="button" class="ai-prompts-tab${
+                prompts.chat.customized ? " custom" : ""
+              }" role="tab" aria-selected="false" data-prompt-kind="chat">
+                <span class="dot" aria-hidden="true"></span>ИИ-чат
+              </button>
             </div>
-            <div class="svc-field">
-              <label for="aiPromptChat">ИИ-чат <span class="ai-key-status">${
-                prompts.chat.customized ? "· свой" : "· по умолчанию"
-              }</span></label>
-              <textarea id="aiPromptChat" class="ai-prompt-area" rows="10" spellcheck="true">${esc(
-                prompts.chat.text || ""
-              )}</textarea>
+            <div class="ai-prompts-meta">
+              <label class="lbl" for="aiPromptText" id="aiPromptLabel">Рассылка</label>
+              <span class="hint" id="aiPromptHint">${
+                prompts.mailing.customized ? "свой текст" : "по умолчанию"
+              }</span>
             </div>
-            <div class="form-actions svc-actions">
-              <button type="button" class="btn primary" id="aiPromptsSave">Сохранить промпты</button>
-              <button type="button" class="btn" id="aiPromptsReset">Сбросить к стандартным</button>
+            <textarea id="aiPromptText" class="ai-prompt-area" rows="12" cols="72" spellcheck="true" aria-describedby="aiPromptHint">${esc(
+              prompts.mailing.text || ""
+            )}</textarea>
+            <div class="ai-prompts-foot">
+              <p class="form-foot">Плейсхолдеры в текстах клиентам: <code>{имя}</code>, <code>{скидка}</code>.</p>
+              <button type="button" class="btn primary" id="aiPromptsSave">Сохранить</button>
+              <button type="button" class="btn" id="aiPromptsReset">Сбросить все</button>
             </div>
-          </details>
+          </div>
         </div>
       </div>`;
+
+    const promptDrafts = {
+      mailing: String(prompts.mailing.text || ""),
+      personal: String(prompts.personal.text || ""),
+      chat: String(prompts.chat.text || ""),
+    };
+    const promptDefaults = {
+      mailing: String((prompts.mailing && prompts.mailing.default) || prompts.mailing.text || ""),
+      personal: String((prompts.personal && prompts.personal.default) || prompts.personal.text || ""),
+      chat: String((prompts.chat && prompts.chat.default) || prompts.chat.text || ""),
+    };
+    const promptMeta = {
+      mailing: { label: "Рассылка", desc: "массовые сообщения" },
+      personal: { label: "Личное сообщение", desc: "1:1 из карточки клиента" },
+      chat: { label: "ИИ-чат", desc: "помощник в разделе «ИИ чат»" },
+    };
+    let activePromptKind = "mailing";
+
+    function syncPromptEditor({ writeValue = true } = {}) {
+      const ta = $("#aiPromptText");
+      if (ta && writeValue) ta.value = promptDrafts[activePromptKind] || "";
+      const label = $("#aiPromptLabel");
+      const meta = promptMeta[activePromptKind] || promptMeta.mailing;
+      if (label) label.textContent = meta.label;
+      const hint = $("#aiPromptHint");
+      if (hint) {
+        const cur = (promptDrafts[activePromptKind] || "").trim();
+        const def = (promptDefaults[activePromptKind] || "").trim();
+        const customized = cur && cur !== def;
+        hint.textContent = customized ? "свой текст · " + meta.desc : "по умолчанию · " + meta.desc;
+      }
+      $$(".ai-prompts-tab").forEach((btn) => {
+        const kind = btn.dataset.promptKind;
+        const on = kind === activePromptKind;
+        btn.classList.toggle("on", on);
+        btn.setAttribute("aria-selected", on ? "true" : "false");
+        const cur = (promptDrafts[kind] || "").trim();
+        const def = (promptDefaults[kind] || "").trim();
+        btn.classList.toggle("custom", !!(cur && cur !== def));
+      });
+    }
 
     let selectedProvider = ai.provider || "openai";
     const providersById = Object.fromEntries(
@@ -3175,6 +3729,8 @@
 
     $("#aiPromptsSave")?.addEventListener("click", async () => {
       const btn = $("#aiPromptsSave");
+      const ta = $("#aiPromptText");
+      if (ta) promptDrafts[activePromptKind] = ta.value;
       if (btn) {
         btn.disabled = true;
         btn.textContent = "Сохраняю…";
@@ -3183,9 +3739,9 @@
         await AdminAPI.aiSaveSettings({
           prompts_only: true,
           prompts: {
-            mailing: ($("#aiPromptMailing")?.value || "").trim(),
-            personal: ($("#aiPromptPersonal")?.value || "").trim(),
-            chat: ($("#aiPromptChat")?.value || "").trim(),
+            mailing: (promptDrafts.mailing || "").trim(),
+            personal: (promptDrafts.personal || "").trim(),
+            chat: (promptDrafts.chat || "").trim(),
           },
         });
         alert("Промпты сохранены");
@@ -3196,18 +3752,35 @@
       }
       if (btn) {
         btn.disabled = false;
-        btn.textContent = "Сохранить промпты";
+        btn.textContent = "Сохранить";
       }
     });
 
     $("#aiPromptsReset")?.addEventListener("click", async () => {
-      if (!confirm("Вернуть все три промпта к стандартным из кода?")) return;
+      if (!confirm("Вернуть все три промпта к стандартным?")) return;
       try {
         await AdminAPI.aiSaveSettings({ reset_prompts: true });
         loadIntegrationsPane();
       } catch (err) {
         alert(err.data?.detail || err.message || "Ошибка");
       }
+    });
+
+    $$(".ai-prompts-tab").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        const ta = $("#aiPromptText");
+        if (ta) promptDrafts[activePromptKind] = ta.value;
+        activePromptKind = btn.dataset.promptKind || "mailing";
+        syncPromptEditor();
+        $("#aiPromptText")?.focus();
+      });
+    });
+
+    $("#aiPromptText")?.addEventListener("input", () => {
+      const ta = $("#aiPromptText");
+      if (!ta) return;
+      promptDrafts[activePromptKind] = ta.value;
+      syncPromptEditor({ writeValue: false });
     });
   }
 

@@ -38,6 +38,10 @@ def _env_bool(name: str, default: bool = False) -> bool:
 
 FLORIST_CHAT_ID = int(os.getenv("FLORIST_CHAT_ID", "0") or "0")
 FLORIST_NOTIFICATIONS_ENABLED = _env_bool("FLORIST_NOTIFICATIONS_ENABLED", False)
+# Telegram-канал для учёта подписчиков (ID вида -100… или @username).
+# Можно задать в админке: Клиенты → Подписчики.
+TELEGRAM_CHANNEL_ID = int(os.getenv("TELEGRAM_CHANNEL_ID", "0") or "0")
+TELEGRAM_CHANNEL_USERNAME = os.getenv("TELEGRAM_CHANNEL_USERNAME", "").strip().lstrip("@")
 POSIFLORA_USERNAME = _require("POSIFLORA_USERNAME")
 POSIFLORA_PASSWORD = _require("POSIFLORA_PASSWORD")
 POSIFLORA_STORE_ID = _require("POSIFLORA_STORE_ID")

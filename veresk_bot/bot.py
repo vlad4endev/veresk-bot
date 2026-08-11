@@ -16,6 +16,7 @@ from aiogram.fsm.state import State, StatesGroup
 from aiogram.fsm.storage.memory import MemoryStorage
 from aiogram.types import (
     BotCommand,
+    ChatMemberUpdated,
     KeyboardButton,
     Message,
     ReplyKeyboardMarkup,
@@ -933,7 +934,9 @@ async def _finish_survey(message: Message, state: FSMContext) -> None:
         try:
             from posiflora import sync_survey_profile_to_posiflora
 
-            posiflora_meta = await sync_survey_profile_to_posiflora(profile, tg_id)
+            posiflora_meta = await sync_survey_profile_to_posiflora(
+                profile, tg_id, channel="telegram"
+            )
             posiflora_ok = bool(posiflora_meta.get("posiflora_ok"))
             logger.info(
                 "Posiflora анкета: customer=%s, событий %s/%s",
@@ -1000,9 +1003,13 @@ async def _finish_survey(message: Message, state: FSMContext) -> None:
 
     already_played = False
     try:
+        from fortune_wheel import is_retry_prize
         from mailing_db import get_fortune_play
 
-        already_played = bool(await get_fortune_play("telegram", str(tg_id)))
+        play = await get_fortune_play("telegram", str(tg_id))
+        already_played = bool(play) and not is_retry_prize(
+            play.get("prize_label"), play.get("prize_id")
+        )
     except Exception:
         logger.debug("Не удалось проверить fortune_plays", exc_info=True)
 
@@ -1254,6 +1261,103 @@ async def on_miniapp_order(message: Message, bot: Bot) -> None:
         )
 
 
+async def on_channel_chat_member(event: ChatMemberUpdated) -> None:
+    """Учёт подписок/отписок от Telegram-канала (бот должен быть админом канала)."""
+    chat = event.chat
+    if chat.type != "channel":
+        return
+
+    from channel_subscriptions import (
+        get_channel_config,
+        matches_configured_channel,
+        save_channel_config,
+        upsert_subscription,
+    )
+
+    username = getattr(chat, "username", None)
+    if not matches_configured_channel(int(chat.id), username):
+        return
+
+    cfg = get_channel_config()
+    save_kwargs: dict[str, Any] = {}
+    if not cfg.get("channel_id"):
+        save_kwargs["channel_id"] = int(chat.id)
+    if username and not cfg.get("channel_username"):
+        save_kwargs["channel_username"] = str(username)
+    title = getattr(chat, "title", None)
+    if title and not cfg.get("channel_title"):
+        save_kwargs["channel_title"] = str(title)
+    if save_kwargs:
+        save_channel_config(**save_kwargs)
+
+    member = event.new_chat_member
+    user = member.user
+    if not user or user.is_bot:
+        return
+
+    await upsert_subscription(
+        tg_user_id=int(user.id),
+        channel_id=int(chat.id),
+        status=str(member.status),
+        username=str(user.username or ""),
+        first_name=str(user.first_name or ""),
+        last_name=str(user.last_name or ""),
+        source="event",
+    )
+
+
+async def on_my_chat_member(event: ChatMemberUpdated) -> None:
+    """Когда бота делают админом канала — автоматически сохраняем этот канал."""
+    chat = event.chat
+    if chat.type != "channel":
+        return
+
+    member = event.new_chat_member
+    user = member.user
+    if not user or not user.is_bot:
+        return
+
+    try:
+        me = await event.bot.get_me()
+    except Exception:
+        logger.debug("get_me в my_chat_member не удался", exc_info=True)
+        return
+    if int(user.id) != int(me.id):
+        return
+
+    status = str(member.status or "")
+    from channel_subscriptions import remember_bot_admin_channel
+
+    if status in ("administrator", "creator"):
+        result = remember_bot_admin_channel(
+            channel_id=int(chat.id),
+            channel_username=str(getattr(chat, "username", None) or ""),
+            channel_title=str(getattr(chat, "title", None) or ""),
+            force=False,
+        )
+        if result.get("updated") and not result.get("skipped"):
+            logger.info(
+                "Канал автосохранён (бот стал админом): %s id=%s @%s",
+                result.get("channel_title") or chat.title,
+                chat.id,
+                result.get("channel_username") or "",
+            )
+        elif result.get("skipped"):
+            logger.info(
+                "Бот стал админом канала %s (%s), но уже настроен другой канал — пропуск",
+                getattr(chat, "title", None),
+                chat.id,
+            )
+    elif status in ("left", "kicked", "member"):
+        # Бот потерял права админа — только лог, конфиг не трогаем
+        logger.info(
+            "Статус бота в канале %s (%s) → %s",
+            getattr(chat, "title", None),
+            chat.id,
+            status,
+        )
+
+
 def register_handlers(dp: Dispatcher) -> None:
     dp.message.register(cmd_start, CommandStart())
     dp.message.register(cmd_status, Command("status"))
@@ -1270,6 +1374,8 @@ def register_handlers(dp: Dispatcher) -> None:
     dp.message.register(step_add_more_dates, ProfileForm.add_more_dates)
     dp.message.register(step_budget, ProfileForm.budget)
     dp.message.register(step_source, ProfileForm.source)
+    dp.chat_member.register(on_channel_chat_member)
+    dp.my_chat_member.register(on_my_chat_member)
 
 
 BOT_COMMANDS = [
@@ -1360,12 +1466,14 @@ async def main() -> None:
     )
 
     from bot_metrics import PLATFORM_TELEGRAM, init_bot_metrics, touch_bot_heartbeat
+    from channel_subscriptions import init_channel_subscriptions
     from client_db import init_db
     from mailing_db import init_mailing_db
 
     await init_db()
     await init_mailing_db()
     await init_bot_metrics()
+    await init_channel_subscriptions()
 
     redis = getattr(dp.storage, "redis", None)
     if redis:
@@ -1438,6 +1546,57 @@ async def main() -> None:
 
     if tg_ok:
         asyncio.create_task(_tg_heartbeat_loop())
+
+        async def _discover_channel_on_boot() -> None:
+            try:
+                from channel_subscriptions import (
+                    discover_channels_where_bot_is_admin,
+                    get_channel_config,
+                )
+                from mailing_db import list_send_accounts
+
+                if get_channel_config().get("configured"):
+                    return
+                accounts = await list_send_accounts()
+                tg_acc = next(
+                    (
+                        a
+                        for a in accounts
+                        if a.get("kind") == "tg_userbot" and a.get("session_file")
+                    ),
+                    None,
+                )
+                if not tg_acc:
+                    logger.info(
+                        "Канал для подписчиков не настроен — нет Telethon-аккаунта для автопоиска"
+                    )
+                    return
+                result = await discover_channels_where_bot_is_admin(
+                    session_file=str(tg_acc["session_file"]),
+                    account_id=int(tg_acc["id"]) if tg_acc.get("id") is not None else None,
+                    auto_save=True,
+                )
+                if result.get("auto_saved"):
+                    ch = result.get("channel") or {}
+                    logger.info(
+                        "Канал найден и сохранён автоматически: %s (%s)",
+                        ch.get("channel_title") or ch.get("channel_username"),
+                        ch.get("channel_id"),
+                    )
+                elif result.get("need_pick"):
+                    logger.info(
+                        "Найдено каналов, где бот админ: %s — выберите в админке Клиенты → Подписчики",
+                        len(result.get("channels") or []),
+                    )
+                elif result.get("ok") and not (result.get("channels") or []):
+                    logger.info(
+                        "Автопоиск каналов: бот нигде не найден как админ "
+                        "(добавьте бота админом канала; userbot должен видеть канал)"
+                    )
+            except Exception:
+                logger.debug("Автопоиск канала при старте не удался", exc_info=True)
+
+        asyncio.create_task(_discover_channel_on_boot())
         try:
             await setup_menu_commands()
         except TelegramUnauthorizedError:
@@ -1446,7 +1605,11 @@ async def main() -> None:
         except Exception:
             logger.exception("setup_menu_commands failed — пробуем polling без меню")
         try:
-            await dp.start_polling(bot)
+            # chat_member нужен для учёта подписчиков канала (бот — админ канала)
+            await dp.start_polling(
+                bot,
+                allowed_updates=dp.resolve_used_update_types(),
+            )
         except Exception:
             logger.exception("Telegram polling crashed")
             await _keep_api_alive("Telegram polling упал")

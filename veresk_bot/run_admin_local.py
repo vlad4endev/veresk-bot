@@ -11,6 +11,7 @@ from aiohttp import web
 
 from admin_api import on_admin_startup, setup_admin_routes
 from bot_metrics import init_bot_metrics
+from channel_subscriptions import init_channel_subscriptions
 from mailing_db import init_mailing_db, upsert_customer, upsert_customer_event, count_customers
 
 ROOT = Path(__file__).resolve().parent
@@ -61,6 +62,7 @@ async def _seed_demo() -> None:
 async def main() -> None:
     await init_mailing_db()
     await init_bot_metrics()
+    await init_channel_subscriptions()
     await _seed_demo()
 
     from senders.telegram_userbot import is_telethon_installed

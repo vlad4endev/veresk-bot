@@ -88,6 +88,8 @@ from mailing_db import (
     normalize_phone_db,
 
     get_fortune_play,
+    delete_fortune_play,
+    claim_fortune_play_notified,
     list_fortune_plays,
     record_fortune_play,
     append_customer_notes,
@@ -224,6 +226,8 @@ def _segment_label(seg: str) -> str:
         "new": "Новый",
         "inactive": "Давно не заказывал",
         "selected": "Выбранные клиенты",
+        "channel_subscribers": "Подписчики канала",
+        "channel_subscribers_new": "Новые подписчики канала",
     }.get(seg, seg)
 
 
@@ -934,6 +938,310 @@ async def handle_client_detail(request: web.Request) -> web.Response:
     )
 
 
+# ── channel subscribers ─────────────────────────────────────────────────────
+
+
+def _mask_phone_safe(phone: str | None) -> str:
+    if not phone:
+        return ""
+    try:
+        return _mask_phone(phone)
+    except Exception:
+        return ""
+
+
+async def handle_channel_subscribers_list(request: web.Request) -> web.Response:
+    err = await _require_admin(request)
+    if err:
+        return err
+    from channel_subscriptions import (
+        NEW_SUBSCRIBER_DAYS,
+        get_channel_config,
+        init_channel_subscriptions,
+        list_subscribers,
+    )
+
+    await init_channel_subscriptions()
+    list_filter = (request.query.get("filter") or "").strip().lower() or None
+    status = (request.query.get("status") or "member").strip().lower()
+    if status in ("all", "*"):
+        status_filter = None
+    elif status in ("member", "left"):
+        status_filter = status
+    else:
+        status_filter = "member"
+    search = request.query.get("search") or None
+    only_new = (request.query.get("only_new") or "").strip().lower() in (
+        "1",
+        "true",
+        "yes",
+        "on",
+    )
+    try:
+        page = int(request.query.get("page", "1"))
+    except ValueError:
+        page = 1
+    try:
+        page_size = min(int(request.query.get("page_size", "100")), 500)
+    except ValueError:
+        page_size = 100
+
+    items, total, stats = await list_subscribers(
+        status=status_filter,
+        search=search,
+        only_new=only_new,
+        list_filter=list_filter,
+        page=page,
+        page_size=page_size,
+    )
+    for it in items:
+        phone = it.get("customer_phone")
+        it["customer_phone_masked"] = _mask_phone_safe(phone) if phone else ""
+        it["joined_label"] = _format_relative(it.get("joined_at")) if it.get("joined_at") else "—"
+        it["left_label"] = _format_relative(it.get("left_at")) if it.get("left_at") else ""
+
+    cfg = get_channel_config()
+    return _json(
+        {
+            "items": items,
+            "total": total,
+            "page": page,
+            "page_size": page_size,
+            "stats": stats,
+            "channel": cfg,
+            "new_days": NEW_SUBSCRIBER_DAYS,
+            "filter": list_filter
+            or ("new" if only_new else (status if status != "member" else "member")),
+        }
+    )
+
+
+async def handle_channel_subscribers_settings(request: web.Request) -> web.Response:
+    err = await _require_admin(request)
+    if err:
+        return err
+    from channel_subscriptions import get_channel_config, save_channel_config
+
+    body: dict[str, Any] = {}
+    if request.method != "GET":
+        try:
+            raw = await request.json()
+            if isinstance(raw, dict):
+                body = raw
+        except Exception:
+            body = {}
+
+    if request.method == "GET":
+        return _json({"channel": get_channel_config()})
+
+    channel_id = body.get("channel_id")
+    channel_username = body.get("channel_username")
+    channel_title = body.get("channel_title")
+    cid: int | None = None
+    if channel_id is not None and str(channel_id).strip() != "":
+        try:
+            cid = int(str(channel_id).strip())
+        except ValueError:
+            return _json({"error": "bad_channel_id"}, status=400)
+    elif "channel_id" in body:
+        cid = 0
+
+    uname: str | None = None
+    if channel_username is not None:
+        uname = str(channel_username).strip().lstrip("@")
+
+    title: str | None = None
+    if channel_title is not None:
+        title = str(channel_title).strip()
+
+    cfg = save_channel_config(
+        channel_id=cid,
+        channel_username=uname,
+        channel_title=title,
+    )
+    return _json({"ok": True, "channel": cfg})
+
+
+async def _pick_tg_userbot_account() -> dict[str, Any] | None:
+    accounts = await list_send_accounts()
+    tg_accounts = [
+        a
+        for a in accounts
+        if a.get("kind") == "tg_userbot"
+        and a.get("session_file")
+        and (a.get("status") or "ready") in ("ready", "warmup")
+    ]
+    if not tg_accounts:
+        tg_accounts = [
+            a
+            for a in accounts
+            if a.get("kind") == "tg_userbot" and a.get("session_file")
+        ]
+    return tg_accounts[0] if tg_accounts else None
+
+
+async def handle_channel_subscribers_sync(request: web.Request) -> web.Response:
+    err = await _require_admin(request)
+    if err:
+        return err
+    from channel_subscriptions import (
+        get_channel_config,
+        init_channel_subscriptions,
+        sync_channel_subscribers_via_telethon,
+    )
+
+    await init_channel_subscriptions()
+    cfg = get_channel_config()
+    if not cfg.get("configured"):
+        return _json(
+            {
+                "ok": False,
+                "error": "channel_not_configured",
+                "detail": "Сначала найдите канал кнопкой «Определить автоматически»",
+            },
+            status=400,
+        )
+
+    acc = await _pick_tg_userbot_account()
+    if not acc:
+        return _json(
+            {
+                "ok": False,
+                "error": "no_telegram_account",
+                "detail": "Подключите Telegram-аккаунт в Настройки → Telegram",
+            },
+            status=400,
+        )
+
+    result = await sync_channel_subscribers_via_telethon(
+        session_file=str(acc["session_file"]),
+        account_id=int(acc["id"]) if acc.get("id") is not None else None,
+    )
+    status = 200 if result.get("ok") else 502
+    return _json(result, status=status)
+
+
+async def handle_channel_subscribers_discover(request: web.Request) -> web.Response:
+    """Найти каналы, где бот — админ, и при одном совпадении сохранить автоматически."""
+    err = await _require_admin(request)
+    if err:
+        return err
+    from channel_subscriptions import (
+        discover_channels_where_bot_is_admin,
+        init_channel_subscriptions,
+        remember_bot_admin_channel,
+    )
+
+    await init_channel_subscriptions()
+    body: dict[str, Any] = {}
+    try:
+        raw = await request.json()
+        if isinstance(raw, dict):
+            body = raw
+    except Exception:
+        body = {}
+
+    auto_save = body.get("auto_save", True)
+    if isinstance(auto_save, str):
+        auto_save = auto_save.strip().lower() in ("1", "true", "yes", "on")
+
+    # Явный выбор канала из списка
+    pick_id = body.get("channel_id")
+    if pick_id is not None and str(pick_id).strip() != "":
+        try:
+            cid = int(str(pick_id).strip())
+        except ValueError:
+            return _json({"error": "bad_channel_id"}, status=400)
+        uname = str(body.get("channel_username") or "").strip().lstrip("@")
+        title = str(body.get("channel_title") or "").strip()
+        cfg = remember_bot_admin_channel(
+            channel_id=cid,
+            channel_username=uname,
+            channel_title=title,
+            force=True,
+        )
+        return _json({"ok": True, "picked": True, "channel": cfg, "channels": []})
+
+    acc = await _pick_tg_userbot_account()
+    if not acc:
+        return _json(
+            {
+                "ok": False,
+                "error": "no_telegram_account",
+                "detail": "Подключите Telegram-аккаунт в Настройки → Telegram — через него ищем каналы",
+                "channels": [],
+            },
+            status=400,
+        )
+
+    result = await discover_channels_where_bot_is_admin(
+        session_file=str(acc["session_file"]),
+        account_id=int(acc["id"]) if acc.get("id") is not None else None,
+        auto_save=bool(auto_save),
+    )
+    status = 200 if result.get("ok") else 502
+    return _json(result, status=status)
+
+
+async def handle_channel_subscribers_ensure(request: web.Request) -> web.Response:
+    """Создать/найти CRM-карточки для подписчиков → письмо и рассылка."""
+    err = await _require_admin(request)
+    if err:
+        return err
+    from channel_subscriptions import (
+        ensure_customer_for_subscriber,
+        ensure_customers_for_subscribers,
+        init_channel_subscriptions,
+        list_member_tg_ids,
+    )
+
+    await init_channel_subscriptions()
+    body: dict[str, Any] = {}
+    try:
+        raw = await request.json()
+        if isinstance(raw, dict):
+            body = raw
+    except Exception:
+        body = {}
+
+    tg_ids_raw = body.get("tg_user_ids")
+    if tg_ids_raw is None and body.get("tg_user_id") is not None:
+        tg_ids_raw = [body.get("tg_user_id")]
+    if body.get("all_members"):
+        only_new = bool(body.get("only_new"))
+        customers = await ensure_customers_for_subscribers(
+            await list_member_tg_ids(only_new=only_new)
+        )
+    else:
+        ids: list[int] = []
+        for raw_id in tg_ids_raw or []:
+            try:
+                ids.append(int(raw_id))
+            except (TypeError, ValueError):
+                continue
+        if not ids:
+            return _json({"error": "tg_user_ids_required"}, status=400)
+        if len(ids) == 1:
+            cust = await ensure_customer_for_subscriber(ids[0])
+            customers = [cust] if cust else []
+        else:
+            customers = await ensure_customers_for_subscribers(ids)
+
+    items = [
+        {
+            "id": c["id"],
+            "name": c.get("name") or "",
+            "phone": c.get("phone") or "",
+            "phone_masked": _mask_phone_safe(c.get("phone")),
+            "tg_user_id": c.get("tg_user_id"),
+            "messengers": _messengers_public(c),
+        }
+        for c in customers
+        if c
+    ]
+    return _json({"ok": True, "items": items, "total": len(items)})
+
+
 # ── events ─────────────────────────────────────────────────────────────────
 
 
@@ -1097,11 +1405,7 @@ async def handle_mailing_preview(request: web.Request) -> web.Response:
         "Новые": "new",
         "Давно не заказывали": "inactive",
         "Выбранные клиенты": "selected",
-        "Подписчики канала": "channel_subscribers",
-        "Новые подписчики канала": "channel_subscribers_new",
         "selected": "selected",
-        "channel_subscribers": "channel_subscribers",
-        "channel_subscribers_new": "channel_subscribers_new",
     }
     segment = seg_map.get(segment, segment)
     channels = str(request.query.get("channels") or "tg")
@@ -1198,11 +1502,7 @@ async def handle_campaign_create(request: web.Request) -> web.Response:
         "Новые": "new",
         "Давно не заказывали": "inactive",
         "Выбранные клиенты": "selected",
-        "Подписчики канала": "channel_subscribers",
-        "Новые подписчики канала": "channel_subscribers_new",
         "selected": "selected",
-        "channel_subscribers": "channel_subscribers",
-        "channel_subscribers_new": "channel_subscribers_new",
     }
     segment = seg_map.get(segment, segment)
     customer_ids = _parse_customer_ids(body.get("customer_ids"))
@@ -2303,12 +2603,24 @@ async def handle_segment_counts(request: web.Request) -> web.Response:
     err = await _require_admin(request)
     if err:
         return err
+    channel_n = 0
+    channel_new_n = 0
+    try:
+        from channel_subscriptions import list_subscribers
+
+        _, _, st = await list_subscribers(list_filter="member", page=1, page_size=1)
+        channel_n = int(st.get("members") or 0)
+        channel_new_n = int(st.get("new") or 0)
+    except Exception:
+        pass
     return _json(
         {
             "all": await count_customers(),
             "regular": await count_customers("regular"),
             "new": await count_customers("new"),
             "inactive": await count_customers("inactive"),
+            "channel_subscribers": channel_n,
+            "channel_subscribers_new": channel_new_n,
         }
     )
 
@@ -4774,27 +5086,35 @@ async def _resolve_customer_for_wheel(
 
 
 async def _notify_wheel_prize(
-    request: web.Request,
+    app: web.Application,
     *,
     channel: str,
     uid: str,
-    prize_label: str,
-    discount_pct: float | None,
-) -> None:
+    prize_label: str | None = None,
+    discount_pct: float | None = None,
+) -> bool:
+    """Отправить поздравление один раз (после анимации или fallback)."""
+    play = await claim_fortune_play_notified(channel, uid)
+    if not play:
+        return False
+    label = str(prize_label or play.get("prize_label") or "")
+    if is_retry_prize(label, play.get("prize_id")):
+        return False
+    pct = discount_pct if discount_pct is not None else play.get("discount_pct")
     text_md = format_prize_congrats_message(
-        prize_label=prize_label,
-        discount_pct=discount_pct,
+        prize_label=label,
+        discount_pct=pct,
         markdown=True,
     )
     try:
         if channel == "telegram":
-            bot = request.app.get("bot")
+            bot = app.get("bot")
             if bot is None:
                 from aiogram import Bot
                 from aiogram.client.session.aiohttp import AiohttpSession
 
                 if not BOT_TOKEN:
-                    return
+                    return False
                 bot = Bot(token=BOT_TOKEN, session=AiohttpSession(timeout=60))
                 try:
                     await bot.send_message(int(uid), text_md, parse_mode="Markdown")
@@ -4802,11 +5122,11 @@ async def _notify_wheel_prize(
                     await bot.session.close()
             else:
                 await bot.send_message(int(uid), text_md, parse_mode="Markdown")
-            return
+            return True
 
         token = get_max_bot_token()
         if not token:
-            return
+            return False
         from max_bot.api import MaxBotAPI
 
         api = MaxBotAPI(token)
@@ -4814,15 +5134,35 @@ async def _notify_wheel_prize(
             await api.send_message(
                 user_id=int(uid),
                 text=format_prize_congrats_message(
-                    prize_label=prize_label,
-                    discount_pct=discount_pct,
+                    prize_label=label,
+                    discount_pct=pct,
                     markdown=False,
                 ),
             )
         finally:
             await api.close()
+        return True
     except Exception:
         logger.exception("Не удалось отправить поздравление с призом (%s/%s)", channel, uid)
+        return False
+
+
+async def _schedule_wheel_prize_fallback(
+    app: web.Application, *, channel: str, uid: str, delay_sec: float = 14.0
+) -> None:
+    """Если Mini App не вызвал /notify после анимации — всё равно поздравить."""
+
+    async def _run() -> None:
+        try:
+            await asyncio.sleep(delay_sec)
+            await _notify_wheel_prize(app, channel=channel, uid=uid)
+        except Exception:
+            logger.debug("wheel prize fallback notify failed", exc_info=True)
+
+    try:
+        asyncio.create_task(_run())
+    except Exception:
+        logger.debug("wheel prize fallback schedule failed", exc_info=True)
 
 
 async def handle_wheel_spin(request: web.Request) -> web.Response:
@@ -4870,9 +5210,17 @@ async def handle_wheel_spin(request: web.Request) -> web.Response:
             "config": cfg,
         }
 
-    if existing:
-        # Один спин на анкету: повторно не крутим, отдаём сохранённый приз
+    if existing and not is_retry_prize(
+        existing.get("prize_label"), existing.get("prize_id")
+    ):
+        # Финальный приз уже есть — повторно не крутим
         return _json(_already_played_payload(existing), status=409)
+    if existing:
+        # Запись «Попробуйте ещё» не должна блокировать следующий спин
+        try:
+            await delete_fortune_play(channel, uid)
+        except Exception:
+            logger.debug("delete retry fortune_play failed", exc_info=True)
 
     profile = await _survey_profile_for_wheel(channel, uid)
     if not profile:
@@ -4886,6 +5234,9 @@ async def handle_wheel_spin(request: web.Request) -> web.Response:
 
     picked = pick_wheel_winner(segments)
     seg = picked["segment"]
+    prize_label = str(seg.get("label") or "")
+    prize_id = str(seg.get("id") or "")
+    retry_prize = is_retry_prize(prize_label, prize_id)
     customer = await _resolve_customer_for_wheel(channel, uid, profile)
 
     # Enrich name from CRM / survey if Mini App user has empty names
@@ -4900,14 +5251,29 @@ async def handle_wheel_spin(request: web.Request) -> web.Response:
             first = parts[0] if parts else first
             last = parts[1] if len(parts) > 1 else last
 
+    # «Попробуйте ещё» — не фиксируем спин, можно крутить снова
+    if retry_prize:
+        return _json(
+            {
+                "ok": True,
+                "already_played": False,
+                "retry": True,
+                "winner_index": picked["index"],
+                "segment": seg,
+                "discount_pct": picked.get("discount_pct"),
+                "play": None,
+                "config": cfg,
+            }
+        )
+
     play, created = await record_fortune_play(
         channel=channel,
         user_id=uid,
         first_name=first,
         last_name=last,
         username=username,
-        prize_id=str(seg.get("id") or ""),
-        prize_label=str(seg.get("label") or ""),
+        prize_id=prize_id,
+        prize_label=prize_label,
         discount_pct=picked.get("discount_pct"),
         customer_id=int(customer["id"]) if customer and customer.get("id") is not None else None,
         tg_user_id=int(uid) if channel == "telegram" else None,
@@ -4916,12 +5282,7 @@ async def handle_wheel_spin(request: web.Request) -> web.Response:
     if not created:
         return _json(_already_played_payload(play), status=409)
 
-    prize_label = str(seg.get("label") or "")
-    prize_id = str(seg.get("id") or "")
-    retry_prize = is_retry_prize(prize_label, prize_id)
-
-    # «Попробуйте ещё» — не пишем в карточку и не шлём поздравление в бот
-    if customer and customer.get("id") is not None and not retry_prize:
+    if customer and customer.get("id") is not None:
         try:
             note = format_customer_prize_note(
                 channel=channel,
@@ -4930,22 +5291,28 @@ async def handle_wheel_spin(request: web.Request) -> web.Response:
                 created_at=str(play.get("created_at") or ""),
             )
             await append_customer_notes(int(customer["id"]), note)
+            pf_id = str(customer.get("posiflora_id") or "").strip()
+            if pf_id:
+                try:
+                    from posiflora import append_customer_prize_note_to_posiflora
+
+                    await append_customer_prize_note_to_posiflora(pf_id, note)
+                except Exception:
+                    logger.exception(
+                        "Не удалось записать приз в Posiflora #%s", pf_id
+                    )
         except Exception:
             logger.exception("Не удалось записать приз в карточку клиента id=%s", customer.get("id"))
 
-    if not retry_prize:
-        await _notify_wheel_prize(
-            request,
-            channel=channel,
-            uid=uid,
-            prize_label=prize_label,
-            discount_pct=picked.get("discount_pct"),
-        )
+    # Поздравление — после анимации колеса (POST /api/wheel/notify),
+    # с запасной отправкой через ~14с если клиент не вызвал notify.
+    await _schedule_wheel_prize_fallback(request.app, channel=channel, uid=uid)
 
     return _json(
         {
             "ok": True,
             "already_played": False,
+            "retry": False,
             "winner_index": picked["index"],
             "segment": seg,
             "discount_pct": picked.get("discount_pct"),
@@ -4955,15 +5322,45 @@ async def handle_wheel_spin(request: web.Request) -> web.Response:
     )
 
 
+async def handle_wheel_notify(request: web.Request) -> web.Response:
+    """POST /api/wheel/notify — поздравление после окончания анимации колеса."""
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    player, err = await _resolve_wheel_player(
+        request, body=body if isinstance(body, dict) else {}
+    )
+    if err:
+        return err
+    assert player is not None
+    channel = player["channel"]
+    uid = str(player["user"].get("id"))
+    play = await get_fortune_play(channel, uid)
+    if not play:
+        return _json({"ok": False, "sent": False, "error": "no_play"}, status=404)
+    if is_retry_prize(play.get("prize_label"), play.get("prize_id")):
+        return _json({"ok": True, "sent": False, "retry": True})
+    sent = await _notify_wheel_prize(request.app, channel=channel, uid=uid)
+    return _json({"ok": True, "sent": sent})
+
+
 async def handle_wheel_my_play(request: web.Request) -> web.Response:
     player, err = await _resolve_wheel_player(request, body={})
     if err:
         return err
     assert player is not None
+    channel = player["channel"]
     uid = str(player["user"].get("id"))
-    play = await get_fortune_play(player["channel"], uid)
+    play = await get_fortune_play(channel, uid)
     if not play:
         return _json({"played": False, "play": None})
+    if is_retry_prize(play.get("prize_label"), play.get("prize_id")):
+        try:
+            await delete_fortune_play(channel, uid)
+        except Exception:
+            logger.debug("cleanup retry fortune_play on /me failed", exc_info=True)
+        return _json({"played": False, "play": None, "retry_cleared": True})
     return _json({"played": True, "play": _serialize_fortune_play(play)})
 
 def setup_admin_routes(app: web.Application) -> None:
@@ -4983,6 +5380,12 @@ def setup_admin_routes(app: web.Application) -> None:
         ("/api/admin/sync", handle_sync, "POST"),
         ("/api/admin/clients", handle_clients_list, "GET"),
         ("/api/admin/clients/{id}", handle_client_detail, "GET"),
+        ("/api/admin/channel-subscribers", handle_channel_subscribers_list, "GET"),
+        ("/api/admin/channel-subscribers/settings", handle_channel_subscribers_settings, "GET"),
+        ("/api/admin/channel-subscribers/settings", handle_channel_subscribers_settings, "POST"),
+        ("/api/admin/channel-subscribers/sync", handle_channel_subscribers_sync, "POST"),
+        ("/api/admin/channel-subscribers/discover", handle_channel_subscribers_discover, "POST"),
+        ("/api/admin/channel-subscribers/ensure", handle_channel_subscribers_ensure, "POST"),
         ("/api/admin/events/upcoming", handle_events_upcoming, "GET"),
         ("/api/admin/events/{id}", handle_event_patch, "PATCH"),
         ("/api/admin/campaigns", handle_campaigns_list, "GET"),
@@ -5045,6 +5448,7 @@ def setup_admin_routes(app: web.Application) -> None:
         ("/api/admin/wheel/plays", handle_wheel_plays_list, "GET"),
         ("/api/wheel", handle_wheel_public_get, "GET"),
         ("/api/wheel/spin", handle_wheel_spin, "POST"),
+        ("/api/wheel/notify", handle_wheel_notify, "POST"),
         ("/api/wheel/me", handle_wheel_my_play, "GET"),
     ]
     options_done: set[str] = set()

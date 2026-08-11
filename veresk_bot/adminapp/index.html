@@ -14,7 +14,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,500;9..144,600;9..144,700&family=Manrope:wght@400;500;600;700&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="css/admin.css?v=59">
+<link rel="stylesheet" href="css/admin.css?v=61">
 <link rel="stylesheet" href="css/wheel.css?v=11">
 <!-- Критичный CSS до paint: иначе логин мелькнёт, пока качается admin.css -->
 <style>
@@ -198,42 +198,123 @@
       <div class="clients-head">
         <div>
           <div class="page-title">Клиенты</div>
-          <p class="page-desc">База из Posiflora. Сегменты считаются автоматически.</p>
+          <p class="page-desc" id="clientsPageDesc">База из Posiflora. Сегменты считаются автоматически.</p>
         </div>
         <button class="btn" id="btnSync">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M12 3v12M8 11l4 4 4-4"/><path d="M4 17v2a2 2 0 002 2h12a2 2 0 002-2v-2"/></svg>
           Синхронизировать
         </button>
+        <button class="btn" id="btnSubsSync" hidden>
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M12 3v12M8 11l4 4 4-4"/><path d="M4 17v2a2 2 0 002 2h12a2 2 0 002-2v-2"/></svg>
+          Выгрузить подписчиков
+        </button>
       </div>
-      <div class="clients-toolbar">
-        <div class="seg">
-          <button class="on" data-seg="all">Все</button>
-          <button data-seg="regular">Постоянные</button>
-          <button data-seg="new">Новые</button>
-          <button data-seg="inactive">Давно не заказывали</button>
-        </div>
-        <div class="clients-tools">
-          <div class="searchbox clients-search">
-            <svg class="si" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="m21 21-4.3-4.3"/></svg>
-            <input type="search" id="clientsSearch" placeholder="Имя или телефон…" autocomplete="off">
+
+      <div class="clients-tabs" role="tablist" aria-label="Разделы клиентов">
+        <button type="button" class="clients-tab on" data-clients-tab="base" role="tab" aria-selected="true">База клиентов</button>
+        <button type="button" class="clients-tab" data-clients-tab="subscribers" role="tab" aria-selected="false">
+          Подписчики
+          <span class="clients-tab-badge" id="subsNewBadge" hidden>0</span>
+        </button>
+      </div>
+
+      <div class="clients-pane active" id="clientsPaneBase" data-clients-pane="base">
+        <div class="clients-toolbar">
+          <div class="seg">
+            <button class="on" data-seg="all">Все</button>
+            <button data-seg="regular">Постоянные</button>
+            <button data-seg="new">Новые</button>
+            <button data-seg="inactive">Давно не заказывали</button>
           </div>
-          <p class="hint" id="clientsHint"></p>
+          <div class="clients-tools">
+            <div class="searchbox clients-search">
+              <svg class="si" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="m21 21-4.3-4.3"/></svg>
+              <input type="search" id="clientsSearch" placeholder="Имя или телефон…" autocomplete="off">
+            </div>
+            <p class="hint" id="clientsHint"></p>
+          </div>
+        </div>
+        <div class="tbl-wrap clients-tbl">
+          <table>
+            <thead>
+              <tr>
+                <th>Клиент</th>
+                <th>Сегмент</th>
+                <th>Каналы</th>
+                <th class="hide-mob">Последний заказ</th>
+                <th>Событие</th>
+                <th class="th-chev" aria-hidden="true"></th>
+              </tr>
+            </thead>
+            <tbody id="clientsBody"></tbody>
+          </table>
         </div>
       </div>
-      <div class="tbl-wrap clients-tbl">
-        <table>
-          <thead>
-            <tr>
-              <th>Клиент</th>
-              <th>Сегмент</th>
-              <th>Каналы</th>
-              <th class="hide-mob">Последний заказ</th>
-              <th>Событие</th>
-              <th class="th-chev" aria-hidden="true"></th>
-            </tr>
-          </thead>
-          <tbody id="clientsBody"></tbody>
-        </table>
+
+      <div class="clients-pane" id="clientsPaneSubs" data-clients-pane="subscribers" hidden>
+        <div class="subs-setup" id="subsSetup">
+          <div class="subs-channel-status" id="subsChannelStatus">
+            <div class="subs-channel-main">
+              <div class="subs-channel-label">Канал</div>
+              <div class="subs-channel-name" id="subsChannelName">Не определён</div>
+              <div class="subs-channel-meta" id="subsChannelMeta"></div>
+            </div>
+            <div class="subs-channel-actions">
+              <button type="button" class="btn primary" id="btnSubsDiscover">Определить автоматически</button>
+              <button type="button" class="btn" id="btnSubsManualToggle">Вручную</button>
+            </div>
+          </div>
+          <div class="subs-channel-pick" id="subsChannelPick" hidden></div>
+          <div class="subs-setup-fields" id="subsManualFields" hidden>
+            <label class="field">
+              <span>Канал (@username)</span>
+              <input type="text" id="subsChannelUsername" placeholder="veresk_flowers" autocomplete="off">
+            </label>
+            <label class="field">
+              <span>Или ID канала</span>
+              <input type="text" id="subsChannelId" placeholder="-100…" autocomplete="off">
+            </label>
+            <button type="button" class="btn primary" id="btnSubsSaveChannel">Сохранить</button>
+          </div>
+          <p class="hint subs-setup-hint">Бот должен быть <b>админом</b> канала. Система сама находит такие каналы через подключённый Telegram-аккаунт и запоминает канал, когда бота назначают админом.</p>
+        </div>
+        <div class="clients-toolbar">
+          <div class="seg" id="subsSeg">
+            <button class="on" data-subs-filter="member">Подписаны <span class="seg-n" data-stat="members"></span></button>
+            <button data-subs-filter="new">Новые <span class="seg-n" data-stat="new"></span></button>
+            <button data-subs-filter="survey">С анкетой <span class="seg-n" data-stat="survey"></span></button>
+            <button data-subs-filter="no_survey">Без анкеты <span class="seg-n" data-stat="no_survey"></span></button>
+            <button data-subs-filter="left">Отписались <span class="seg-n" data-stat="left"></span></button>
+            <button data-subs-filter="all">Все</button>
+          </div>
+          <div class="clients-tools">
+            <div class="searchbox clients-search">
+              <svg class="si" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="m21 21-4.3-4.3"/></svg>
+              <input type="search" id="subsSearch" placeholder="Имя, @username или ID…" autocomplete="off">
+            </div>
+            <p class="hint" id="subsHint"></p>
+          </div>
+        </div>
+        <div class="subs-bulk" id="subsBulk" hidden>
+          <label class="subs-bulk-check"><input type="checkbox" id="subsSelectAll"> Выбрать все на странице</label>
+          <span class="subs-bulk-count" id="subsSelectedCount">0 выбрано</span>
+          <button type="button" class="btn" id="btnSubsWrite" disabled>Написать</button>
+          <button type="button" class="btn primary" id="btnSubsToMailing" disabled>В рассылку</button>
+        </div>
+        <div class="tbl-wrap clients-tbl">
+          <table>
+            <thead>
+              <tr>
+                <th class="th-check"><span class="sr-only">Выбор</span></th>
+                <th>Подписчик</th>
+                <th>Теги</th>
+                <th class="hide-mob">Подписка</th>
+                <th>Действия</th>
+              </tr>
+            </thead>
+            <tbody id="subsBody"></tbody>
+          </table>
+        </div>
       </div>
     </section>
 
@@ -1008,6 +1089,16 @@
               <div><div class="ct">Давно не заказывали</div><div class="cc">— человек</div></div>
               <span class="rc"><svg viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="3"><path d="M20 6 9 17l-5-5"/></svg></span>
             </button>
+            <button type="button" class="choice" data-seg="channel_subscribers" data-count="0">
+              <div class="ci"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg></div>
+              <div><div class="ct">Подписчики канала</div><div class="cc">— человек</div></div>
+              <span class="rc"><svg viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="3"><path d="M20 6 9 17l-5-5"/></svg></span>
+            </button>
+            <button type="button" class="choice" data-seg="channel_subscribers_new" data-count="0">
+              <div class="ci"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M12 5v14M5 12h14"/><circle cx="12" cy="12" r="9"/></svg></div>
+              <div><div class="ct">Новые подписчики</div><div class="cc">— человек</div></div>
+              <span class="rc"><svg viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="3"><path d="M20 6 9 17l-5-5"/></svg></span>
+            </button>
           </div>
         </div>
         <div id="audPickBlock" class="aud-pick" hidden>
@@ -1313,6 +1404,6 @@
 <script src="js/qrcode.min.js?v=1"></script>
 <script src="js/api.js?v=39"></script>
 <script src="js/wheel-widget.js?v=13"></script>
-<script src="js/app.js?v=65"></script>
+<script src="js/app.js?v=67"></script>
 </body>
 </html>
