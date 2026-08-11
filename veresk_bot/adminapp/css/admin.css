@@ -825,6 +825,47 @@
   .subs-welcome-footer .btn.primary{margin-left:auto;min-width:140px;}
   .subs-welcome-placeholders{margin:0;line-height:1.4;}
 
+  /* Auto-mail settings pane */
+  #set-automail.active{display:flex;flex-direction:column;gap:14px;}
+  .automail-card{max-width:720px;}
+  .automail-global-grid{
+    display:grid;gap:12px;
+    grid-template-columns:1fr 1fr;
+  }
+  .automail-kinds{
+    display:grid;gap:12px;
+    grid-template-columns:1fr;
+  }
+  @media (min-width:980px){
+    .automail-kinds{grid-template-columns:1fr 1fr 1fr;align-items:start;}
+  }
+  .automail-kinds .automail-card{max-width:none;}
+  #set-automail .field{width:100%;min-width:0;margin:0;}
+  #set-automail .field > span{
+    display:block;margin:0 0 5px;font-size:12.5px;font-weight:600;color:var(--ink-2);
+  }
+  #set-automail select,
+  #set-automail input[type="time"]{
+    width:100%;box-sizing:border-box;
+    border:1.5px solid var(--line);border-radius:11px;padding:9px 11px;
+    background:var(--surface-2);color:var(--ink);font:inherit;font-size:13.5px;min-height:40px;
+  }
+  #set-automail select:focus,
+  #set-automail input[type="time"]:focus{
+    outline:none;border-color:var(--accent);background:var(--surface);
+  }
+  .automail-footer{
+    display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;
+    max-width:720px;padding-top:4px;
+  }
+  .automail-footer .hint{margin:0;flex:1;min-width:200px;line-height:1.4;}
+  .automail-footer .btn.primary{min-width:140px;}
+  @media (max-width:640px){
+    .automail-global-grid{grid-template-columns:1fr;}
+    .automail-footer{flex-direction:column;align-items:stretch;}
+    .automail-footer .btn.primary{width:100%;}
+  }
+
   .subs-list-block{display:flex;flex-direction:column;gap:10px;}
   .subs-list-toolbar{
     display:flex;align-items:center;justify-content:space-between;gap:10px 14px;flex-wrap:wrap;

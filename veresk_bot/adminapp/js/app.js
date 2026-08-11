@@ -2485,7 +2485,7 @@
     if (authMe && (authMe.source === "env" || authMe.role === "admin")) {
       return settingsTab || "accounts";
     }
-    const order = ["accounts", "bots", "integrations", "users", "logs"];
+    const order = ["accounts", "bots", "integrations", "users", "logs", "automail"];
     // bots settings tab is under settings - needs settings perm; users needs access
     const allowed = order.filter((pane) => {
       if (pane === "users") return !!perms.access;
@@ -2513,6 +2513,7 @@
     if (settingsTab === "logs") renderLogsPane();
     if (settingsTab === "integrations") loadIntegrationsPane();
     if (settingsTab === "bots") loadBotsPane();
+    if (settingsTab === "automail") loadAutoMailPane();
   }
 
   async function loadSettings() {
@@ -2530,6 +2531,7 @@
     if (settingsTab === "users") loadUsersPane();
     if (settingsTab === "logs") renderLogsPane();
     if (settingsTab === "integrations") loadIntegrationsPane();
+    if (settingsTab === "automail") loadAutoMailPane();
   }
 
   $$(".settings-tab").forEach((btn) => {
@@ -2543,6 +2545,197 @@
       logsFilter = btn.dataset.log || "all";
       renderLogsPane();
     });
+  });
+
+  // ── Auto-mail (settings) ─────────────────────────────────────────────────
+
+  let _autoMailPromosCache = [];
+  const AUTO_MAIL_KIND_AUTO_LABEL = {
+    bday: "Авто · живая «День рождения»",
+    anniv: "Авто · живая «Годовщина»",
+    other: "Авто · любая живая акция",
+  };
+
+  function autoMailKindCard(kind) {
+    return $(`#autoMailKinds [data-kind="${kind}"]`);
+  }
+
+  function syncAutoMailKindSourceUi(card) {
+    if (!card) return;
+    const source = card.querySelector("[data-am-source]")?.value === "promo" ? "promo" : "custom";
+    const wrap = card.querySelector("[data-am-promo-wrap]");
+    const label = card.querySelector("[data-am-text-label]");
+    if (wrap) wrap.hidden = source !== "promo";
+    if (label) label.textContent = source === "promo" ? "Запасной текст" : "Текст";
+  }
+
+  function fillAutoMailPromoSelect(select, selectedId, kind) {
+    if (!select) return;
+    const autoLabel = AUTO_MAIL_KIND_AUTO_LABEL[kind] || "Авто · живая акция";
+    const options = [`<option value="">${esc(autoLabel)}</option>`];
+    for (const p of _autoMailPromosCache) {
+      const id = String(p.id);
+      const emoji = p.emoji ? `${esc(p.emoji)} ` : "";
+      const type = p.promo_type ? ` · ${esc(p.promo_type)}` : "";
+      const live = p.is_live ? "" : " (не live)";
+      options.push(
+        `<option value="${esc(id)}">${emoji}${esc(p.title || "Акция")}${type}${live}</option>`
+      );
+    }
+    select.innerHTML = options.join("");
+    const want = selectedId != null && selectedId !== "" ? String(selectedId) : "";
+    if (want && [...select.options].some((o) => o.value === want)) {
+      select.value = want;
+    } else {
+      select.value = "";
+    }
+  }
+
+  function applyAutoMailForm(settings, promotions) {
+    const s = settings || {};
+    _autoMailPromosCache = Array.isArray(promotions) ? promotions : [];
+    if ($("#autoMailEnabled")) $("#autoMailEnabled").checked = s.enabled !== false;
+    if ($("#autoMailSendTime")) $("#autoMailSendTime").value = s.send_time || "10:00";
+    if ($("#autoMailPreferChannel")) {
+      $("#autoMailPreferChannel").value =
+        s.prefer_channel === "max" ? "max" : "tg";
+    }
+    const kinds = s.kinds || {};
+    ["bday", "anniv", "other"].forEach((kind) => {
+      const card = autoMailKindCard(kind);
+      if (!card) return;
+      const cfg = kinds[kind] || {};
+      const en = card.querySelector("[data-am-enabled]");
+      const src = card.querySelector("[data-am-source]");
+      const text = card.querySelector("[data-am-text]");
+      const promo = card.querySelector("[data-am-promo]");
+      if (en) en.checked = cfg.enabled !== false;
+      if (src) {
+        src.value =
+          cfg.text_source === "promo"
+            ? "promo"
+            : cfg.text_source === "custom"
+              ? "custom"
+              : kind === "other"
+                ? "custom"
+                : "promo";
+      }
+      if (text) {
+        text.value = cfg.text || cfg.default_text || (s.default_texts || {})[kind] || "";
+      }
+      syncAutoMailKindSourceUi(card);
+      fillAutoMailPromoSelect(promo, cfg.promo_id, kind);
+    });
+    const on = s.enabled !== false;
+    const hint = $("#autoMailHint");
+    if (hint) {
+      hint.textContent = on
+        ? `вкл · отправка с ${s.send_time || "10:00"}`
+        : "выключено";
+    }
+    const status = $("#autoMailStatus");
+    if (status) {
+      const time = esc(s.send_time || "10:00");
+      status.innerHTML = on
+        ? `<span class="status-pill ok"><span class="d"></span>С ${time}</span>`
+        : `<span class="status-pill warn"><span class="d"></span>Выкл</span>`;
+    }
+  }
+
+  function collectAutoMailPayload() {
+    const kinds = {};
+    ["bday", "anniv", "other"].forEach((kind) => {
+      const card = autoMailKindCard(kind);
+      if (!card) return;
+      const promoRaw = card.querySelector("[data-am-promo]")?.value || "";
+      kinds[kind] = {
+        enabled: !!card.querySelector("[data-am-enabled]")?.checked,
+        text_source:
+          card.querySelector("[data-am-source]")?.value === "promo"
+            ? "promo"
+            : "custom",
+        promo_id: promoRaw ? +promoRaw : null,
+        text: card.querySelector("[data-am-text]")?.value || "",
+      };
+    });
+    return {
+      enabled: !!$("#autoMailEnabled")?.checked,
+      send_time: $("#autoMailSendTime")?.value || "10:00",
+      prefer_channel:
+        $("#autoMailPreferChannel")?.value === "max" ? "max" : "tg",
+      kinds,
+    };
+  }
+
+  async function loadAutoMailPane() {
+    const pane = $("#set-automail");
+    if (!pane) return;
+    const hint = $("#autoMailHint");
+    if (hint) hint.textContent = "загрузка…";
+    try {
+      const data = await AdminAPI.autoMailSettings();
+      applyAutoMailForm(data.settings || {}, data.promotions || []);
+    } catch (err) {
+      if (hint) hint.textContent = "не удалось загрузить";
+      console.warn("auto-mail settings", err);
+    }
+  }
+
+  $("#autoMailKinds")?.addEventListener("change", (ev) => {
+    const src = ev.target.closest("[data-am-source]");
+    if (!src) return;
+    syncAutoMailKindSourceUi(src.closest("[data-kind]"));
+  });
+
+  $("#autoMailKinds")?.addEventListener("click", (ev) => {
+    const btn = ev.target.closest("[data-am-pull]");
+    if (!btn) return;
+    const card = btn.closest("[data-kind]");
+    if (!card) return;
+    const promoId = card.querySelector("[data-am-promo]")?.value;
+    const ta = card.querySelector("[data-am-text]");
+    if (!ta) return;
+    let promo = null;
+    if (promoId) {
+      promo = _autoMailPromosCache.find((p) => String(p.id) === String(promoId));
+    }
+    if (!promo) {
+      const kind = card.dataset.kind;
+      const typeMap = { bday: "birthday", anniv: "anniversary" };
+      const want = typeMap[kind];
+      promo =
+        (want &&
+          _autoMailPromosCache.find(
+            (p) => p.is_live && p.promo_type === want && p.use_in_auto_mail !== false
+          )) ||
+        _autoMailPromosCache.find((p) => p.is_live && p.use_in_auto_mail !== false) ||
+        _autoMailPromosCache[0] ||
+        null;
+    }
+    const tpl = (promo && promo.message_template) || "";
+    if (!tpl) {
+      alert("У выбранной акции нет текста шаблона");
+      return;
+    }
+    ta.value = tpl;
+  });
+
+  $("#btnAutoMailSave")?.addEventListener("click", async () => {
+    const btn = $("#btnAutoMailSave");
+    if (btn) btn.disabled = true;
+    try {
+      const data = await AdminAPI.saveAutoMailSettings(collectAutoMailPayload());
+      applyAutoMailForm(data.settings || {}, data.promotions || _autoMailPromosCache);
+      const hint = $("#autoMailHint");
+      if (hint) hint.textContent = "сохранено";
+    } catch (err) {
+      alert(
+        "Не удалось сохранить: " +
+          (err.data?.message || err.data?.error || err.message || "ошибка")
+      );
+    } finally {
+      if (btn) btn.disabled = false;
+    }
   });
 
   async function loadAccounts(opts = {}) {

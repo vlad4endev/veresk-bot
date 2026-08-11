@@ -3261,3 +3261,189 @@ async def promotions_overview() -> dict[str, Any]:
         "auto_mail_enabled": sum(1 for p in live if p.get("use_in_auto_mail")),
         "mailing_enabled": sum(1 for p in live if p.get("use_in_mailing")),
     }
+
+
+# ── auto-mail settings (ДР / годовщина / другое) ─────────────────────────────
+
+AUTO_MAIL_KINDS = ("bday", "anniv", "other")
+AUTO_MAIL_TEXT_SOURCES = ("promo", "custom")
+AUTO_MAIL_CHANNELS = ("tg", "max")
+
+DEFAULT_AUTO_MAIL_TEXTS: dict[str, str] = {
+    "bday": (
+        "С днём рождения, {имя}! 🎂💐\n\n"
+        "Дарим вам скидку {скидка} на любой букет всю неделю. Ваш Veresk."
+    ),
+    "anniv": (
+        "{имя}, поздравляем с годовщиной! 💍\n\n"
+        "Отметьте этот день красивым букетом — дарим −{скидка}. Ваш Veresk."
+    ),
+    "other": (
+        "Здравствуйте, {имя}! 🌷\n\n"
+        "Ваш Veresk напоминает о важной дате."
+    ),
+}
+
+_AUTO_MAIL_SETTINGS_KEY = "auto_mail"
+
+
+def _parse_send_time(raw: Any, *, default: str = "10:00") -> str:
+    text = str(raw or "").strip()
+    if not text:
+        return default
+    parts = text.split(":")
+    if len(parts) != 2:
+        return default
+    try:
+        hour = int(parts[0])
+        minute = int(parts[1])
+    except (TypeError, ValueError):
+        return default
+    if not (0 <= hour <= 23 and 0 <= minute <= 59):
+        return default
+    return f"{hour:02d}:{minute:02d}"
+
+
+def _normalize_auto_mail_kind_cfg(
+    kind: str, raw: Any | None = None
+) -> dict[str, Any]:
+    data = raw if isinstance(raw, dict) else {}
+    source = str(data.get("text_source") or "").strip().lower()
+    if source not in AUTO_MAIL_TEXT_SOURCES:
+        source = "promo" if kind in ("bday", "anniv") else "custom"
+    enabled = data.get("enabled")
+    if enabled is None:
+        enabled = True
+    promo_id = None
+    raw_promo = data.get("promo_id")
+    if raw_promo not in (None, "", 0, "0"):
+        try:
+            promo_id = max(1, int(raw_promo))
+        except (TypeError, ValueError):
+            promo_id = None
+    text = str(data.get("text") or "").strip()
+    if not text:
+        text = DEFAULT_AUTO_MAIL_TEXTS.get(kind) or DEFAULT_AUTO_MAIL_TEXTS["other"]
+    return {
+        "enabled": bool(enabled),
+        "text_source": source,
+        "promo_id": promo_id,
+        "text": text[:4000],
+        "default_text": DEFAULT_AUTO_MAIL_TEXTS.get(kind)
+        or DEFAULT_AUTO_MAIL_TEXTS["other"],
+    }
+
+
+def get_auto_mail_settings() -> dict[str, Any]:
+    """Настройки автопоздравлений из runtime_settings (с дефолтами)."""
+    import runtime_settings
+
+    raw = runtime_settings.get(_AUTO_MAIL_SETTINGS_KEY)
+    data = raw if isinstance(raw, dict) else {}
+    enabled = data.get("enabled")
+    if enabled is None:
+        enabled = True
+    prefer = str(data.get("prefer_channel") or "tg").strip().lower()
+    if prefer not in AUTO_MAIL_CHANNELS:
+        prefer = "tg"
+    kinds_raw = data.get("kinds") if isinstance(data.get("kinds"), dict) else {}
+    kinds = {
+        kind: _normalize_auto_mail_kind_cfg(kind, kinds_raw.get(kind))
+        for kind in AUTO_MAIL_KINDS
+    }
+    return {
+        "enabled": bool(enabled),
+        "send_time": _parse_send_time(data.get("send_time"), default="10:00"),
+        "prefer_channel": prefer,
+        "kinds": kinds,
+        "default_texts": dict(DEFAULT_AUTO_MAIL_TEXTS),
+    }
+
+
+def save_auto_mail_settings(payload: dict[str, Any]) -> dict[str, Any]:
+    """Сохранить настройки автопоздравлений; вернуть нормализованный конфиг."""
+    import runtime_settings
+
+    current = get_auto_mail_settings()
+    body = payload if isinstance(payload, dict) else {}
+
+    enabled = body.get("enabled")
+    if enabled is None:
+        enabled = current["enabled"]
+
+    send_time = _parse_send_time(
+        body.get("send_time", current["send_time"]),
+        default=current["send_time"],
+    )
+
+    prefer = str(
+        body.get("prefer_channel", current["prefer_channel"]) or "tg"
+    ).strip().lower()
+    if prefer not in AUTO_MAIL_CHANNELS:
+        prefer = current["prefer_channel"]
+
+    kinds_in = body.get("kinds") if isinstance(body.get("kinds"), dict) else {}
+    kinds_out: dict[str, Any] = {}
+    for kind in AUTO_MAIL_KINDS:
+        merged = dict(current["kinds"].get(kind) or {})
+        if kind in kinds_in and isinstance(kinds_in[kind], dict):
+            merged.update(kinds_in[kind])
+        cfg = _normalize_auto_mail_kind_cfg(kind, merged)
+        kinds_out[kind] = {
+            "enabled": cfg["enabled"],
+            "text_source": cfg["text_source"],
+            "promo_id": cfg["promo_id"],
+            "text": cfg["text"],
+        }
+
+    stored = {
+        "enabled": bool(enabled),
+        "send_time": send_time,
+        "prefer_channel": prefer,
+        "kinds": kinds_out,
+    }
+    runtime_settings.set_many({_AUTO_MAIL_SETTINGS_KEY: stored})
+    return get_auto_mail_settings()
+
+
+def auto_mail_send_time_reached(
+    settings: dict[str, Any] | None = None,
+    *,
+    now: datetime | None = None,
+) -> bool:
+    """True, если локальное время уже достигло send_time."""
+    cfg = settings or get_auto_mail_settings()
+    stamp = now or datetime.now()
+    hhmm = _parse_send_time(cfg.get("send_time"), default="10:00")
+    hour, minute = (int(x) for x in hhmm.split(":"))
+    return (stamp.hour, stamp.minute) >= (hour, minute)
+
+
+async def list_auto_mail_promo_options() -> list[dict[str, Any]]:
+    """Краткий список акций для селектов в настройках автопоздравлений."""
+    live = await list_live_promotions(for_auto_mail=True)
+    # Также покажем активные без флага auto, чтобы можно было явно привязать
+    all_live = await list_live_promotions()
+    seen: set[int] = set()
+    out: list[dict[str, Any]] = []
+    for p in live + all_live:
+        pid = int(p.get("id") or 0)
+        if not pid or pid in seen:
+            continue
+        seen.add(pid)
+        tpl = str(p.get("message_template") or "").strip()
+        out.append(
+            {
+                "id": pid,
+                "title": p.get("title") or f"Акция #{pid}",
+                "emoji": p.get("emoji") or "",
+                "promo_type": p.get("promo_type") or "other",
+                "is_live": bool(p.get("is_live")),
+                "use_in_auto_mail": bool(p.get("use_in_auto_mail")),
+                "discount_display": p.get("discount_display")
+                or p.get("discount_text")
+                or "",
+                "message_template": tpl[:800],
+            }
+        )
+    return out

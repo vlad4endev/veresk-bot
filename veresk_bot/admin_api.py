@@ -1119,6 +1119,35 @@ async def handle_channel_subscribers_settings(request: web.Request) -> web.Respo
     return _json({"ok": True, "channel": cfg, "welcome": welcome})
 
 
+async def handle_auto_mail_settings(request: web.Request) -> web.Response:
+    """GET/POST /api/admin/auto-mail/settings — автопоздравления по событиям."""
+    err = await _require_admin(request)
+    if err:
+        return err
+    from mailing_db import (
+        get_auto_mail_settings,
+        list_auto_mail_promo_options,
+        save_auto_mail_settings,
+    )
+
+    if request.method == "GET":
+        settings = get_auto_mail_settings()
+        promos = await list_auto_mail_promo_options()
+        return _json({"settings": settings, "promotions": promos})
+
+    body: dict[str, Any] = {}
+    try:
+        raw = await request.json()
+        if isinstance(raw, dict):
+            body = raw
+    except Exception:
+        body = {}
+    payload = body.get("settings") if isinstance(body.get("settings"), dict) else body
+    settings = save_auto_mail_settings(payload if isinstance(payload, dict) else {})
+    promos = await list_auto_mail_promo_options()
+    return _json({"ok": True, "settings": settings, "promotions": promos})
+
+
 async def _pick_tg_userbot_account() -> dict[str, Any] | None:
     accounts = await list_send_accounts()
     tg_accounts = [
@@ -5875,6 +5904,8 @@ def setup_admin_routes(app: web.Application) -> None:
         ("/api/admin/channel-subscribers", handle_channel_subscribers_list, "GET"),
         ("/api/admin/channel-subscribers/settings", handle_channel_subscribers_settings, "GET"),
         ("/api/admin/channel-subscribers/settings", handle_channel_subscribers_settings, "POST"),
+        ("/api/admin/auto-mail/settings", handle_auto_mail_settings, "GET"),
+        ("/api/admin/auto-mail/settings", handle_auto_mail_settings, "POST"),
         ("/api/admin/channel-subscribers/sync", handle_channel_subscribers_sync, "POST"),
         ("/api/admin/channel-subscribers/discover", handle_channel_subscribers_discover, "POST"),
         ("/api/admin/channel-subscribers/ensure", handle_channel_subscribers_ensure, "POST"),

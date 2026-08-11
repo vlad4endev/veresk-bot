@@ -18,11 +18,14 @@ from typing import Any
 from config import MAILING_BATCH_SIZE, MAILING_DISCOUNT_TEXT, MAILING_SEND_INTERVAL
 from mailing_db import (
     activate_due_campaigns,
+    auto_mail_send_time_reached,
     bump_account_sent,
     create_personal_message,
     fetch_pending_personal,
     fetch_pending_recipients,
     get_active_discount_text,
+    get_auto_mail_settings,
+    get_promotion,
     list_auto_events_for_today,
     mark_event_auto_sent,
     mark_personal_status,
@@ -317,13 +320,96 @@ async def process_personal_batch() -> int:
 
 
 def prefer_auto_channel_when_both() -> str:
-    """Канал автопоздравления, когда у клиента доступны и Telegram, и MAX.
+    """Канал автопоздравления, когда у клиента доступны и Telegram, и MAX."""
+    try:
+        prefer = str(get_auto_mail_settings().get("prefer_channel") or "tg").lower()
+    except Exception:
+        prefer = "tg"
+    return "max" if prefer == "max" else "tg"
 
-    Верните \"tg\" или \"max\".
-    Сейчас по умолчанию Telegram — надёжнее при наличии телефона.
-    """
-    # TODO(you): выберите стратегию магазина — см. learning note ниже
-    return "tg"
+
+def _normalize_event_kind(kind: Any) -> str:
+    raw = str(kind or "other").strip().lower()
+    if raw in ("bday", "birthday"):
+        return "bday"
+    if raw in ("anniv", "anniversary"):
+        return "anniv"
+    return "other"
+
+
+async def _resolve_auto_greeting_text(
+    *,
+    kind: str,
+    name: str,
+    kind_cfg: dict[str, Any],
+) -> str:
+    """Собрать текст автопоздравления по настройкам kind (promo / custom)."""
+    try:
+        discount = await get_active_discount_text()
+    except Exception:
+        discount = MAILING_DISCOUNT_TEXT or "15%"
+
+    fallback = (
+        str(kind_cfg.get("text") or "").strip()
+        or str(kind_cfg.get("default_text") or "").strip()
+    )
+    source = str(kind_cfg.get("text_source") or "custom").strip().lower()
+    promo = None
+
+    if source == "promo":
+        promo_id = kind_cfg.get("promo_id")
+        if promo_id:
+            try:
+                promo = await get_promotion(int(promo_id))
+            except Exception:
+                promo = None
+                logger.debug(
+                    "Авто-поздравление: не удалось загрузить акцию id=%s",
+                    promo_id,
+                    exc_info=True,
+                )
+            if promo and not promo.get("is_live"):
+                promo = None
+        if not promo:
+            try:
+                promo = await pick_auto_mail_promo(kind)
+            except Exception:
+                logger.debug(
+                    "Авто-поздравление: не удалось взять акцию для kind=%s",
+                    kind,
+                    exc_info=True,
+                )
+
+    if promo and (promo.get("discount_display") or promo.get("discount_text")):
+        discount = (
+            promo.get("discount_display")
+            or promo.get("discount_text")
+            or discount
+        )
+
+    template = ""
+    if source == "promo" and promo:
+        template = str(promo.get("message_template") or "").strip()
+    if not template:
+        template = fallback
+    if not template:
+        # Последний страховочный дефолт (если настройки пустые)
+        first = name.split()[0] if name else "друг"
+        if kind == "bday":
+            template = (
+                f"С днём рождения, {first}! 🎂💐\n\n"
+                f"Дарим вам скидку {discount} на любой букет всю неделю. Ваш Veresk."
+            )
+            return template
+        if kind == "anniv":
+            return (
+                f"{first}, поздравляем с годовщиной! 💍\n\n"
+                f"Отметьте этот день красивым букетом — дарим −{str(discount).lstrip('−-')}. "
+                "Ваш Veresk."
+            )
+        return f"Здравствуйте, {first}! 🌷\n\nВаш Veresk напоминает о важной дате."
+
+    return _personalize(template, name, discount=discount)
 
 
 async def _auto_greeting_channel(ev: dict[str, Any]) -> str | None:
@@ -352,49 +438,51 @@ async def _auto_greeting_channel(ev: dict[str, Any]) -> str | None:
 async def process_auto_greetings() -> int:
     """Раз в день создаёт personal_messages для событий с auto_send.
 
+    Учитывает Настройки → Автопоздравления: enabled, send_time, kinds.
     Дедуп: last_auto_sent_on в customer_events + in-memory _auto_done_day.
     """
     global _auto_done_day
-    today = datetime.now().date().isoformat()
+    now = datetime.now()
+    today = now.date().isoformat()
     if _auto_done_day == today:
         return 0
+
+    try:
+        settings = get_auto_mail_settings()
+    except Exception:
+        logger.debug("Авто-поздравления: не удалось прочитать настройки", exc_info=True)
+        settings = {
+            "enabled": True,
+            "send_time": "10:00",
+            "prefer_channel": "tg",
+            "kinds": {},
+        }
+
+    if not settings.get("enabled", True):
+        return 0
+    if not auto_mail_send_time_reached(settings, now=now):
+        return 0
+
     events = await list_auto_events_for_today()
+    kinds_cfg = settings.get("kinds") if isinstance(settings.get("kinds"), dict) else {}
     created = 0
     for ev in events:
-        kind = ev.get("kind") or "other"
+        kind = _normalize_event_kind(ev.get("kind"))
+        kind_cfg = kinds_cfg.get(kind) if isinstance(kinds_cfg.get(kind), dict) else {}
+        if kind_cfg and kind_cfg.get("enabled") is False:
+            continue
+        if not kind_cfg:
+            kind_cfg = {
+                "enabled": True,
+                "text_source": "promo" if kind in ("bday", "anniv") else "custom",
+                "promo_id": None,
+                "text": "",
+            }
+
         name = ev.get("customer_name") or ""
-        first = name.split()[0] if name else "друг"
-        promo = None
-        try:
-            promo = await pick_auto_mail_promo(kind)
-        except Exception:
-            logger.debug("Авто-поздравление: не удалось взять акцию", exc_info=True)
-        try:
-            discount = await get_active_discount_text()
-        except Exception:
-            discount = MAILING_DISCOUNT_TEXT or "15%"
-        if promo and (promo.get("discount_display") or promo.get("discount_text")):
-            discount = (
-                promo.get("discount_display")
-                or promo.get("discount_text")
-                or discount
-            )
-        template = (promo.get("message_template") or "").strip() if promo else ""
-        if template:
-            text = _personalize(template, name, discount=discount)
-        elif kind == "bday":
-            text = (
-                f"С днём рождения, {first}! 🎂💐\n\n"
-                f"Дарим вам скидку {discount} на любой букет всю неделю. Ваш Veresk."
-            )
-        elif kind == "anniv":
-            text = (
-                f"{first}, поздравляем с годовщиной! 💍\n\n"
-                f"Отметьте этот день красивым букетом — дарим −{discount.lstrip('−-')}. "
-                "Ваш Veresk."
-            )
-        else:
-            text = f"Здравствуйте, {first}! 🌷\n\nВаш Veresk напоминает о важной дате."
+        text = await _resolve_auto_greeting_text(
+            kind=kind, name=name, kind_cfg=kind_cfg
+        )
         channel = await _auto_greeting_channel(ev)
         if not channel:
             logger.info(
@@ -408,6 +496,8 @@ async def process_auto_greetings() -> int:
         if event_id is not None:
             await mark_event_auto_sent(event_id, today)
         created += 1
+
+    # Помечаем день только после наступления send_time и прохода очереди
     _auto_done_day = today
     if created:
         logger.info("Авто-поздравления: создано %s сообщений", created)

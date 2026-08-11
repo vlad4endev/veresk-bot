@@ -154,6 +154,12 @@ const AdminAPI = (() => {
         method: "PATCH",
         body: JSON.stringify({ auto_send }),
       }),
+    autoMailSettings: () => request("/api/admin/auto-mail/settings"),
+    saveAutoMailSettings: (body) =>
+      request("/api/admin/auto-mail/settings", {
+        method: "POST",
+        body: JSON.stringify(body || {}),
+      }),
     campaigns: () => request("/api/admin/campaigns"),
     campaign: (id) => request("/api/admin/campaigns/" + id),
     createCampaign: (body) =>
