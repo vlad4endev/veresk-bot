@@ -2624,7 +2624,12 @@ async def handle_ai_settings_save(request: web.Request) -> web.Response:
         return _json({"error": "invalid_provider", "detail": "Неизвестный оператор"}, status=400)
 
     api_key = str(body.get("api_key") or "").strip()
-    api_base = str(body.get("api_base") or "").strip().rstrip("/")
+    # api_base принимаем только для custom — иначе скрытое поле формы
+    # могло снова записать yandex endpoint в слот OpenRouter.
+    if provider == "custom":
+        api_base = str(body.get("api_base") or "").strip().rstrip("/")
+    else:
+        api_base = ""
     model = str(body.get("model") or "").strip()
     folder_id = str(body.get("folder_id") or "").strip()
 

@@ -335,27 +335,70 @@ def _legacy_provider_slot() -> dict[str, Any]:
     return slot
 
 
+def _preset_api_base(provider: str) -> str:
+    preset = PROVIDER_PRESETS.get(provider) or PROVIDER_PRESETS["openai"]
+    return str(preset["api_base"]).rstrip("/")
+
+
+def _sanitize_provider_slot(pid: str, slot: dict[str, Any]) -> dict[str, Any]:
+    """
+    Чинит слот после миграции/переключения операторов.
+
+    Раньше плоский ai_api_base от Yandex мог попасть в слот OpenRouter —
+    тогда запросы шли на llm.api.cloud.yandex.net → Access denied by security policy.
+    """
+    out = dict(slot)
+    if pid != "custom":
+        out["api_base"] = _preset_api_base(pid)
+    else:
+        base = str(out.get("api_base") or "").strip().rstrip("/")
+        out["api_base"] = base or _preset_api_base("custom")
+    if pid != "yandexgpt":
+        out.pop("folder_id", None)
+    return out
+
+
 def get_ai_by_provider() -> dict[str, dict[str, Any]]:
     """Словарь настроек по операторам; мигрирует legacy-ключи при первом чтении."""
     raw = runtime_settings.get(AI_BY_PROVIDER_KEY)
     data: dict[str, dict[str, Any]] = {}
+    dirty = False
     if isinstance(raw, dict):
         for pid, slot in raw.items():
             if pid in PROVIDERS and isinstance(slot, dict):
-                data[pid] = dict(slot)
+                cleaned = _sanitize_provider_slot(pid, slot)
+                data[pid] = cleaned
+                if cleaned.get("api_base") != str(slot.get("api_base") or "").rstrip("/"):
+                    dirty = True
+                if pid != "yandexgpt" and "folder_id" in slot:
+                    dirty = True
 
-    # Миграция: один общий ключ → слот текущего провайдера (если слот пуст)
+    # Миграция: только ключ (+ model) в слот активного провайдера.
+    # api_base/folder_id чужого оператора не копируем — иначе OpenRouter
+    # начинает бить в Yandex endpoint.
     legacy = _legacy_provider_slot()
     if legacy.get("api_key"):
         active = get_ai_provider()
         cur = data.get(active) or {}
         if not (cur.get("api_key") or "").strip():
-            merged = {**legacy, **{k: v for k, v in cur.items() if v}}
-            data[active] = merged
-            try:
-                runtime_settings.set_many({AI_BY_PROVIDER_KEY: data})
-            except Exception:
-                logger.debug("AI by-provider migrate failed", exc_info=True)
+            migrated: dict[str, Any] = {
+                "api_key": legacy["api_key"],
+                "api_base": _preset_api_base(active),
+            }
+            model = str(legacy.get("model") or "").strip()
+            if model:
+                migrated["model"] = model
+            if active == "yandexgpt" and legacy.get("folder_id"):
+                migrated["folder_id"] = legacy["folder_id"]
+            data[active] = {**migrated, **{k: v for k, v in cur.items() if v}}
+            data[active] = _sanitize_provider_slot(active, data[active])
+            dirty = True
+
+    if dirty:
+        try:
+            runtime_settings.set_many({AI_BY_PROVIDER_KEY: data})
+        except Exception:
+            logger.debug("AI by-provider migrate/sanitize failed", exc_info=True)
     return data
 
 
@@ -404,7 +447,11 @@ def get_ai_folder_id(provider: str | None = None) -> str:
 
 def get_ai_api_base(provider: str | None = None) -> str:
     pid = (provider or get_ai_provider()).strip().lower()
-    preset = PROVIDER_PRESETS.get(pid) or PROVIDER_PRESETS["openai"]
+    # У известных операторов endpoint фиксирован — не берём чужой legacy base
+    # (после переключения Yandex→OpenRouter иначе остаётся yandex.net).
+    if pid != "custom":
+        return _preset_api_base(pid if pid in PROVIDERS else "openai")
+
     slot = get_provider_slot(pid)
     raw = str(slot.get("api_base") or "").strip().rstrip("/")
     if raw:
@@ -413,11 +460,9 @@ def get_ai_api_base(provider: str | None = None) -> str:
         legacy = str(runtime_settings.get("ai_api_base") or "").strip().rstrip("/")
         if legacy:
             return legacy
-    if AI_API_BASE and pid in ("custom", "openai") and pid == (
-        AI_PROVIDER if AI_PROVIDER in PROVIDERS else "openai"
-    ):
+    if AI_API_BASE and pid == (AI_PROVIDER if AI_PROVIDER in PROVIDERS else "openai"):
         return AI_API_BASE.rstrip("/")
-    return preset["api_base"].rstrip("/")
+    return _preset_api_base("custom")
 
 
 def get_ai_model(provider: str | None = None) -> str:
@@ -504,19 +549,16 @@ def save_provider_settings(
         elif not slot.get("api_base"):
             slot["api_base"] = preset["api_base"]
     else:
-        # Фиксированный endpoint; явный api_base можно сохранить как override
-        if api_base is not None and str(api_base).strip():
-            slot["api_base"] = str(api_base).strip().rstrip("/")
-        else:
-            slot["api_base"] = preset["api_base"]
+        # Всегда preset — игнорируем чужой base из формы/legacy
+        slot["api_base"] = preset["api_base"]
 
     if pid == "yandexgpt":
         if folder_id is not None and str(folder_id).strip():
             slot["folder_id"] = str(folder_id).strip()
-    elif folder_id is not None:
-        # для остальных folder не нужен
+    else:
         slot.pop("folder_id", None)
 
+    slot = _sanitize_provider_slot(pid, slot)
     all_slots[pid] = slot
     values: dict[str, Any] = {AI_BY_PROVIDER_KEY: all_slots}
     if activate:
@@ -530,9 +572,9 @@ def save_provider_settings(
             values["ai_api_base"] = slot["api_base"]
         if pid == "yandexgpt" and slot.get("folder_id"):
             values["ai_folder_id"] = slot["folder_id"]
-        elif pid != "yandexgpt":
-            # не удаляем folder_id чужого слота из by_provider, только из плоского зеркала
-            pass
+        else:
+            # Сбрасываем плоский folder, чтобы не «прилипал» к OpenRouter/DeepSeek
+            values["ai_folder_id"] = ""
 
     runtime_settings.set_many(values)
 
@@ -677,7 +719,19 @@ async def _chat_completion_raw(
                 body = await resp.json(content_type=None)
                 if resp.status >= 400:
                     detail = _extract_api_error(body) or f"HTTP {resp.status}"
-                    logger.warning("AI chat failed (%s): %s", provider, detail)
+                    logger.warning(
+                        "AI chat failed (%s / %s → %s): %s",
+                        provider,
+                        resolve_model_uri(),
+                        url,
+                        detail,
+                    )
+                    if "access denied by security policy" in detail.lower():
+                        detail = (
+                            "Отказ доступа у провайдера ИИ. "
+                            "Откройте Настройки → Сервисы, нажмите «Сохранить» "
+                            "для OpenRouter (или смените модель) и попробуйте снова."
+                        )
                     raise AiComposeError("ai_provider_error", detail)
     except AiComposeError:
         raise

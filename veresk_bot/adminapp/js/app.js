@@ -3067,10 +3067,14 @@
         const body = {
           provider: selectedProvider,
           api_key: ($("#aiApiKey")?.value || "").trim(),
-          api_base: ($("#aiApiBase")?.value || "").trim(),
           model: ($("#aiModel")?.value || "").trim(),
           folder_id: ($("#aiFolderId")?.value || "").trim(),
         };
+        // Базовый URL только для «Свой API». Иначе скрытое поле могло
+        // утащить чужой endpoint (Yandex) в слот OpenRouter.
+        if (selectedProvider === "custom") {
+          body.api_base = ($("#aiApiBase")?.value || "").trim();
+        }
         const selMeta = providersById[selectedProvider] || {};
         const selHasKey = !!(selMeta.configured || selMeta.api_key_set);
         if (!body.api_key && !selHasKey) {
