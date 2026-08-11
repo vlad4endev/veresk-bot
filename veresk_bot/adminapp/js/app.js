@@ -8730,31 +8730,34 @@
   }
 
   function fillPromoForm(p) {
-    const isNew = !p || !p.id;
-    setPromoVal("promoId", isNew ? "" : p.id);
-    setPromoVal("promoEmoji", (p && p.emoji) || "🎁");
-    setPromoVal("promoTitle", (p && p.title) || "");
-    setPromoVal("promoType", (p && p.promo_type) || "discount");
-    setPromoVal("promoStatus", (p && p.status) || "draft");
-    setPromoVal("promoSegment", (p && p.segment) || "all");
-    setPromoVal("promoPriority", p && p.priority != null ? p.priority : 0);
+    const data = ensurePromoSuggestionFields(p || {});
+    if (p && p.id != null) data.id = p.id;
+    if (p && p.status) data.status = p.status;
+    const isNew = !data.id;
+    setPromoVal("promoId", isNew ? "" : data.id);
+    setPromoVal("promoEmoji", data.emoji || "🎁");
+    setPromoVal("promoTitle", data.title || "");
+    setPromoVal("promoType", data.promo_type || "discount");
+    setPromoVal("promoStatus", data.status || "draft");
+    setPromoVal("promoSegment", data.segment || "all");
+    setPromoVal("promoPriority", data.priority != null ? data.priority : 0);
     setPromoVal(
       "promoDiscountPct",
-      p && p.discount_pct != null && p.discount_pct !== "" ? p.discount_pct : ""
+      data.discount_pct != null && data.discount_pct !== "" ? data.discount_pct : ""
     );
-    setPromoVal("promoDiscountText", (p && p.discount_text) || "");
-    setPromoVal("promoStarts", (p && p.starts_at) || "");
-    setPromoVal("promoEnds", (p && p.ends_at) || "");
-    setPromoVal("promoDesc", (p && p.description) || "");
-    setPromoVal("promoTemplate", (p && p.message_template) || "");
+    setPromoVal("promoDiscountText", data.discount_text || "");
+    setPromoVal("promoStarts", data.starts_at || "");
+    setPromoVal("promoEnds", data.ends_at || "");
+    setPromoVal("promoDesc", data.description || "");
+    setPromoVal("promoTemplate", data.message_template || "");
     setPromoVal(
       "promoTags",
-      Array.isArray(p && p.tags) ? p.tags.join(", ") : (p && p.tags) || ""
+      Array.isArray(data.tags) ? data.tags.join(", ") : data.tags || ""
     );
-    setPromoVal("promoNotes", (p && p.notes) || "");
-    setPromoCheck("promoUseMailing", p ? p.use_in_mailing !== false : true);
-    setPromoCheck("promoUseAuto", p ? p.use_in_auto_mail !== false : true);
-    const channels = String((p && p.channels) || "tg,max");
+    setPromoVal("promoNotes", data.notes || "");
+    setPromoCheck("promoUseMailing", data.use_in_mailing !== false);
+    setPromoCheck("promoUseAuto", data.use_in_auto_mail !== false);
+    const channels = String(data.channels || "tg,max");
     setPromoCheck("promoChTg", channels.includes("tg"));
     setPromoCheck("promoChMax", channels.includes("max"));
     const title = $("#promoFormTitle");

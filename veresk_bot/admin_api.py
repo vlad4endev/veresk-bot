@@ -5122,16 +5122,75 @@ async def handle_promotions_analyze_apply(request: web.Request) -> web.Response:
     suggestion = (
         body.get("suggestion") if isinstance(body.get("suggestion"), dict) else body
     )
+    if not isinstance(suggestion, dict):
+        return _json({"error": "invalid_suggestion"}, status=400)
+
+    def _default_message(s: dict[str, Any]) -> str:
+        title = str(s.get("title") or "специальное предложение").strip()
+        kind = str(s.get("promo_type") or "discount").strip().lower()
+        if kind == "birthday":
+            return (
+                "С днём рождения, {имя}! 🎂💐\n\n"
+                "От всей души поздравляем и дарим скидку {скидка} на любой букет.\n\n"
+                "Ваш Veresk 🌷"
+            )
+        if kind == "anniversary":
+            return (
+                "{имя}, поздравляем с годовщиной! 💍\n\n"
+                "Отметьте этот день красивым букетом — дарим скидку {скидка}.\n\n"
+                "Ваш Veresk 🌷"
+            )
+        if kind == "reactivation":
+            return (
+                "Здравствуйте, {имя}!\n\n"
+                "Давно не виделись — соскучились по вам. "
+                "Специально для вас: {скидка} на букет.\n\n"
+                "Ваш Veresk 🌷"
+            )
+        if kind == "welcome":
+            return (
+                "Здравствуйте, {имя}!\n\n"
+                "Рады знакомству! В подарок — скидка {скидка} на первый букет.\n\n"
+                "Ваш Veresk 🌷"
+            )
+        return (
+            f"Здравствуйте, {{имя}}!\n\n"
+            f"{title}: для вас скидка {{скидка}} на любой букет.\n\n"
+            "Заказать: veresk.flowers\n\nВаш Veresk 🌷"
+        )
+
+    message_template = str(suggestion.get("message_template") or "").strip()
+    if not message_template:
+        message_template = _default_message(suggestion)
+
+    discount_text = str(suggestion.get("discount_text") or "").strip()
+    discount_pct = suggestion.get("discount_pct")
+    if not discount_text and discount_pct is not None and discount_pct != "":
+        try:
+            pct = float(discount_pct)
+            discount_text = (
+                f"{int(pct)}%" if abs(pct - round(pct)) < 1e-9 else f"{pct:g}%"
+            )
+        except (TypeError, ValueError):
+            discount_text = ""
+    if not discount_text:
+        discount_text = "15%"
+        if discount_pct is None or discount_pct == "":
+            discount_pct = 15
+
+    description = (
+        str(suggestion.get("description") or "").strip()
+        or str(suggestion.get("rationale") or "").strip()
+    )
+
     payload = {
         "title": suggestion.get("title"),
         "emoji": suggestion.get("emoji") or "🎁",
         "promo_type": suggestion.get("promo_type") or "discount",
-        "discount_pct": suggestion.get("discount_pct"),
-        "discount_text": suggestion.get("discount_text") or "",
-        "description": suggestion.get("description")
-        or suggestion.get("rationale")
-        or "",
-        "message_template": suggestion.get("message_template") or "",
+        "discount_pct": discount_pct,
+        "discount_text": discount_text,
+        "description": description,
+        "message_template": message_template,
         "segment": suggestion.get("segment") or "all",
         "channels": suggestion.get("channels") or "tg,max",
         "status": body.get("status") or "draft",
