@@ -319,6 +319,7 @@
     setChrome("app");
     startAdminKeepalive();
     await refreshSideUser();
+    ensureAiChatOwner();
     const start = firstAllowedTab();
     if (start === "home") await loadHome();
     else go(start);
@@ -339,6 +340,8 @@
     } catch (_) {
       /* сессия могла уже истечь — всё равно чистим локально */
     }
+    resetAiChatMemory();
+    authMe = null;
     AdminAPI.setToken("");
     showLogin();
   }
@@ -5962,6 +5965,7 @@
 
   let aiChatReady = false;
   let aiAbort = null;
+  let aiChatBoundOwner = null;
   const aiChat = {
     configured: false,
     busy: false,
@@ -5972,12 +5976,43 @@
     focusCustomerName: "",
   };
 
-  function aiStorageKey() {
-    const uid =
-      (authMe && (authMe.user_id || authMe.id || authMe.username)) ||
-      localStorage.getItem(LOGIN_KEY) ||
-      "anon";
-    return AI_CHAT_KEY_BASE + ":" + String(uid);
+  function aiOwnerId() {
+    if (authMe && authMe.user_id != null && authMe.user_id !== "") {
+      return "user:" + String(authMe.user_id);
+    }
+    if (authMe && authMe.id != null && authMe.id !== "") {
+      return "user:" + String(authMe.id);
+    }
+    const uname = String(
+      (authMe && (authMe.username || authMe.phone)) ||
+        localStorage.getItem(LOGIN_KEY) ||
+        ""
+    )
+      .trim()
+      .toLowerCase();
+    if (uname) {
+      return (authMe && authMe.source === "env" ? "env:" : "login:") + uname;
+    }
+    return "anon";
+  }
+
+  function aiStorageKey(owner) {
+    return AI_CHAT_KEY_BASE + ":" + String(owner || aiOwnerId());
+  }
+
+  function resetAiChatMemory() {
+    aiChat.messages = [];
+    aiChat.suggestions = [];
+    aiChat.focusCustomerId = null;
+    aiChat.focusCustomerName = "";
+    aiChat.busy = false;
+    aiChatBoundOwner = null;
+    if (aiAbort) {
+      try {
+        aiAbort.abort();
+      } catch (_) {}
+      aiAbort = null;
+    }
   }
 
   function aiWelcomeHtml() {
@@ -6148,9 +6183,12 @@
 
   function persistAiChat() {
     try {
+      const owner = aiOwnerId();
+      aiChatBoundOwner = owner;
       localStorage.setItem(
-        aiStorageKey(),
+        aiStorageKey(owner),
         JSON.stringify({
+          owner,
           messages: aiChat.messages.slice(-30),
           suggestions: (aiChat.suggestions || []).slice(0, 6),
         })
@@ -6159,11 +6197,34 @@
   }
 
   function loadAiChat() {
+    const owner = aiOwnerId();
+    aiChatBoundOwner = owner;
+    aiChat.messages = [];
+    aiChat.suggestions = [];
     try {
-      let raw = localStorage.getItem(aiStorageKey());
-      if (!raw) raw = localStorage.getItem("veresk_ai_chat_v1");
+      let raw = localStorage.getItem(aiStorageKey(owner));
+      // One-time migrate legacy shared history only for this owner — never reuse across users
+      if (!raw) {
+        const legacy = localStorage.getItem("veresk_ai_chat_v1");
+        if (legacy) {
+          raw = legacy;
+          try {
+            localStorage.setItem(aiStorageKey(owner), legacy);
+            localStorage.removeItem("veresk_ai_chat_v1");
+          } catch (_) {}
+        }
+      }
       if (!raw) return;
       const parsed = JSON.parse(raw);
+      if (
+        parsed &&
+        typeof parsed === "object" &&
+        !Array.isArray(parsed) &&
+        parsed.owner &&
+        String(parsed.owner) !== String(owner)
+      ) {
+        return;
+      }
       const list = Array.isArray(parsed)
         ? parsed
         : Array.isArray(parsed?.messages)
@@ -6183,7 +6244,21 @@
       }
     } catch (_) {
       aiChat.messages = [];
+      aiChat.suggestions = [];
     }
+  }
+
+  function ensureAiChatOwner() {
+    const owner = aiOwnerId();
+    if (aiChatBoundOwner === owner) return;
+    if (aiChat.busy && aiAbort) {
+      try {
+        aiAbort.abort();
+      } catch (_) {}
+      aiAbort = null;
+      aiChat.busy = false;
+    }
+    loadAiChat();
   }
 
   function setAiChatEnabled(on) {
@@ -6346,6 +6421,7 @@
 
   function initAiChat() {
     refreshAiChatConfig();
+    ensureAiChatOwner();
     if (aiChatReady) {
       renderAiChips();
       renderAiMessages();
