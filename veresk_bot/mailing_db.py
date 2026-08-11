@@ -2229,6 +2229,72 @@ async def record_fortune_play(
     return await _run_db(_upsert)
 
 
+async def append_customer_notes(customer_id: int, note: str) -> None:
+    """Дописать строку в заметки карточки клиента (CRM)."""
+    text = str(note or "").strip()
+    if not text or customer_id is None:
+        return
+    cid = int(customer_id)
+
+    def _append() -> None:
+        with _connect() as db:
+            row = db.execute(
+                "SELECT notes FROM customers WHERE id = ?",
+                (cid,),
+            ).fetchone()
+            if not row:
+                return
+            existing = str(row["notes"] or "").strip()
+            if text in existing:
+                return
+            merged = f"{existing}\n{text}".strip() if existing else text
+            # ограничим раздувание заметок
+            if len(merged) > 4000:
+                merged = merged[-4000:]
+            db.execute(
+                "UPDATE customers SET notes = ? WHERE id = ?",
+                (merged, cid),
+            )
+            db.commit()
+
+    await _run_db(_append)
+
+
+async def get_fortune_plays_for_customer(customer_id: int) -> list[dict[str, Any]]:
+    cid = int(customer_id)
+
+    def _list() -> list[dict[str, Any]]:
+        with _connect() as db:
+            rows = db.execute(
+                """
+                SELECT * FROM fortune_plays
+                WHERE customer_id = ?
+                   OR (
+                        tg_user_id IS NOT NULL
+                        AND tg_user_id = (SELECT tg_user_id FROM customers WHERE id = ?)
+                   )
+                   OR (
+                        max_user_id IS NOT NULL AND max_user_id != ''
+                        AND max_user_id = (SELECT max_user_id FROM customers WHERE id = ?)
+                   )
+                ORDER BY datetime(created_at) DESC, id DESC
+                """,
+                (cid, cid, cid),
+            ).fetchall()
+        seen: set[int] = set()
+        out: list[dict[str, Any]] = []
+        for r in rows:
+            item = dict(r)
+            pid = int(item.get("id") or 0)
+            if pid in seen:
+                continue
+            seen.add(pid)
+            out.append(item)
+        return out
+
+    return await _run_db(_list)
+
+
 async def list_fortune_plays(*, limit: int = 100, offset: int = 0) -> dict[str, Any]:
     lim = max(1, min(int(limit or 100), 500))
     off = max(0, int(offset or 0))

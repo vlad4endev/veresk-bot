@@ -51,6 +51,7 @@ from webapp_buttons import (
     launch_keyboard,
     orders_list_keyboard,
     reset_bot_menu_button,
+    wheel_keyboard,
 )
 from webapp_server import start_webapp_server
 
@@ -664,8 +665,10 @@ async def cmd_start(message: Message, state: FSMContext) -> None:
     await message.answer(
         "🩷 *Добро пожаловать в Veresk*\n"
         "_флористический салон · trail of happiness_\n\n"
-        "Заполните короткую анкету — это поможет нам подобрать "
-        "идеальный букет для вашего повода.\n\n"
+        "Пройдите короткую анкету — и откроется *колесо фортуны* "
+        "с гарантированным призом 🎡\n\n"
+        "Анкета поможет нам подобрать идеальный букет, "
+        "а после неё вы сразу сможете крутить колесо и забрать подарок.\n\n"
         "Как вас зовут?",
         parse_mode=PARSE_MODE,
         reply_markup=ReplyKeyboardRemove(),
@@ -919,6 +922,15 @@ async def _finish_survey(message: Message, state: FSMContext) -> None:
         await save_client_profile(tg_id, profile)
 
         try:
+            from mailing_db import set_customer_tg_by_phone
+
+            phone = str(profile.get("phone") or "").strip()
+            if phone:
+                await set_customer_tg_by_phone(phone, tg_id)
+        except Exception:
+            logger.debug("Не удалось привязать TG user к mailing customers", exc_info=True)
+
+        try:
             from posiflora import sync_survey_profile_to_posiflora
 
             posiflora_meta = await sync_survey_profile_to_posiflora(profile, tg_id)
@@ -985,6 +997,30 @@ async def _finish_survey(message: Message, state: FSMContext) -> None:
     except Exception:
         logger.debug("edit_text финала анкеты не удался, отправляем новым сообщением", exc_info=True)
         await message.answer(final_text, parse_mode=PARSE_MODE)
+
+    already_played = False
+    try:
+        from mailing_db import get_fortune_play
+
+        already_played = bool(await get_fortune_play("telegram", str(tg_id)))
+    except Exception:
+        logger.debug("Не удалось проверить fortune_plays", exc_info=True)
+
+    if not already_played:
+        wheel_kb = wheel_keyboard()
+        wheel_text = (
+            "🎡 *Колесо фортуны разблокировано!*\n\n"
+            "Нажмите кнопку ниже — крутите колесо и заберите свой приз.\n"
+            "Приз сохранится в вашей карточке клиента."
+        )
+        if wheel_kb:
+            await message.answer(wheel_text, parse_mode=PARSE_MODE, reply_markup=wheel_kb)
+        else:
+            await message.answer(
+                wheel_text
+                + "\n\n_Мини\\-приложение временно недоступно — напишите флористу._",
+                parse_mode=PARSE_MODE,
+            )
 
     await state.clear()
 

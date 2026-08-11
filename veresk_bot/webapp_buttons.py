@@ -1,9 +1,10 @@
-"""Inline-кнопки открытия Telegram Mini App (трекер статуса)."""
+"""Inline-кнопки открытия Telegram Mini App (трекер статуса / колесо)."""
 
 from __future__ import annotations
 
 import logging
 from typing import Any
+from urllib.parse import urlencode, urlsplit, urlunsplit, parse_qsl
 
 from aiogram import Bot
 from aiogram.exceptions import TelegramAPIError, TelegramNetworkError
@@ -20,6 +21,7 @@ logger = logging.getLogger(__name__)
 
 TRACKER_OPEN_LABEL = "📋 Статус заказа"
 TRACKER_FOLLOW_LABEL = "📋 Следить за заказом"
+WHEEL_OPEN_LABEL = "🎡 Крутить колесо фортуны"
 
 
 def miniapp_url(order_id: str | None = None) -> str | None:
@@ -28,6 +30,18 @@ def miniapp_url(order_id: str | None = None) -> str | None:
     if order_id and order_id not in ("—", "", None):
         return f"{MINIAPP_URL}?order_id={order_id}"
     return MINIAPP_URL
+
+
+def wheel_miniapp_url() -> str | None:
+    """Deep link Mini App → экран колеса фортуны."""
+    if not MINIAPP_URL:
+        return None
+    parts = urlsplit(MINIAPP_URL)
+    query = dict(parse_qsl(parts.query, keep_blank_values=True))
+    query["wheel"] = "1"
+    return urlunsplit(
+        (parts.scheme, parts.netloc, parts.path, urlencode(query), "wheel")
+    )
 
 
 def status_keyboard(order_id: str | None = None) -> InlineKeyboardMarkup | None:
@@ -39,6 +53,18 @@ def status_keyboard(order_id: str | None = None) -> InlineKeyboardMarkup | None:
     return InlineKeyboardMarkup(
         inline_keyboard=[
             [InlineKeyboardButton(text=label, web_app=WebAppInfo(url=url))]
+        ]
+    )
+
+
+def wheel_keyboard() -> InlineKeyboardMarkup | None:
+    """Inline Web App: открыть колесо фортуны после анкеты."""
+    url = wheel_miniapp_url()
+    if not url:
+        return None
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text=WHEEL_OPEN_LABEL, web_app=WebAppInfo(url=url))]
         ]
     )
 

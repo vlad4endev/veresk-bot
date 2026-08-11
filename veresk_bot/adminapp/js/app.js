@@ -1181,6 +1181,25 @@
       $("#clAnnivBtn")?.classList.toggle("hidden", !anniv);
       $("#clSince").textContent = c.since_label || "—";
       $("#clLast").textContent = c.last_order_label || "—";
+      const fortuneEl = $("#clFortune");
+      if (fortuneEl) {
+        const plays = Array.isArray(c.fortune) ? c.fortune : [];
+        if (!plays.length) {
+          fortuneEl.textContent = "—";
+        } else {
+          fortuneEl.innerHTML = plays
+            .map((p) => {
+              const ch = String(p.channel || "").toLowerCase() === "max" ? "MAX" : "TG";
+              const prize = esc(p.prize_label || "Приз");
+              const disc =
+                p.discount_pct != null && p.discount_pct !== ""
+                  ? ` (−${esc(p.discount_pct)}%)`
+                  : "";
+              return `<span class="contact-chip"><span class="ci2 ${ch === "MAX" ? "max" : "tg"}">${ch}</span>${prize}${disc}</span>`;
+            })
+            .join(" ");
+        }
+      }
       $("#clEvents").innerHTML =
         (c.events || [])
           .map((e) => {

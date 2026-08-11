@@ -17,7 +17,7 @@ import re
 from datetime import datetime
 from typing import Any
 
-from max_bot.api import MaxBotAPI, btn_callback, btn_request_contact
+from max_bot.api import MaxBotAPI, btn_callback, btn_link, btn_request_contact
 from max_bot.storage import (
     extract_chat_id_from_update,
     extract_user_from_update,
@@ -336,8 +336,10 @@ class SurveyBot:
             user_id,
             "🩷 **Добро пожаловать в Veresk**\n"
             "_флористический салон · trail of happiness_\n\n"
-            "Заполните короткую анкету — это поможет нам подобрать "
-            "идеальный букет для вашего повода.\n\n"
+            "Пройдите короткую анкету — и откроется **колесо фортуны** "
+            "с гарантированным призом 🎡\n\n"
+            "Анкета поможет нам подобрать идеальный букет, "
+            "а после неё вы сразу сможете крутить колесо и забрать подарок.\n\n"
             "Как вас зовут?",
         )
 
@@ -710,6 +712,33 @@ class SurveyBot:
             "_Спасибо, что выбираете Veresk · trail of happiness_"
             f"{posiflora_note}",
         )
+
+        already_played = False
+        try:
+            from mailing_db import get_fortune_play
+
+            already_played = bool(await get_fortune_play("max", str(user_id)))
+        except Exception:
+            logger.debug("Не удалось проверить fortune_plays (MAX)", exc_info=True)
+
+        if not already_played:
+            wheel_kb = None
+            try:
+                from webapp_buttons import WHEEL_OPEN_LABEL, wheel_miniapp_url
+
+                url = wheel_miniapp_url()
+                if url:
+                    wheel_kb = [[btn_link(WHEEL_OPEN_LABEL, url)]]
+            except Exception:
+                logger.debug("Не удалось собрать кнопку колеса MAX", exc_info=True)
+
+            wheel_text = (
+                "🎡 **Колесо фортуны разблокировано!**\n\n"
+                "Нажмите кнопку ниже — крутите колесо и заберите свой приз.\n"
+                "Приз сохранится в вашей карточке клиента."
+            )
+            await self._send(user_id, wheel_text, keyboard=wheel_kb)
+
         _reset(user_id)
 
     async def _notify_florist(

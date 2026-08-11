@@ -180,3 +180,53 @@ def pick_winner(segments: list[dict[str, Any]] | None = None) -> dict[str, Any]:
         "segment": seg,
         "discount_pct": extract_discount_pct(str(seg.get("label") or "")),
     }
+
+
+def format_prize_label(prize_label: str, discount_pct: float | None = None) -> str:
+    label = str(prize_label or "").strip() or "Приз"
+    if discount_pct is not None:
+        try:
+            pct = float(discount_pct)
+            if pct > 0 and "%" not in label:
+                return f"{label} (−{pct:g}%)"
+        except (TypeError, ValueError):
+            pass
+    return label
+
+
+def format_customer_prize_note(
+    *,
+    channel: str,
+    prize_label: str,
+    discount_pct: float | None = None,
+    created_at: str | None = None,
+) -> str:
+    ch = "Telegram" if str(channel).lower() == "telegram" else "MAX"
+    prize = format_prize_label(prize_label, discount_pct)
+    when = str(created_at or "").strip()[:16].replace("T", " ")
+    suffix = f" · {when}" if when else ""
+    return f"🎡 Колесо фортуны ({ch}): {prize}{suffix}"
+
+
+def format_prize_congrats_message(
+    *,
+    prize_label: str,
+    discount_pct: float | None = None,
+    markdown: bool = True,
+) -> str:
+    prize = format_prize_label(prize_label, discount_pct)
+    if markdown:
+        return (
+            "🎉 *Поздравляем!*\n\n"
+            f"Вам выпал приз: *{prize}*\n\n"
+            "Приз уже закреплён за вашей карточкой клиента — "
+            "покажите это сообщение флористу при заказе 🌷\n\n"
+            "_Veresk · trail of happiness_"
+        )
+    return (
+        "🎉 **Поздравляем!**\n\n"
+        f"Вам выпал приз: **{prize}**\n\n"
+        "Приз уже закреплён за вашей карточкой клиента — "
+        "покажите это сообщение флористу при заказе 🌷\n\n"
+        "_Veresk · trail of happiness_"
+    )

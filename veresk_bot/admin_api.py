@@ -67,6 +67,7 @@ from mailing_db import (
     permissions_catalog,
     pick_ready_account,
     set_customer_tg_by_phone,
+    set_customer_max_by_phone,
     set_event_auto_send,
     touch_admin_session,
     touch_admin_user_login,
@@ -85,9 +86,13 @@ from mailing_db import (
     get_fortune_play,
     list_fortune_plays,
     record_fortune_play,
+    append_customer_notes,
+    get_fortune_plays_for_customer,
     get_customer_by_max_user_id,)
 import runtime_settings
 from fortune_wheel import (
+    format_customer_prize_note,
+    format_prize_congrats_message,
     get_config as get_wheel_config,
     pick_winner as pick_wheel_winner,
     save_config as save_wheel_config,
@@ -873,6 +878,7 @@ async def handle_client_detail(request: web.Request) -> web.Response:
     messages = await list_messages_for_customer(customer_id)
     orders = await list_orders_for_customer(customer_id)
     order_stats = await get_order_stats_for_customer(customer_id)
+    fortune_plays = await get_fortune_plays_for_customer(customer_id)
     return _json(
         {
             "id": c["id"],
@@ -886,6 +892,7 @@ async def handle_client_detail(request: web.Request) -> web.Response:
             "tg_user_id": c.get("tg_user_id"),
             "max_user_id": c.get("max_user_id"),
             "notes": c.get("notes") or "",
+            "fortune": [_serialize_fortune_play(p) for p in fortune_plays],
             "last_order_at": c.get("last_order_at"),
             "last_order_label": _format_relative(c.get("last_order_at")),
             "created_in_pf_at": c.get("created_in_pf_at"),
@@ -4704,6 +4711,104 @@ async def _resolve_wheel_player(
     return {"channel": "telegram", "user": user, "body": body}, None
 
 
+async def _survey_profile_for_wheel(channel: str, uid: str) -> dict[str, Any] | None:
+    """Анкета должна быть заполнена до розыгрыша."""
+    try:
+        if channel == "telegram":
+            from client_db import get_client_profile
+
+            return await get_client_profile(int(uid))
+        from max_bot.storage import get_max_profile
+
+        return await get_max_profile(int(uid))
+    except Exception:
+        logger.debug("wheel survey lookup failed", exc_info=True)
+        return None
+
+
+async def _resolve_customer_for_wheel(
+    channel: str, uid: str, profile: dict[str, Any] | None
+) -> dict[str, Any] | None:
+    customer = None
+    if channel == "telegram":
+        try:
+            customer = await get_customer_by_tg_user_id(int(uid))
+        except Exception:
+            customer = None
+    else:
+        try:
+            customer = await get_customer_by_max_user_id(int(uid))
+        except Exception:
+            customer = None
+
+    phone = str((profile or {}).get("phone") or "").strip()
+    if not customer and phone:
+        try:
+            if channel == "telegram":
+                await set_customer_tg_by_phone(phone, int(uid))
+                customer = await get_customer_by_tg_user_id(int(uid))
+            else:
+                await set_customer_max_by_phone(phone, int(uid))
+                customer = await get_customer_by_max_user_id(int(uid))
+            if not customer:
+                customer = await get_customer_by_phone(phone)
+        except Exception:
+            logger.debug("wheel customer link by phone failed", exc_info=True)
+    return customer
+
+
+async def _notify_wheel_prize(
+    request: web.Request,
+    *,
+    channel: str,
+    uid: str,
+    prize_label: str,
+    discount_pct: float | None,
+) -> None:
+    text_md = format_prize_congrats_message(
+        prize_label=prize_label,
+        discount_pct=discount_pct,
+        markdown=True,
+    )
+    try:
+        if channel == "telegram":
+            bot = request.app.get("bot")
+            if bot is None:
+                from aiogram import Bot
+                from aiogram.client.session.aiohttp import AiohttpSession
+
+                if not BOT_TOKEN:
+                    return
+                bot = Bot(token=BOT_TOKEN, session=AiohttpSession(timeout=60))
+                try:
+                    await bot.send_message(int(uid), text_md, parse_mode="Markdown")
+                finally:
+                    await bot.session.close()
+            else:
+                await bot.send_message(int(uid), text_md, parse_mode="Markdown")
+            return
+
+        token = get_max_bot_token()
+        if not token:
+            return
+        from max_bot.api import MaxBotAPI
+
+        api = MaxBotAPI(token)
+        try:
+            await api.send_message(
+                user_id=int(uid),
+                text=format_prize_congrats_message(
+                    prize_label=prize_label,
+                    discount_pct=discount_pct,
+                    markdown=False,
+                ),
+            )
+        finally:
+            await api.close()
+    except Exception:
+        logger.exception("Не удалось отправить поздравление с призом (%s/%s)", channel, uid)
+
+
 async def handle_wheel_spin(request: web.Request) -> web.Response:
     """POST /api/wheel/spin — серверный розыгрыш + запись участника (1 раз)."""
     try:
@@ -4748,24 +4853,28 @@ async def handle_wheel_spin(request: web.Request) -> web.Response:
             }
         )
 
+    profile = await _survey_profile_for_wheel(channel, uid)
+    if not profile:
+        return _json(
+            {
+                "error": "survey_required",
+                "detail": "Сначала заполните анкету в боте — после неё откроется колесо фортуны",
+            },
+            status=403,
+        )
+
     picked = pick_wheel_winner(segments)
     seg = picked["segment"]
-    customer = None
-    if channel == "telegram":
-        try:
-            customer = await get_customer_by_tg_user_id(int(uid))
-        except Exception:
-            customer = None
-    else:
-        try:
-            customer = await get_customer_by_max_user_id(int(uid))
-        except Exception:
-            customer = None
+    customer = await _resolve_customer_for_wheel(channel, uid, profile)
 
-    # Enrich name from CRM if Mini App user has empty names
-    if customer and customer.get("name"):
-        crm_name = str(customer.get("name") or "").strip()
-        if crm_name and not (first or last):
+    # Enrich name from CRM / survey if Mini App user has empty names
+    if not (first or last):
+        crm_name = ""
+        if customer and customer.get("name"):
+            crm_name = str(customer.get("name") or "").strip()
+        if not crm_name:
+            crm_name = str(profile.get("name") or "").strip()
+        if crm_name:
             parts = crm_name.split(None, 1)
             first = parts[0] if parts else first
             last = parts[1] if len(parts) > 1 else last
@@ -4783,6 +4892,27 @@ async def handle_wheel_spin(request: web.Request) -> web.Response:
         tg_user_id=int(uid) if channel == "telegram" else None,
         max_user_id=uid if channel == "max" else None,
     )
+
+    if customer and customer.get("id") is not None:
+        try:
+            note = format_customer_prize_note(
+                channel=channel,
+                prize_label=str(seg.get("label") or ""),
+                discount_pct=picked.get("discount_pct"),
+                created_at=str(play.get("created_at") or ""),
+            )
+            await append_customer_notes(int(customer["id"]), note)
+        except Exception:
+            logger.exception("Не удалось записать приз в карточку клиента id=%s", customer.get("id"))
+
+    await _notify_wheel_prize(
+        request,
+        channel=channel,
+        uid=uid,
+        prize_label=str(seg.get("label") or ""),
+        discount_pct=picked.get("discount_pct"),
+    )
+
     return _json(
         {
             "ok": True,

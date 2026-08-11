@@ -98,10 +98,14 @@
           }
           return { winnerIndex: result.winner_index };
         } catch (err) {
+          const code = err.data?.error || "";
           const msg =
             err.status === 401
               ? "Откройте колесо из Telegram или MAX"
-              : err.data?.detail || err.message || "Не удалось крутить";
+              : code === "survey_required"
+                ? err.data?.detail ||
+                  "Сначала заполните анкету в боте — после неё откроется колесо"
+                : err.data?.detail || err.message || "Не удалось крутить";
           alert(msg);
           throw err;
         }

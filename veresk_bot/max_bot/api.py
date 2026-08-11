@@ -278,6 +278,10 @@ def btn_callback(text: str, payload: str) -> dict[str, Any]:
     return {"type": "callback", "text": text, "payload": payload[:1024]}
 
 
+def btn_link(text: str, url: str) -> dict[str, Any]:
+    return {"type": "link", "text": text[:64], "url": str(url or "").strip()}
+
+
 def btn_request_contact(text: str) -> dict[str, Any]:
     return {"type": "request_contact", "text": text}
 
