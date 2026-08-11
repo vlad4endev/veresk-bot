@@ -1561,12 +1561,12 @@ ADMIN_USER_ROLES = ("admin", "employee")
 # Разделы панели, которыми можно управлять для сотрудника
 ADMIN_PERMISSION_DEFS: tuple[tuple[str, str], ...] = (
     ("home", "Главная"),
-    ("clients", "Клиенты"),
     ("chats", "Чаты"),
-    ("bots", "Боты"),
+    ("clients", "Клиенты"),
     ("wheel", "Фортуна"),
-    ("settings", "Настройки"),
     ("aichat", "ИИ чат"),
+    ("bots", "Боты"),
+    ("settings", "Настройки"),
     ("access", "Доступ (сотрудники)"),
 )
 ADMIN_PERMISSION_KEYS: tuple[str, ...] = tuple(k for k, _ in ADMIN_PERMISSION_DEFS)

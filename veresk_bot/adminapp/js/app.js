@@ -85,12 +85,12 @@
 
   const PERM_CATALOG_FALLBACK = [
     { id: "home", label: "Главная" },
-    { id: "clients", label: "Клиенты" },
     { id: "chats", label: "Чаты" },
-    { id: "bots", label: "Боты" },
+    { id: "clients", label: "Клиенты" },
     { id: "wheel", label: "Фортуна" },
-    { id: "settings", label: "Настройки" },
     { id: "aichat", label: "ИИ чат" },
+    { id: "bots", label: "Боты" },
+    { id: "settings", label: "Настройки" },
     { id: "access", label: "Доступ (сотрудники)" },
   ];
   const PERM_DEFAULTS = {
@@ -132,7 +132,7 @@
   }
 
   function firstAllowedTab() {
-    const order = ["home", "clients", "chats", "bots", "wheel", "aichat", "settings"];
+    const order = ["home", "chats", "clients", "wheel", "aichat", "bots", "settings"];
     return order.find((t) => canAccess(t)) || "home";
   }
 
