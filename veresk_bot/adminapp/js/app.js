@@ -3286,6 +3286,7 @@
     const status = $("#tgQrStatus");
     if (status) status.textContent = "Ожидаем сканирование…";
     state.tgQrLoginId = null;
+    state.tgQrUrl = null;
     setConnectStep(1);
   }
 
@@ -3571,7 +3572,7 @@
     }
   }
 
-  async function scheduleTgQrPoll() {
+  async def scheduleTgQrPoll() {
     stopTgQrPoll();
     const tick = async () => {
       const loginId = state.tgQrLoginId;
@@ -3580,6 +3581,7 @@
       try {
         const res = await AdminAPI.tgQrPoll(loginId);
         if (res.need_2fa) {
+          stopTgQrPoll();
           $("#tgQr2faWrap")?.classList.remove("hidden");
           const status = $("#tgQrStatus");
           if (status) status.textContent = "Скан принят. Введите пароль 2FA.";
@@ -3587,18 +3589,28 @@
           return;
         }
         if (res.pending) {
-          if (res.url) renderTgQr(res.url);
+          if (res.url && res.url !== state.tgQrUrl) {
+            state.tgQrUrl = res.url;
+            renderTgQr(res.url);
+          }
           const status = $("#tgQrStatus");
-          if (status) status.textContent = "Ожидаем сканирование…";
-          tgQrPollTimer = setTimeout(tick, 1800);
+          if (status) status.textContent = "Ожидаем сканирование… не закрывайте это окно";
+          tgQrPollTimer = setTimeout(tick, 1500);
           return;
         }
         if (!res.ok) {
+          const status = $("#tgQrStatus");
+          if (status) status.textContent = tgErrorText(res);
+          if (res.expired) {
+            tgQrPollTimer = setTimeout(tick, 3000);
+            return;
+          }
           alert(tgErrorText(res));
           return;
         }
         stopTgQrPoll();
         state.tgQrLoginId = null;
+        state.tgQrUrl = null;
         showConnectDone(res);
         loadAccounts({ check: true });
       } catch (err) {
@@ -3609,7 +3621,7 @@
         tgQrBusy = false;
       }
     };
-    tgQrPollTimer = setTimeout(tick, 1200);
+    tgQrPollTimer = setTimeout(tick, 800);
   }
 
   $("#tgQrStart")?.addEventListener("click", async () => {
@@ -3628,13 +3640,14 @@
         return;
       }
       state.tgQrLoginId = res.login_id;
+      state.tgQrUrl = res.url || null;
       $("#tgQrStep")?.classList.remove("hidden");
       setConnectStep(2);
       const hint = $("#tgQrHint");
       if (hint && res.detail) hint.textContent = res.detail;
       renderTgQr(res.url);
       const status = $("#tgQrStatus");
-      if (status) status.textContent = "Ожидаем сканирование…";
+      if (status) status.textContent = "Ожидаем сканирование… не закрывайте это окно";
       scheduleTgQrPoll();
     } catch (err) {
       alert(tgErrorText(err));
@@ -3652,6 +3665,7 @@
     try {
       const res = await AdminAPI.tgQrRefresh(loginId);
       if (!res.ok) return alert(tgErrorText(res));
+      state.tgQrUrl = res.url || null;
       renderTgQr(res.url);
       const status = $("#tgQrStatus");
       if (status) status.textContent = "QR обновлён. Отсканируйте снова.";

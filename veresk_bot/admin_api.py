@@ -118,6 +118,7 @@ from senders.telegram_userbot import (
     get_api_credentials,
     is_telethon_configured,
     poll_telegram_qr_login,
+    recover_authorized_qr_sessions,
     refresh_telegram_qr_login,
     remove_session_file,
     resend_telegram_login_code,
@@ -1407,6 +1408,14 @@ async def handle_accounts_list(request: web.Request) -> web.Response:
     err = await _require_admin(request)
     if err:
         return err
+    # Подхватить qr-сессии, где скан прошёл, а карточка в UI не создалась
+    try:
+        for recovered in await recover_authorized_qr_sessions():
+            await _register_telegram_account(
+                recovered, str(recovered.get("phone") or "")
+            )
+    except Exception:
+        logger.exception("QR session recovery on accounts list failed")
     rows = await list_send_accounts()
     check_live = request.query.get("check") == "1"
 

@@ -435,6 +435,61 @@ async def _finalize_authorized_client(
     }
 
 
+async def _qr_background_wait(login_id: str) -> None:
+    """Держим wait() активным, пока пользователь сканирует QR (требование Telethon)."""
+    pending = _pending_qr.get(login_id)
+    if not pending:
+        return
+    qr = pending.get("qr")
+    client = pending.get("client")
+    if not qr or not client:
+        pending["status"] = "error"
+        pending["error"] = "QR-сессия повреждена"
+        return
+    try:
+        from telethon.errors import SessionPasswordNeededError
+    except ImportError:
+        pending["status"] = "error"
+        pending["error"] = TELETHON_MISSING_DETAIL
+        return
+
+    try:
+        # timeout=None → ждать до expires токена; handler висит всё это время
+        await qr.wait()
+        pending["status"] = "ready"
+        logger.info("Telegram QR scan accepted id=%s", login_id)
+    except SessionPasswordNeededError:
+        pending["need_2fa"] = True
+        pending["status"] = "need_2fa"
+        logger.info("Telegram QR needs 2FA id=%s", login_id)
+    except asyncio.TimeoutError:
+        pending["status"] = "expired"
+        pending["error"] = "QR истёк — нажмите «Обновить QR»"
+    except asyncio.CancelledError:
+        pending["status"] = "cancelled"
+        raise
+    except Exception as exc:
+        pending["status"] = "error"
+        pending["error"] = _friendly_telethon_error(exc)
+        logger.exception("Telegram QR background wait failed id=%s", login_id)
+
+
+def _start_qr_wait_task(login_id: str) -> None:
+    pending = _pending_qr.get(login_id)
+    if not pending:
+        return
+    old = pending.get("task")
+    if old and not old.done():
+        old.cancel()
+    pending["status"] = "waiting"
+    pending["need_2fa"] = False
+    pending["error"] = None
+    pending["result"] = None
+    pending["task"] = asyncio.create_task(
+        _qr_background_wait(login_id), name=f"tg-qr-{login_id}"
+    )
+
+
 async def start_telegram_qr_login() -> dict[str, Any]:
     """Старт входа по QR (без SMS/кода) — как в Telegram Desktop."""
     if not is_telethon_configured():
@@ -471,7 +526,12 @@ async def start_telegram_qr_login() -> dict[str, Any]:
         "qr": qr,
         "session_base": session_base,
         "need_2fa": False,
+        "status": "waiting",
+        "error": None,
+        "result": None,
+        "task": None,
     }
+    _start_qr_wait_task(login_id)
     logger.info("Telegram QR login started id=%s", login_id)
     return {
         "ok": True,
@@ -486,8 +546,9 @@ async def start_telegram_qr_login() -> dict[str, Any]:
 
 
 async def refresh_telegram_qr_login(login_id: str) -> dict[str, Any]:
-    """Обновить истёкший QR."""
-    pending = _pending_qr.get(str(login_id or "").strip())
+    """Обновить истёкший QR и снова слушать скан."""
+    key = str(login_id or "").strip()
+    pending = _pending_qr.get(key)
     if not pending:
         return {"ok": False, "error": "QR-сессия не найдена — нажмите «Войти по QR» снова"}
     qr = pending.get("qr")
@@ -498,57 +559,86 @@ async def refresh_telegram_qr_login(login_id: str) -> dict[str, Any]:
     except Exception as exc:
         logger.exception("Telegram QR recreate failed")
         return {"ok": False, "error": _friendly_telethon_error(exc)}
+    _start_qr_wait_task(key)
     return {
         "ok": True,
-        "login_id": login_id,
+        "login_id": key,
         "url": qr.url,
         "expires_at": _qr_expires_iso(getattr(qr, "expires", None)),
     }
 
 
 async def poll_telegram_qr_login(login_id: str, *, timeout: float = 2.5) -> dict[str, Any]:
-    """Короткое ожидание скана QR. Вызывать с фронта в цикле."""
+    """Статус QR-входа. wait() идёт в фоне — здесь только читаем результат."""
+    del timeout  # совместимость сигнатуры; ожидание больше не здесь
     key = str(login_id or "").strip()
     pending = _pending_qr.get(key)
     if not pending:
+        # Возможно, скан уже прошёл, а UI не успел — подхватим qr_*.session с диска
+        recovered = await recover_authorized_qr_sessions()
+        if recovered:
+            return {**recovered[0], "login_id": key, "recovered": True}
         return {"ok": False, "error": "QR-сессия не найдена — нажмите «Войти по QR» снова"}
-    if pending.get("need_2fa"):
-        return {"ok": False, "need_2fa": True, "login_id": key, "error": "Нужен пароль 2FA"}
 
-    client = pending["client"]
-    qr = pending["qr"]
-    try:
-        from telethon.errors import SessionPasswordNeededError
-    except ImportError:
-        return _telethon_missing_error()
+    client = pending.get("client")
+    status = str(pending.get("status") or "waiting")
 
-    try:
-        await qr.wait(timeout=timeout)
-    except asyncio.TimeoutError:
-        return {
-            "ok": True,
-            "pending": True,
-            "login_id": key,
-            "url": getattr(qr, "url", None),
-            "expires_at": _qr_expires_iso(getattr(qr, "expires", None)),
-        }
-    except SessionPasswordNeededError:
-        pending["need_2fa"] = True
+    # Фоллбек: клиент уже авторизован, а статус ещё waiting
+    if status == "waiting" and client is not None:
+        try:
+            if await client.is_user_authorized():
+                pending["status"] = "ready"
+                status = "ready"
+        except Exception:
+            logger.debug("QR poll is_user_authorized check failed", exc_info=True)
+
+    if status == "need_2fa" or pending.get("need_2fa"):
         return {
             "ok": False,
             "need_2fa": True,
             "login_id": key,
             "error": "Нужен пароль двухфакторной защиты Telegram",
         }
-    except Exception as exc:
-        logger.exception("Telegram QR wait failed")
-        return {"ok": False, "error": _friendly_telethon_error(exc)}
 
-    result = await _finalize_authorized_client(
-        client, session_base=pending["session_base"]
-    )
-    _pending_qr.pop(key, None)
-    return {**result, "login_id": key}
+    if status == "ready":
+        taken = _pending_qr.pop(key, None) or pending
+        task = taken.get("task")
+        if task and not task.done():
+            task.cancel()
+        try:
+            if taken.get("result"):
+                result = taken["result"]
+            else:
+                result = await _finalize_authorized_client(
+                    taken["client"], session_base=taken["session_base"]
+                )
+                taken["result"] = result
+        except Exception as exc:
+            logger.exception("Telegram QR finalize failed")
+            # вернём pending обратно, чтобы можно было повторить poll/2fa
+            _pending_qr[key] = taken
+            taken["status"] = "error"
+            taken["error"] = _friendly_telethon_error(exc)
+            return {"ok": False, "error": _friendly_telethon_error(exc)}
+        return {**result, "login_id": key}
+
+    if status in ("expired", "error"):
+        return {
+            "ok": False,
+            "error": pending.get("error")
+            or ("QR истёк — нажмите «Обновить QR»" if status == "expired" else "Ошибка QR-входа"),
+            "login_id": key,
+            "expired": status == "expired",
+        }
+
+    qr = pending.get("qr")
+    return {
+        "ok": True,
+        "pending": True,
+        "login_id": key,
+        "url": getattr(qr, "url", None) if qr else None,
+        "expires_at": _qr_expires_iso(getattr(qr, "expires", None)) if qr else None,
+    }
 
 
 async def confirm_telegram_qr_2fa(login_id: str, password: str) -> dict[str, Any]:
@@ -566,10 +656,13 @@ async def confirm_telegram_qr_2fa(login_id: str, password: str) -> dict[str, Any
     except Exception as exc:
         return {"ok": False, "need_2fa": True, "error": f"2FA: {_friendly_telethon_error(exc)}"}
 
+    taken = _pending_qr.pop(key, None) or pending
+    task = taken.get("task")
+    if task and not task.done():
+        task.cancel()
     result = await _finalize_authorized_client(
-        client, session_base=pending["session_base"]
+        client, session_base=taken["session_base"]
     )
-    _pending_qr.pop(key, None)
     return {**result, "login_id": key}
 
 
@@ -583,6 +676,9 @@ async def cancel_telegram_qr_login(login_id: str | None = None) -> None:
         pending = _pending_qr.pop(key, None)
         if not pending:
             continue
+        task = pending.get("task")
+        if task and not task.done():
+            task.cancel()
         client = pending.get("client")
         session_base = str(pending.get("session_base") or "")
         if client:
@@ -592,6 +688,66 @@ async def cancel_telegram_qr_login(login_id: str | None = None) -> None:
                 pass
         if session_base:
             remove_session_file(session_base + ".session")
+
+
+async def recover_authorized_qr_sessions() -> list[dict[str, Any]]:
+    """Подхватить qr_/acc_ сессии, уже авторизованные, но не зарегистрированные в UI."""
+    if not is_telethon_configured():
+        return []
+    try:
+        from telethon import TelegramClient
+    except ImportError:
+        return []
+
+    known: set[str] = set()
+    try:
+        from mailing_db import list_send_accounts
+
+        for row in await list_send_accounts():
+            sf = str(row.get("session_file") or "").strip()
+            if sf:
+                known.add(sf)
+                # также без суффикса
+                if sf.endswith(".session"):
+                    known.add(sf)
+                else:
+                    known.add(sf + ".session")
+    except Exception:
+        logger.debug("list_send_accounts for QR recover failed", exc_info=True)
+
+    api_id, api_hash = get_api_credentials()
+    recovered: list[dict[str, Any]] = []
+    paths = list(sessions_path().glob("qr_*.session")) + list(
+        sessions_path().glob("acc_*.session")
+    )
+    for path in sorted(set(paths)):
+        session_file = str(path)
+        if session_file in known:
+            continue
+        base = session_file[:-8] if session_file.endswith(".session") else session_file
+        if f"{base}.session" in known or base in known:
+            continue
+        client = TelegramClient(base, api_id, api_hash)
+        try:
+            await client.connect()
+            if not await client.is_user_authorized():
+                await client.disconnect()
+                # Битый незавершённый qr_ можно оставить — cancel почистит
+                continue
+            result = await _finalize_authorized_client(client, session_base=base)
+            if result.get("ok"):
+                recovered.append(result)
+                logger.info(
+                    "Recovered authorized Telegram session → %s",
+                    result.get("session_file"),
+                )
+        except Exception:
+            logger.exception("Failed recovering Telegram session %s", path)
+            try:
+                await client.disconnect()
+            except Exception:
+                pass
+    return recovered
 
 
 async def check_telegram_session(session_file: str) -> dict[str, Any]:
