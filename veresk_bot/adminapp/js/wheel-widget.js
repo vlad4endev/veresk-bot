@@ -96,7 +96,7 @@
     return [raw.slice(0, cut).trim(), raw.slice(cut).trim()].filter(Boolean);
   }
 
-  function buildSvg(segments) {
+  function buildSvg(segments, highlightIndex) {
     const size = 320;
     const cx = size / 2;
     const cy = size / 2;
@@ -112,12 +112,16 @@
     const parts = [];
     const labels = [];
     const ticks = [];
+    const uid = "vw" + Math.random().toString(36).slice(2, 8);
 
     slices.forEach((sl) => {
       const s = sl.segment;
-      const { startDeg, midDeg, spanDeg } = sl;
+      const { startDeg, midDeg, spanDeg, index } = sl;
+      const isWin = highlightIndex === index;
+      const stroke = isWin ? "rgba(255,255,255,.98)" : "rgba(255,255,255,.85)";
+      const sw = isWin ? 3.5 : 2.5;
       parts.push(
-        `<path d="${slicePath(cx, cy, r, startDeg, startDeg + spanDeg)}" fill="${esc(s.color)}" stroke="rgba(255,255,255,.85)" stroke-width="2.5"/>`
+        `<path class="${isWin ? "vw-slice is-win" : "vw-slice"}" d="${slicePath(cx, cy, r, startDeg, startDeg + spanDeg)}" fill="${esc(s.color)}" stroke="${stroke}" stroke-width="${sw}"${isWin ? ` filter="url(#${uid}-win)"` : ""}/>`
       );
 
       const [t1x, t1y] = polar(cx, cy, r - 1, startDeg);
@@ -138,11 +142,9 @@
         .map((line, i) => `<tspan x="${tx}" y="${startY + i * lineH}">${esc(line)}</tspan>`)
         .join("");
       labels.push(
-        `<text class="vw-label" fill="${fill}" font-size="${fs}" text-anchor="middle" dominant-baseline="middle" transform="rotate(${rot} ${tx} ${ty})">${tspans}</text>`
+        `<text class="vw-label${isWin ? " is-win" : ""}" fill="${fill}" font-size="${fs}" font-weight="${isWin ? 700 : 600}" text-anchor="middle" dominant-baseline="middle" transform="rotate(${rot} ${tx} ${ty})">${tspans}</text>`
       );
     });
-
-    const uid = "vw" + Math.random().toString(36).slice(2, 8);
 
     return `<svg class="vw-svg" viewBox="0 0 ${size} ${size}" aria-hidden="true">
       <defs>
@@ -156,6 +158,10 @@
           <stop offset="45%" stop-color="#F4ECF7"/>
           <stop offset="100%" stop-color="#E4D5EE"/>
         </linearGradient>
+        <filter id="${uid}-win" x="-30%" y="-30%" width="160%" height="160%">
+          <feDropShadow dx="0" dy="0" stdDeviation="6" flood-color="#FFD6EC" flood-opacity=".95"/>
+          <feDropShadow dx="0" dy="0" stdDeviation="2" flood-color="#FFFFFF" flood-opacity=".9"/>
+        </filter>
       </defs>
       <circle cx="${cx}" cy="${cy}" r="${r + 14}" fill="url(#${uid}-rim)"/>
       <circle cx="${cx}" cy="${cy}" r="${r + 11}" fill="none" stroke="rgba(61,42,85,.08)" stroke-width="1"/>
@@ -203,6 +209,12 @@
     let rotation = 0;
     let spinning = false;
     let spinTimer = null;
+    let revealTimers = [];
+    let highlightIndex = -1;
+    const logoUrl =
+      options.logoUrl ||
+      root.getAttribute("data-logo") ||
+      "assets/logo-veresk.png";
 
     root.classList.add("vw-root");
     root.innerHTML = `
@@ -213,13 +225,17 @@
       </div>
       <div class="vw-stage">
         <div class="vw-aura" aria-hidden="true"></div>
+        <div class="vw-flash" aria-hidden="true"></div>
         <div class="vw-pointer" aria-hidden="true"><span></span></div>
         <div class="vw-disc"></div>
         <button type="button" class="vw-hub" aria-label="Крутить колесо">
-          <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path fill="currentColor" d="M8.5 6.8v10.4c0 .7.8 1.1 1.4.7l8.2-5.2c.6-.4.6-1.2 0-1.5L9.9 6.1c-.6-.4-1.4 0-1.4.7z"/></svg>
+          <img class="vw-hub-logo" src="${esc(logoUrl)}" alt="Veresk" width="44" height="44" decoding="async">
         </button>
       </div>
-      <div class="vw-result" hidden></div>
+      <div class="vw-result" hidden>
+        <div class="vw-result-kicker"></div>
+        <div class="vw-result-prize"></div>
+      </div>
       <button type="button" class="vw-spin-btn">Крутить</button>
     `;
 
@@ -227,15 +243,23 @@
     const noteEl = root.querySelector(".vw-note");
     const discEl = root.querySelector(".vw-disc");
     const resultEl = root.querySelector(".vw-result");
+    const resultKicker = root.querySelector(".vw-result-kicker");
+    const resultPrize = root.querySelector(".vw-result-prize");
     const hubBtn = root.querySelector(".vw-hub");
     const spinBtn = root.querySelector(".vw-spin-btn");
+    const stageEl = root.querySelector(".vw-stage");
+
+    function clearRevealTimers() {
+      revealTimers.forEach((id) => clearTimeout(id));
+      revealTimers = [];
+    }
 
     function paint() {
       if (titleEl) titleEl.textContent = title || "Розыгрыш";
       if (noteEl) noteEl.textContent = note || "Нажмите, чтобы крутить";
       if (discEl) {
         const keep = discEl.style.transform;
-        discEl.innerHTML = buildSvg(segments);
+        discEl.innerHTML = buildSvg(segments, highlightIndex);
         discEl.style.transform = keep || `rotate(${rotation}deg)`;
       }
     }
@@ -263,6 +287,55 @@
       };
     }
 
+    function setResultState(kicker, prize, mode) {
+      if (!resultEl) return;
+      resultEl.hidden = false;
+      resultEl.classList.remove("is-show", "is-tease", "is-win");
+      if (mode) resultEl.classList.add(mode);
+      if (resultKicker) resultKicker.textContent = kicker || "";
+      if (resultPrize) resultPrize.textContent = prize || "";
+      // reflow for animation restart
+      void resultEl.offsetWidth;
+      resultEl.classList.add("is-show");
+    }
+
+    function revealPrize(picked) {
+      return new Promise((resolve) => {
+        clearRevealTimers();
+        highlightIndex = -1;
+        paint();
+        root.classList.add("is-teasing");
+        stageEl?.classList.add("is-teasing");
+        setResultState("Секунду…", "· · ·", "is-tease");
+
+        revealTimers.push(
+          setTimeout(() => {
+            setResultState("И выпадает…", "?", "is-tease");
+            hubBtn?.classList.add("is-pulse");
+          }, 550)
+        );
+
+        revealTimers.push(
+          setTimeout(() => {
+            highlightIndex = picked.index;
+            paint();
+            stageEl?.classList.add("is-flash");
+            setResultState("Ваш приз", picked.segment.label, "is-win");
+            hubBtn?.classList.remove("is-pulse");
+            hubBtn?.classList.add("is-win");
+          }, 1250)
+        );
+
+        revealTimers.push(
+          setTimeout(() => {
+            root.classList.remove("is-teasing");
+            stageEl?.classList.remove("is-teasing", "is-flash");
+            resolve();
+          }, 2100)
+        );
+      });
+    }
+
     function spin(spinOpts) {
       const so = spinOpts || {};
       if (spinning) return Promise.reject(new Error("already spinning"));
@@ -284,7 +357,6 @@
         picked = pickWinner(segments);
       }
 
-      // Останавливаем указатель в случайной точке внутри равного сектора
       const jitter = (Math.random() * 0.7 + 0.15) * picked.spanDeg;
       const stopAt = picked.startDeg + jitter;
       const TURN_OPTIONS = [8, 10, 19, 30];
@@ -293,39 +365,43 @@
           ? Math.max(8, Number(so.turns) || 8)
           : TURN_OPTIONS[Math.floor(Math.random() * TURN_OPTIONS.length)];
       const target = extraTurns * 360 + (360 - stopAt);
-      // Дольше крутим при большем числе оборотов
       const duration =
         so.durationMs != null ? so.durationMs : Math.round(2600 + extraTurns * 340);
+
+      clearRevealTimers();
+      highlightIndex = -1;
+      paint();
       rotation = (rotation % 360) + target;
       spinning = true;
       root.classList.add("is-spinning");
+      root.classList.remove("is-teasing");
       discEl.classList.add("is-spinning");
+      stageEl?.classList.remove("is-flash", "is-teasing");
+      hubBtn?.classList.remove("is-pulse", "is-win");
       discEl.style.transitionDuration = `${duration}ms`;
       discEl.style.transitionTimingFunction = "cubic-bezier(.08,.82,.16,1)";
-      // force reflow so duration applies before transform
       void discEl.offsetWidth;
       discEl.style.transform = `rotate(${rotation}deg)`;
       if (resultEl) {
         resultEl.hidden = true;
-        resultEl.textContent = "";
-        resultEl.classList.remove("is-show");
+        resultEl.classList.remove("is-show", "is-tease", "is-win");
+        if (resultKicker) resultKicker.textContent = "";
+        if (resultPrize) resultPrize.textContent = "";
       }
       hubBtn.disabled = true;
       spinBtn.disabled = true;
+      if (spinBtn) spinBtn.textContent = "Крутится…";
 
       return new Promise((resolve) => {
         if (spinTimer) clearTimeout(spinTimer);
-        spinTimer = setTimeout(() => {
+        spinTimer = setTimeout(async () => {
           spinning = false;
           root.classList.remove("is-spinning");
           discEl.classList.remove("is-spinning");
+          if (spinBtn) spinBtn.textContent = "Крутить";
+          await revealPrize(picked);
           hubBtn.disabled = false;
           spinBtn.disabled = false;
-          if (resultEl) {
-            resultEl.hidden = false;
-            resultEl.textContent = picked.segment.label;
-            resultEl.classList.add("is-show");
-          }
           if (typeof options.onSpinEnd === "function") {
             options.onSpinEnd(picked.segment, picked.index);
           }
@@ -337,9 +413,7 @@
     function onSpinClick() {
       spin().catch((err) => {
         if (err && err.message === "need segments" && resultEl) {
-          resultEl.hidden = false;
-          resultEl.textContent = "Добавьте минимум 2 сектора";
-          resultEl.classList.add("is-show");
+          setResultState("Нужно больше секторов", "Минимум 2", "is-tease");
         }
       });
     }
@@ -355,10 +429,11 @@
       paint,
       destroy() {
         if (spinTimer) clearTimeout(spinTimer);
+        clearRevealTimers();
         hubBtn.removeEventListener("click", onSpinClick);
         spinBtn.removeEventListener("click", onSpinClick);
         root.innerHTML = "";
-        root.classList.remove("vw-root", "is-spinning");
+        root.classList.remove("vw-root", "is-spinning", "is-teasing");
       },
     };
   }
