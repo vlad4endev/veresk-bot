@@ -10,6 +10,7 @@ from __future__ import annotations
 import logging
 import re
 from typing import Any
+from urllib.parse import urlparse
 
 import aiohttp
 
@@ -727,10 +728,12 @@ async def _chat_completion_raw(
                         detail,
                     )
                     if "access denied by security policy" in detail.lower():
+                        host = urlparse(url).netloc or "?"
                         detail = (
-                            "Отказ доступа у провайдера ИИ. "
-                            "Откройте Настройки → Сервисы, нажмите «Сохранить» "
-                            "для OpenRouter (или смените модель) и попробуйте снова."
+                            f"Отказ доступа ({host}). "
+                            "Если видите yandex.net при выбранном OpenRouter — "
+                            "на сервере старый код: сделайте ./deploy.sh. "
+                            "Иначе проверьте ключ/кредиты OpenRouter или переключитесь на DeepSeek."
                         )
                     raise AiComposeError("ai_provider_error", detail)
     except AiComposeError:
