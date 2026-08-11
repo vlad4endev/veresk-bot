@@ -27,6 +27,8 @@ from ai_compose import (
     is_ai_configured,
     is_provider_configured,
     normalize_chat_messages,
+    reset_ai_prompts,
+    save_ai_prompts,
     save_provider_settings,
     suggest_chat_followups,
 )
@@ -2616,6 +2618,28 @@ async def handle_ai_settings_save(request: web.Request) -> web.Response:
     if body.get("clear"):
         clear_ai_settings()
         return _json({"ok": True, "cleared": True, **ai_settings_public()})
+
+    if body.get("reset_prompts"):
+        reset_ai_prompts()
+        return _json({"ok": True, "prompts_reset": True, **ai_settings_public()})
+
+    # Только промпты — без смены оператора/ключа
+    prompts_only = bool(body.get("prompts_only")) or (
+        "prompts" in body
+        and "provider" not in body
+        and "api_key" not in body
+        and "model" not in body
+    )
+    if "prompts" in body:
+        prompt_errors = save_ai_prompts(body.get("prompts"))
+        if prompt_errors:
+            first = next(iter(prompt_errors.values()))
+            return _json(
+                {"error": "invalid_prompt", "detail": first, "fields": prompt_errors},
+                status=400,
+            )
+        if prompts_only:
+            return _json({"ok": True, "prompts_saved": True, **ai_settings_public()})
 
     provider = str(body.get("provider") or "").strip().lower()
     if not provider:

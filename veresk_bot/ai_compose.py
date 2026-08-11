@@ -152,6 +152,24 @@ CHAT_SYSTEM_PROMPT = """Ты рабочий помощник сотрудник�
 - Не раскрывай API-ключи, пароли и внутренние настройки сервера.
 - Не обещай отправить сообщение сам — ты только готовишь текст и план."""
 
+# Ключи runtime_settings для кастомных системных промптов
+AI_PROMPT_MAILING_KEY = "ai_prompt_mailing"
+AI_PROMPT_PERSONAL_KEY = "ai_prompt_personal"
+AI_PROMPT_CHAT_KEY = "ai_prompt_chat"
+MAX_SYSTEM_PROMPT_CHARS = 12000
+
+DEFAULT_PROMPTS: dict[str, str] = {
+    "mailing": SYSTEM_PROMPT,
+    "personal": PERSONAL_SYSTEM_PROMPT,
+    "chat": CHAT_SYSTEM_PROMPT,
+}
+
+PROMPT_SETTING_KEYS = {
+    "mailing": AI_PROMPT_MAILING_KEY,
+    "personal": AI_PROMPT_PERSONAL_KEY,
+    "chat": AI_PROMPT_CHAT_KEY,
+}
+
 MAX_CHAT_HISTORY = 20
 MAX_CHAT_MESSAGE_CHARS = 4000
 
@@ -584,7 +602,7 @@ def save_provider_settings(
 
 
 def clear_ai_settings() -> None:
-    """Сбросить все сохранённые ключи ИИ в панели."""
+    """Сбросить все сохранённые ключи ИИ в панели (промпты не трогаем)."""
     runtime_settings.delete_keys(
         "ai_provider",
         "ai_api_key",
@@ -593,6 +611,63 @@ def clear_ai_settings() -> None:
         "ai_folder_id",
         AI_BY_PROVIDER_KEY,
     )
+
+
+def get_system_prompt(kind: str) -> str:
+    """Системный промпт: из настроек панели или дефолт из кода."""
+    key = PROMPT_SETTING_KEYS.get(kind)
+    default = DEFAULT_PROMPTS.get(kind, "")
+    if not key:
+        return default
+    custom = str(runtime_settings.get(key) or "").strip()
+    return custom if custom else default
+
+
+def prompts_public() -> dict[str, Any]:
+    """Промпты для формы настроек: текущие тексты + флаги кастомизации."""
+    out: dict[str, Any] = {}
+    for kind, setting_key in PROMPT_SETTING_KEYS.items():
+        custom = str(runtime_settings.get(setting_key) or "").strip()
+        out[kind] = {
+            "text": custom or DEFAULT_PROMPTS[kind],
+            "customized": bool(custom),
+            "default": DEFAULT_PROMPTS[kind],
+        }
+    return out
+
+
+def save_ai_prompts(prompts: dict[str, Any] | None) -> dict[str, str]:
+    """
+    Сохранить системные промпты. Пустая строка = вернуть к дефолту.
+    Возвращает словарь ошибок kind -> detail (пустой = ок).
+    """
+    if not isinstance(prompts, dict):
+        return {}
+    errors: dict[str, str] = {}
+    values: dict[str, Any] = {}
+    clear_keys: list[str] = []
+    for kind, setting_key in PROMPT_SETTING_KEYS.items():
+        if kind not in prompts:
+            continue
+        raw = prompts.get(kind)
+        text = str(raw if raw is not None else "").strip()
+        if len(text) > MAX_SYSTEM_PROMPT_CHARS:
+            errors[kind] = f"Слишком длинный промпт (макс. {MAX_SYSTEM_PROMPT_CHARS})"
+            continue
+        if not text or text == DEFAULT_PROMPTS[kind].strip():
+            clear_keys.append(setting_key)
+        else:
+            values[setting_key] = text
+    if values:
+        runtime_settings.set_many(values)
+    if clear_keys:
+        runtime_settings.delete_keys(*clear_keys)
+    return errors
+
+
+def reset_ai_prompts() -> None:
+    """Вернуть все системные промпты к значениям из кода."""
+    runtime_settings.delete_keys(*PROMPT_SETTING_KEYS.values())
 
 
 def ai_settings_public() -> dict[str, Any]:
@@ -642,6 +717,7 @@ def ai_settings_public() -> dict[str, Any]:
         "folder_id_set": bool(folder),
         "from_env": bool(key) and not from_panel,
         "from_panel": from_panel,
+        "prompts": prompts_public(),
     }
 
 
@@ -834,7 +910,7 @@ async def generate_mailing_text(
         client_name=(client_name or "").strip(),
         occasion=(occasion or "").strip(),
     )
-    system = PERSONAL_SYSTEM_PROMPT if seg == "personal" else SYSTEM_PROMPT
+    system = get_system_prompt("personal" if seg == "personal" else "mailing")
     return await _chat_completion(
         [
             {"role": "system", "content": system},
@@ -880,7 +956,7 @@ async def admin_assistant_reply(
     if not history or history[-1]["role"] != "user":
         raise AiComposeError("prompt_required", "Напишите сообщение")
 
-    system = CHAT_SYSTEM_PROMPT
+    system = get_system_prompt("chat")
     intent_hints = {
         "events": "Фокус запроса: ближайшие события и тексты поздравлений. При необходимости вызови list_upcoming_events.",
         "inactive": "Фокус запроса: возврат неактивных клиентов, мягкий тон. Можно list_segment_customers(segment=inactive).",

@@ -2874,6 +2874,20 @@
       (ai.providers || []).find((p) => p.id === ai.provider) || ai.providers[0] || {};
     const needsFolder = !!curProv.needs_folder || ai.provider === "yandexgpt";
     const showBase = ai.provider === "custom";
+    const prompts = {
+      mailing: Object.assign(
+        { text: "", customized: false },
+        (ai.prompts && ai.prompts.mailing) || {}
+      ),
+      personal: Object.assign(
+        { text: "", customized: false },
+        (ai.prompts && ai.prompts.personal) || {}
+      ),
+      chat: Object.assign(
+        { text: "", customized: false },
+        (ai.prompts && ai.prompts.chat) || {}
+      ),
+    };
 
     box.innerHTML = `
       <div class="set-block svc-block">
@@ -2972,6 +2986,46 @@
             <button type="button" class="btn" onclick="go('aichat')">Открыть ИИ-чат</button>
           </div>
           <p class="form-foot">OpenRouter (РФ/санкции): <code>deepseek/deepseek-v4-flash-0731</code> или <code>deepseek/deepseek-v4-pro</code> — не OpenAI/Google. DeepSeek напрямую: <code>deepseek-v4-pro</code>. YandexGPT: <code>yandexgpt-lite/latest</code>.</p>
+
+          <details class="ai-prompts-details" id="aiPromptsDetails" open>
+            <summary>
+              <span class="ai-prompts-sum-t">Промпты для генерации текстов</span>
+              <span class="ai-prompts-sum-s">${
+                [prompts.mailing, prompts.personal, prompts.chat].some((p) => p.customized)
+                  ? "есть свои правки"
+                  : "стандартные"
+              }</span>
+            </summary>
+            <p class="form-foot ai-prompts-lead">Системные инструкции для ИИ: рассылки, личные сообщения и ответы в разделе «ИИ чат». Пустое поле или «Сбросить» вернёт текст из кода.</p>
+            <div class="svc-field">
+              <label for="aiPromptMailing">Рассылка <span class="ai-key-status">${
+                prompts.mailing.customized ? "· свой" : "· по умолчанию"
+              }</span></label>
+              <textarea id="aiPromptMailing" class="ai-prompt-area" rows="8" spellcheck="true">${esc(
+                prompts.mailing.text || ""
+              )}</textarea>
+            </div>
+            <div class="svc-field">
+              <label for="aiPromptPersonal">Личное сообщение <span class="ai-key-status">${
+                prompts.personal.customized ? "· свой" : "· по умолчанию"
+              }</span></label>
+              <textarea id="aiPromptPersonal" class="ai-prompt-area" rows="8" spellcheck="true">${esc(
+                prompts.personal.text || ""
+              )}</textarea>
+            </div>
+            <div class="svc-field">
+              <label for="aiPromptChat">ИИ-чат <span class="ai-key-status">${
+                prompts.chat.customized ? "· свой" : "· по умолчанию"
+              }</span></label>
+              <textarea id="aiPromptChat" class="ai-prompt-area" rows="10" spellcheck="true">${esc(
+                prompts.chat.text || ""
+              )}</textarea>
+            </div>
+            <div class="form-actions svc-actions">
+              <button type="button" class="btn primary" id="aiPromptsSave">Сохранить промпты</button>
+              <button type="button" class="btn" id="aiPromptsReset">Сбросить к стандартным</button>
+            </div>
+          </details>
         </div>
       </div>`;
 
@@ -3113,6 +3167,43 @@
         return;
       try {
         await AdminAPI.aiSaveSettings({ clear: true });
+        loadIntegrationsPane();
+      } catch (err) {
+        alert(err.data?.detail || err.message || "Ошибка");
+      }
+    });
+
+    $("#aiPromptsSave")?.addEventListener("click", async () => {
+      const btn = $("#aiPromptsSave");
+      if (btn) {
+        btn.disabled = true;
+        btn.textContent = "Сохраняю…";
+      }
+      try {
+        await AdminAPI.aiSaveSettings({
+          prompts_only: true,
+          prompts: {
+            mailing: ($("#aiPromptMailing")?.value || "").trim(),
+            personal: ($("#aiPromptPersonal")?.value || "").trim(),
+            chat: ($("#aiPromptChat")?.value || "").trim(),
+          },
+        });
+        alert("Промпты сохранены");
+        loadIntegrationsPane();
+        return;
+      } catch (err) {
+        alert(err.data?.detail || err.data?.error || err.message || "Ошибка");
+      }
+      if (btn) {
+        btn.disabled = false;
+        btn.textContent = "Сохранить промпты";
+      }
+    });
+
+    $("#aiPromptsReset")?.addEventListener("click", async () => {
+      if (!confirm("Вернуть все три промпта к стандартным из кода?")) return;
+      try {
+        await AdminAPI.aiSaveSettings({ reset_prompts: true });
         loadIntegrationsPane();
       } catch (err) {
         alert(err.data?.detail || err.message || "Ошибка");
