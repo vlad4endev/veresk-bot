@@ -17,7 +17,7 @@ import re
 from datetime import datetime
 from typing import Any
 
-from max_bot.api import MaxBotAPI, btn_callback, btn_link, btn_request_contact
+from max_bot.api import MaxBotAPI, btn_callback, btn_request_contact
 from max_bot.storage import (
     extract_chat_id_from_update,
     extract_user_from_update,
@@ -658,7 +658,9 @@ class SurveyBot:
         try:
             from posiflora import sync_survey_profile_to_posiflora
 
-            posiflora_meta = await sync_survey_profile_to_posiflora(profile, user_id)
+            posiflora_meta = await sync_survey_profile_to_posiflora(
+                profile, user_id, channel="max"
+            )
             posiflora_ok = bool(posiflora_meta.get("posiflora_ok"))
             logger.info(
                 "Posiflora анкета (MAX): customer=%s, событий %s/%s",
@@ -724,20 +726,28 @@ class SurveyBot:
         if not already_played:
             wheel_kb = None
             try:
-                from webapp_buttons import WHEEL_OPEN_LABEL, wheel_miniapp_url
+                from webapp_buttons import max_wheel_keyboard
 
-                url = wheel_miniapp_url()
-                if url:
-                    wheel_kb = [[btn_link(WHEEL_OPEN_LABEL, url)]]
+                wheel_kb = await max_wheel_keyboard()
             except Exception:
                 logger.debug("Не удалось собрать кнопку колеса MAX", exc_info=True)
 
-            wheel_text = (
-                "🎡 **Колесо фортуны разблокировано!**\n\n"
-                "Нажмите кнопку ниже — крутите колесо и заберите свой приз.\n"
-                "Приз сохранится в вашей карточке клиента."
-            )
-            await self._send(user_id, wheel_text, keyboard=wheel_kb)
+            if wheel_kb:
+                wheel_text = (
+                    "🎡 **Колесо фортуны разблокировано!**\n\n"
+                    "Нажмите кнопку ниже — колесо откроется **внутри MAX**.\n"
+                    "Приз сохранится в вашей карточке клиента."
+                )
+                await self._send(user_id, wheel_text, keyboard=wheel_kb)
+            else:
+                await self._send(
+                    user_id,
+                    "🎡 **Колесо фортуны разблокировано!**\n\n"
+                    "Откройте мини-приложение кнопкой внизу чата с ботом "
+                    "(меню MAX → кнопка запуска приложения) и перейдите к колесу.\n\n"
+                    "_Если кнопки нет — в кабинете MAX для бота должен быть "
+                    "указан URL мини-приложения._",
+                )
 
         _reset(user_id)
 

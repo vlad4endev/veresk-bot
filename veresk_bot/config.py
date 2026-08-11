@@ -75,6 +75,8 @@ SESSIONS_DIR = os.getenv("SESSIONS_DIR", str(_default_sessions))
 
 # MAX-бот (токен выдаёт @MasterBot в MAX)
 MAX_BOT_TOKEN = os.getenv("MAX_BOT_TOKEN", "").strip()
+# Публичный username бота в MAX (без @ /) — для кнопки open_app
+MAX_BOT_USERNAME = os.getenv("MAX_BOT_USERNAME", "").strip().lstrip("@/").strip()
 # Чат флориста в MAX для уведомлений об анкетах (0 — выключено)
 MAX_FLORIST_CHAT_ID = int(os.getenv("MAX_FLORIST_CHAT_ID", "0") or "0")
 # Публичный HTTPS-домен (админка + miniapp + API)

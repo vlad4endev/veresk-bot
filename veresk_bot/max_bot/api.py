@@ -282,6 +282,27 @@ def btn_link(text: str, url: str) -> dict[str, Any]:
     return {"type": "link", "text": text[:64], "url": str(url or "").strip()}
 
 
+def btn_open_app(
+    text: str,
+    web_app: str,
+    *,
+    payload: str | None = None,
+    contact_id: int | None = None,
+) -> dict[str, Any]:
+    """Кнопка открытия Mini App внутри MAX (не внешний браузер)."""
+    btn: dict[str, Any] = {
+        "type": "open_app",
+        "text": str(text or "")[:64],
+        "web_app": str(web_app or "").strip(),
+    }
+    if payload:
+        # start_param для Mini App (см. MAX Bridge initDataUnsafe.start_param)
+        btn["payload"] = str(payload)[:512]
+    if contact_id is not None:
+        btn["contact_id"] = int(contact_id)
+    return btn
+
+
 def btn_request_contact(text: str) -> dict[str, Any]:
     return {"type": "request_contact", "text": text}
 
