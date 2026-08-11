@@ -89,6 +89,8 @@ from mailing_db import (
 
     get_fortune_play,
     delete_fortune_play,
+    delete_fortune_play_by_id,
+    clear_fortune_plays,
     claim_fortune_play_notified,
     list_fortune_plays,
     record_fortune_play,
@@ -5341,6 +5343,45 @@ async def handle_wheel_plays_list(request: web.Request) -> web.Response:
     )
 
 
+async def handle_wheel_play_delete(request: web.Request) -> web.Response:
+    """DELETE /api/admin/wheel/plays/{id} — сбросить выигрыш одного участника."""
+    err = await _require_perm(request, "wheel")
+    if err:
+        return err
+    try:
+        play_id = int(request.match_info["id"])
+    except (KeyError, TypeError, ValueError):
+        return _json({"error": "invalid_id"}, status=400)
+    ok = await delete_fortune_play_by_id(play_id)
+    if not ok:
+        return _json({"error": "not_found"}, status=404)
+    return _json({"ok": True, "deleted_id": play_id})
+
+
+async def handle_wheel_plays_clear(request: web.Request) -> web.Response:
+    """DELETE /api/admin/wheel/plays — сбросить всех участников (новый период)."""
+    err = await _require_perm(request, "wheel")
+    if err:
+        return err
+    confirm = ""
+    try:
+        body = await request.json()
+        if isinstance(body, dict):
+            confirm = str(body.get("confirm") or "").strip().lower()
+    except Exception:
+        confirm = str(request.query.get("confirm") or "").strip().lower()
+    if confirm not in {"reset", "all", "yes", "1", "true"}:
+        return _json(
+            {
+                "error": "confirm_required",
+                "detail": "Передайте confirm=reset, чтобы сбросить всех участников",
+            },
+            status=400,
+        )
+    deleted = await clear_fortune_plays()
+    return _json({"ok": True, "deleted": deleted})
+
+
 async def _resolve_wheel_player(
     request: web.Request, *, body: dict[str, Any] | None = None
 ) -> tuple[dict[str, Any] | None, web.Response | None]:
@@ -5882,6 +5923,8 @@ def setup_admin_routes(app: web.Application) -> None:
         ("/api/admin/wheel", handle_wheel_get, "GET"),
         ("/api/admin/wheel", handle_wheel_save, "POST"),
         ("/api/admin/wheel/plays", handle_wheel_plays_list, "GET"),
+        ("/api/admin/wheel/plays", handle_wheel_plays_clear, "DELETE"),
+        ("/api/admin/wheel/plays/{id}", handle_wheel_play_delete, "DELETE"),
         ("/api/wheel", handle_wheel_public_get, "GET"),
         ("/api/wheel/spin", handle_wheel_spin, "POST"),
         ("/api/wheel/notify", handle_wheel_notify, "POST"),

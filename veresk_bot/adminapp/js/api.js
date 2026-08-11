@@ -311,6 +311,15 @@ const AdminAPI = (() => {
       const q = new URLSearchParams(params).toString();
       return request("/api/admin/wheel/plays" + (q ? "?" + q : ""));
     },
+    deleteWheelPlay: (id) =>
+      request("/api/admin/wheel/plays/" + encodeURIComponent(id), {
+        method: "DELETE",
+      }),
+    clearWheelPlays: () =>
+      request("/api/admin/wheel/plays", {
+        method: "DELETE",
+        body: JSON.stringify({ confirm: "reset" }),
+      }),
     promotions: (params = {}) => {
       const q = new URLSearchParams(params).toString();
       return request("/api/admin/promotions" + (q ? "?" + q : ""));

@@ -2312,6 +2312,36 @@ async def delete_fortune_play(channel: str, user_id: str) -> bool:
     return await _run_db(_del)
 
 
+async def delete_fortune_play_by_id(play_id: int) -> bool:
+    """Удалить розыгрыш по id — клиент сможет крутить снова."""
+    try:
+        pid = int(play_id)
+    except (TypeError, ValueError):
+        return False
+    if pid <= 0:
+        return False
+
+    def _del() -> bool:
+        with _connect() as db:
+            cur = db.execute("DELETE FROM fortune_plays WHERE id = ?", (pid,))
+            db.commit()
+            return cur.rowcount > 0
+
+    return await _run_db(_del)
+
+
+async def clear_fortune_plays() -> int:
+    """Сбросить все розыгрыши (новый период акции). Возвращает число удалённых."""
+
+    def _clear() -> int:
+        with _connect() as db:
+            cur = db.execute("DELETE FROM fortune_plays")
+            db.commit()
+            return int(cur.rowcount or 0)
+
+    return await _run_db(_clear)
+
+
 async def claim_fortune_play_notified(
     channel: str, user_id: str
 ) -> dict[str, Any] | None:

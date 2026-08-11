@@ -214,7 +214,11 @@
     if (tab !== "settings" && typeof openStaffCreateModal === "function") {
       openStaffCreateModal(false);
     }
-    window.scrollTo({ top: 0, behavior: "smooth" });
+    if (tab !== "aichat") {
+      window.scrollTo({ top: 0, behavior: "smooth" });
+    } else {
+      window.scrollTo(0, 0);
+    }
     if (tab === "compose") {
       if (typeof resetComposeForm === "function") resetComposeForm();
       setStep(0);
@@ -6079,6 +6083,21 @@
       .join("");
   }
 
+  function scrollAiToBottom() {
+    const box = $("#aiMessages");
+    if (!box) return;
+    const pin = () => {
+      box.scrollTop = box.scrollHeight;
+    };
+    pin();
+    requestAnimationFrame(() => {
+      pin();
+      requestAnimationFrame(pin);
+    });
+    setTimeout(pin, 60);
+    setTimeout(pin, 200);
+  }
+
   function renderAiMessages() {
     const box = $("#aiMessages");
     if (!box) return;
@@ -6124,7 +6143,7 @@
       );
     }
     renderAiFollowups();
-    box.scrollTop = box.scrollHeight;
+    scrollAiToBottom();
   }
 
   function persistAiChat() {
@@ -8447,6 +8466,8 @@
       badge.textContent = String(total);
       badge.hidden = !total;
     }
+    const clearBtn = $("#wheelPlaysClear");
+    if (clearBtn) clearBtn.disabled = !total;
     if (stats) {
       stats.hidden = false;
       stats.innerHTML = `
@@ -8480,8 +8501,9 @@
         const tgId = p.tg_user_id != null ? p.tg_user_id : channel === "telegram" ? p.user_id : "";
         const maxId = p.max_user_id != null ? p.max_user_id : channel === "max" ? p.user_id : "";
         const uname = p.username ? `@${p.username}` : "";
+        const playId = p.id != null ? String(p.id) : "";
         return `
-          <article class="wheel-play">
+          <article class="wheel-play" data-play-id="${esc(playId)}">
             <div class="wheel-play-avatar" aria-hidden="true">${esc(wheelInitials(name))}</div>
             <div class="wheel-play-main">
               <div class="wheel-play-name">${esc(name)}</div>
@@ -8501,6 +8523,9 @@
               <div class="wheel-play-prize-label">${esc(prizeLabel)}</div>
               ${disc}
             </div>
+            <div class="wheel-play-actions">
+              <button type="button" class="btn wheel-play-del" data-play-del="${esc(playId)}" title="Сбросить выигрыш — клиент сможет крутить снова">Сбросить</button>
+            </div>
           </article>
         `;
       })
@@ -8518,6 +8543,69 @@
       console.warn("[wheel] plays", err);
       box.innerHTML =
         '<div class="wheel-plays-empty">Не удалось загрузить участников</div>';
+    }
+  }
+
+  async function deleteWheelPlay(playId, btn) {
+    const id = String(playId || "").trim();
+    if (!id) return;
+    const name =
+      btn?.closest(".wheel-play")?.querySelector(".wheel-play-name")?.textContent ||
+      "участника";
+    if (
+      !confirm(
+        `Сбросить выигрыш «${name}»?\nКлиент сможет снова крутить колесо.`
+      )
+    ) {
+      return;
+    }
+    if (btn) btn.disabled = true;
+    try {
+      await AdminAPI.deleteWheelPlay(id);
+      showWheelToast("Выигрыш сброшен");
+      await loadWheelPlays();
+    } catch (err) {
+      const detail =
+        err.data?.detail || err.data?.error || err.message || "Не удалось сбросить";
+      showWheelToast(detail);
+      if (btn) btn.disabled = false;
+    }
+  }
+
+  async function clearAllWheelPlays() {
+    const totalText =
+      $("#wheelPlaysBadge")?.textContent ||
+      $("#wheelPlaysStats b")?.textContent ||
+      "";
+    const first = confirm(
+      "Сбросить ВСЕХ участников фортуны?\nВсе выигрыши удалятся — клиенты смогут крутить колесо заново (новый период акции)."
+    );
+    if (!first) return;
+    const second = confirm(
+      totalText
+        ? `Точно удалить все записи (${totalText})? Это нельзя отменить.`
+        : "Точно удалить все записи? Это нельзя отменить."
+    );
+    if (!second) return;
+    const btn = $("#wheelPlaysClear");
+    if (btn) {
+      btn.disabled = true;
+      btn.textContent = "Сбрасываю…";
+    }
+    try {
+      const res = await AdminAPI.clearWheelPlays();
+      const n = res?.deleted ?? 0;
+      showWheelToast(n ? `Сброшено участников: ${n}` : "Список уже пуст");
+      await loadWheelPlays();
+    } catch (err) {
+      const detail =
+        err.data?.detail || err.data?.error || err.message || "Не удалось сбросить";
+      showWheelToast(detail);
+    } finally {
+      if (btn) {
+        btn.disabled = false;
+        btn.textContent = "Сбросить всех";
+      }
     }
   }
 
@@ -8584,6 +8672,12 @@
         saveWheelEditor();
       });
       $("#wheelPlaysRefresh")?.addEventListener("click", () => loadWheelPlays());
+      $("#wheelPlaysClear")?.addEventListener("click", () => clearAllWheelPlays());
+      $("#wheelPlaysList")?.addEventListener("click", (e) => {
+        const btn = e.target.closest("[data-play-del]");
+        if (!btn) return;
+        deleteWheelPlay(btn.getAttribute("data-play-del"), btn);
+      });
       $$(".wheel-tab").forEach((btn) => {
         btn.addEventListener("click", () => {
           setWheelTab(btn.getAttribute("data-wheel-tab"));
