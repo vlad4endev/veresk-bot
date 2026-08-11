@@ -7200,16 +7200,18 @@
 
   // ── Колесо фортуны (превью = тот же виджет, что в Mini App) ──────────────
 
-  const WHEEL_COLORS =
-    (window.VereskWheel && window.VereskWheel.DEFAULT_COLORS) ||
-    ["#d64593", "#3a2558", "#e86aad", "#5a3d7a", "#c43d86", "#7b4bd6", "#f47db9", "#241a38"];
+  const WHEEL_COLORS = ["#402C60", "#FF92CE", "#FFFFFF", "#402C60", "#FF92CE", "#FFFFFF", "#402C60", "#FF92CE"];
   const WHEEL_DEFAULT_SEGS = [
-    { id: "s1", label: "Скидка 10%", color: "#E879B0", weight: 30 },
-    { id: "s2", label: "Скидка 15%", color: "#3D2A55", weight: 18 },
-    { id: "s3", label: "Бесплатная доставка", color: "#F3C4DC", weight: 22 },
-    { id: "s4", label: "Попробуйте ещё", color: "#6B4C8A", weight: 20 },
-    { id: "s5", label: "Мини-букет", color: "#D4569A", weight: 10 },
+    { id: "s1", label: "Скидка 10%", color: "#402C60", weight: 30 },
+    { id: "s2", label: "Скидка 15%", color: "#FF92CE", weight: 18 },
+    { id: "s3", label: "Бесплатная доставка", color: "#FFFFFF", weight: 22 },
+    { id: "s4", label: "Попробуйте ещё", color: "#402C60", weight: 20 },
+    { id: "s5", label: "Мини-букет", color: "#FF92CE", weight: 10 },
   ];
+
+  function wheelBrandColor(i) {
+    return WHEEL_COLORS[i % WHEEL_COLORS.length];
+  }
 
   const wheelState = {
     inited: false,
@@ -7239,7 +7241,7 @@
       segments: wheelState.segs.map((s, i) => ({
         id: s.id,
         label: String(s.label || "").trim(),
-        color: s.color,
+        color: wheelBrandColor(i),
         weight: Math.max(0, Number(s.weight) || 0),
         order: i,
         chance_pct: wheelChancePct(s, wheelState.segs),
@@ -7285,9 +7287,11 @@
     }
     if (legend) {
       legend.innerHTML = wheelState.segs
-        .map((s) => {
+        .map((s, i) => {
           const pct = wheelChancePct(s, wheelState.segs);
-          return `<li><span class="wheel-legend-swatch" style="background:${esc(s.color)}"></span><span>${esc(s.label || "Без названия")}</span><b>${pct}%</b></li>`;
+          const color = wheelBrandColor(i);
+          const border = color.toLowerCase() === "#ffffff" ? "box-shadow:inset 0 0 0 1px rgba(64,44,96,.25);" : "";
+          return `<li><span class="wheel-legend-swatch" style="background:${esc(color)};${border}"></span><span>${esc(s.label || "Без названия")}</span><b>${pct}%</b></li>`;
         })
         .join("");
     }
@@ -7305,9 +7309,11 @@
     box.innerHTML = wheelState.segs
       .map((s, i) => {
         const pct = wheelChancePct(s, wheelState.segs);
+        const color = wheelBrandColor(i);
+        s.color = color;
         return `
         <div class="wheel-seg" role="listitem" data-id="${esc(s.id)}">
-          <input class="wheel-seg-color" type="color" value="${esc(s.color)}" data-field="color" aria-label="Цвет сектора ${i + 1}">
+          <input class="wheel-seg-color" type="color" value="${esc(color)}" data-field="color" tabindex="-1" aria-label="Цвет сектора ${i + 1} (брендбук)" title="Цвет из брендбука">
           <div class="wheel-seg-fields">
             <div>
               <label for="wheelSegLabel_${esc(s.id)}">Приз</label>
@@ -7331,7 +7337,7 @@
   }
 
   function pickWheelColor(index) {
-    return WHEEL_COLORS[index % WHEEL_COLORS.length];
+    return wheelBrandColor(index);
   }
 
   function addWheelSeg() {
@@ -7356,13 +7362,11 @@
     const seg = wheelState.segs.find((s) => s.id === id);
     if (!seg) return;
     if (field === "label") seg.label = value;
-    else if (field === "color") seg.color = value || pickWheelColor(0);
-    else if (field === "weight") seg.weight = Math.max(0, Number(value) || 0);
-
-    if (field === "color") {
+    else if (field === "color") {
+      /* цвета фиксирует бренд-цикл */
       renderWheelSegs();
       return;
-    }
+    } else if (field === "weight") seg.weight = Math.max(0, Number(value) || 0);
 
     if (field === "weight") {
       $$(".wheel-seg").forEach((el) => {

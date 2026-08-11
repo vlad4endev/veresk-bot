@@ -73,8 +73,8 @@
   width:min(122px, 34vw);
   height:auto;
   margin:0 auto 14px;
-  fill:var(--pink);
 }
+.vw-mark path{fill:#FF92CE;}
 .vw-eyebrow{
   margin:0 0 7px;
   font-size:9.5px;
