@@ -293,6 +293,14 @@ async def init_channel_subscriptions() -> None:
             db.commit()
 
     await _run_db(_init)
+    try:
+        from mailing_db import reclassify_messenger_stubs
+
+        n = await reclassify_messenger_stubs()
+        if n:
+            logger.info("Помечено stub-карточек подписчиков: %s", n)
+    except Exception:
+        logger.debug("reclassify_messenger_stubs failed", exc_info=True)
     logger.info("Подписчики канала: таблица готова (%s)", DATABASE_PATH)
 
 
@@ -755,7 +763,12 @@ async def get_subscription(tg_user_id: int) -> dict[str, Any] | None:
 
 
 async def ensure_customer_for_subscriber(tg_user_id: int) -> dict[str, Any] | None:
-    """Найти или создать CRM-карточку для подписчика (чтобы писать / слать рассылки)."""
+    """Временная локальная карточка для отправки (не Posiflora).
+
+    Stub с posiflora_id=tg:{id} нужен очереди личных сообщений/рассылок.
+    В «Базу клиентов» (Posiflora) такие карточки не попадают, пока человек
+    не пройдёт анкету с телефоном.
+    """
     from mailing_db import get_customer, get_customer_by_tg_user_id, upsert_customer
 
     tid = int(tg_user_id)
@@ -763,7 +776,13 @@ async def ensure_customer_for_subscriber(tg_user_id: int) -> dict[str, Any] | No
         return None
     existing = await get_customer_by_tg_user_id(tid)
     if existing:
-        return existing
+        # Уже есть реальная Posiflora-карточка — используем её
+        pf = str(existing.get("posiflora_id") or "")
+        if not pf.startswith("tg:") and not pf.startswith("max:"):
+            return existing
+        # Stub уже есть
+        if existing.get("segment") == "channel":
+            return existing
 
     sub = await get_subscription(tid)
     profile: dict[str, Any] | None = None
@@ -788,13 +807,14 @@ async def ensure_customer_for_subscriber(tg_user_id: int) -> dict[str, Any] | No
     if not name:
         name = f"TG {tid}"
 
+    # Stub: без телефона из анкеты не считаем клиентом Posiflora
     cid = await upsert_customer(
         posiflora_id=f"tg:{tid}",
         name=name,
-        phone=phone,
+        phone="",  # намеренно пусто — телефон только после анкеты
         tg_user_id=tid,
-        segment="new",
-        notes="Создан из подписчиков канала",
+        segment="channel",
+        notes="Подписчик канала (не в Posiflora до анкеты с телефоном)",
     )
     return await get_customer(cid)
 

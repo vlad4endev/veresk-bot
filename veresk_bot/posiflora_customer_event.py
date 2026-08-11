@@ -41,7 +41,8 @@ async def main() -> None:
 
     result = await sync_survey_profile_to_posiflora(
         profile,
-        telegram_id=int(os.getenv("TEST_TELEGRAM_ID", "0")),
+        int(os.getenv("TEST_TELEGRAM_ID", "0")),
+        channel="telegram",
     )
     logger.info("Результат: %s", result)
 

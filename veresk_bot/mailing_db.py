@@ -292,6 +292,15 @@ async def init_mailing_db() -> None:
 
 # ── customers ──────────────────────────────────────────────────────────────
 
+# Локальные карточки подписчиков канала/мессенджера без Posiflora.
+# Не должны попадать в «Базу клиентов», пока нет анкеты с телефоном.
+_MESSENGER_STUB_SQL = "(posiflora_id LIKE 'tg:%' OR posiflora_id LIKE 'max:%')"
+
+
+def is_messenger_stub_posiflora_id(posiflora_id: str | None) -> bool:
+    raw = str(posiflora_id or "").strip().lower()
+    return raw.startswith("tg:") or raw.startswith("max:")
+
 
 async def upsert_customer(
     *,
@@ -366,6 +375,94 @@ async def upsert_customer(
             return int(cur.lastrowid)
 
     return await _run_db(_upsert)
+
+
+async def absorb_messenger_stub(
+    *,
+    messenger_user_id: int,
+    channel: str,
+    keep_customer_id: int,
+) -> int:
+    """Склеить stub tg:/max: с реальной карточкой после анкеты → Posiflora."""
+    mid = int(messenger_user_id or 0)
+    keep_id = int(keep_customer_id or 0)
+    if not mid or not keep_id:
+        return 0
+    ch = str(channel or "telegram").strip().lower()
+    stub_pf = f"tg:{mid}" if ch == "telegram" else f"max:{mid}"
+
+    def _absorb() -> int:
+        with _connect() as db:
+            stub = db.execute(
+                "SELECT id FROM customers WHERE posiflora_id = ?",
+                (stub_pf,),
+            ).fetchone()
+            if not stub:
+                if ch == "telegram":
+                    stub = db.execute(
+                        """
+                        SELECT id FROM customers
+                        WHERE tg_user_id = ? AND posiflora_id LIKE 'tg:%' AND id != ?
+                        LIMIT 1
+                        """,
+                        (mid, keep_id),
+                    ).fetchone()
+                else:
+                    stub = db.execute(
+                        """
+                        SELECT id FROM customers
+                        WHERE CAST(max_user_id AS TEXT) = ?
+                          AND posiflora_id LIKE 'max:%' AND id != ?
+                        LIMIT 1
+                        """,
+                        (str(mid), keep_id),
+                    ).fetchone()
+            if not stub:
+                return 0
+            stub_id = int(stub["id"])
+            if stub_id == keep_id:
+                return 0
+            db.execute(
+                "UPDATE personal_messages SET customer_id = ? WHERE customer_id = ?",
+                (keep_id, stub_id),
+            )
+            db.execute(
+                "UPDATE campaign_recipients SET customer_id = ? WHERE customer_id = ?",
+                (keep_id, stub_id),
+            )
+            db.execute("DELETE FROM customers WHERE id = ?", (stub_id,))
+            db.commit()
+            return stub_id
+
+    removed = await _run_db(_absorb)
+    if removed:
+        logger.info(
+            "Stub %s поглощён карточкой #%s (удалён stub id=%s)",
+            stub_pf,
+            keep_id,
+            removed,
+        )
+    return removed
+
+
+async def reclassify_messenger_stubs() -> int:
+    """Пометить уже созданные stub-карточки сегментом channel."""
+
+    def _fix() -> int:
+        with _connect() as db:
+            cur = db.execute(
+                f"""
+                UPDATE customers
+                SET segment = 'channel'
+                WHERE {_MESSENGER_STUB_SQL}
+                  AND IFNULL(segment, '') != 'channel'
+                """
+            )
+            db.commit()
+            return int(cur.rowcount or 0)
+
+    return await _run_db(_fix)
+
 
 
 async def get_customer(customer_id: int) -> dict[str, Any] | None:
@@ -504,7 +601,7 @@ async def list_customers(
 
     def _list() -> tuple[list[dict[str, Any]], int]:
         with _connect() as db:
-            where: list[str] = []
+            where: list[str] = [f"NOT {_MESSENGER_STUB_SQL}"]
             params: list[Any] = []
             if segment and segment != "all":
                 where.append("segment = ?")
@@ -547,11 +644,13 @@ async def count_customers(segment: str | None = None) -> int:
         with _connect() as db:
             if segment and segment != "all":
                 row = db.execute(
-                    "SELECT COUNT(*) AS c FROM customers WHERE segment = ?",
+                    f"SELECT COUNT(*) AS c FROM customers WHERE segment = ? AND NOT {_MESSENGER_STUB_SQL}",
                     (segment,),
                 ).fetchone()
             else:
-                row = db.execute("SELECT COUNT(*) AS c FROM customers").fetchone()
+                row = db.execute(
+                    f"SELECT COUNT(*) AS c FROM customers WHERE NOT {_MESSENGER_STUB_SQL}"
+                ).fetchone()
         return int(row["c"])
 
     return await _run_db(_count)
@@ -2046,7 +2145,9 @@ async def delete_admin_session(token: str) -> None:
 async def get_stats() -> dict[str, Any]:
     def _stats() -> dict[str, Any]:
         with _connect() as db:
-            customers = db.execute("SELECT COUNT(*) AS c FROM customers").fetchone()["c"]
+            customers = db.execute(
+                f"SELECT COUNT(*) AS c FROM customers WHERE NOT {_MESSENGER_STUB_SQL}"
+            ).fetchone()["c"]
             accounts_ready = db.execute(
                 "SELECT COUNT(*) AS c FROM send_accounts WHERE status = 'ready'"
             ).fetchone()["c"]
@@ -2095,12 +2196,12 @@ async def customers_for_segment(segment: str) -> list[dict[str, Any]]:
         with _connect() as db:
             if segment and segment != "all":
                 rows = db.execute(
-                    "SELECT * FROM customers WHERE segment = ? ORDER BY id",
+                    f"SELECT * FROM customers WHERE segment = ? AND NOT {_MESSENGER_STUB_SQL} ORDER BY id",
                     (segment,),
                 ).fetchall()
             else:
                 rows = db.execute(
-                    "SELECT * FROM customers ORDER BY id"
+                    f"SELECT * FROM customers WHERE NOT {_MESSENGER_STUB_SQL} ORDER BY id"
                 ).fetchall()
         return [dict(r) for r in rows]
 

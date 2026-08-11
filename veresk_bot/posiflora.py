@@ -73,6 +73,64 @@ def _normalize_phone(phone: str) -> str:
     return digits
 
 
+def _phone_digits_match(a: str, b: str) -> bool:
+    """Сравнение телефонов по 10 последним цифрам (игнор формата)."""
+    da = _normalize_phone(a)
+    db = _normalize_phone(b)
+    if not da or not db:
+        return False
+    return da[-10:] == db[-10:]
+
+
+_SURVEY_NOTES_MARKERS = (
+    "📱 Анкета Veresk",
+    "Анкета Veresk",
+)
+
+
+def _strip_survey_notes_block(notes: str) -> str:
+    """Убрать предыдущий блок анкеты из notes, сохранив остальное."""
+    text = str(notes or "").strip()
+    if not text:
+        return ""
+    lines = text.splitlines()
+    out: list[str] = []
+    skipping = False
+    for line in lines:
+        if any(marker in line for marker in _SURVEY_NOTES_MARKERS):
+            skipping = True
+            continue
+        if skipping:
+            if line.startswith("🎡"):
+                skipping = False
+                out.append(line)
+                continue
+            if line.startswith("─") or line.startswith("👤") or line.startswith("📞"):
+                continue
+            if line.startswith("💰") or line.startswith("💵") or line.startswith("📣"):
+                continue
+            if line.startswith("🆔") or line.startswith("📅"):
+                continue
+            if line.startswith("—") or re.match(r"^\d+\.\s", line):
+                continue
+            if not line.strip():
+                continue
+            skipping = False
+            out.append(line)
+            continue
+        out.append(line)
+    return "\n".join(out).strip()
+
+
+def _merge_survey_notes(existing_notes: str, survey_notes: str) -> str:
+    """Заменить блок анкеты, сохранив прочие заметки (в т.ч. призы колеса)."""
+    rest = _strip_survey_notes_block(existing_notes)
+    survey = str(survey_notes or "").strip()
+    if rest and survey:
+        return f"{survey}\n\n{rest}".strip()
+    return survey or rest
+
+
 def _parse_iso_epoch(value: Any) -> float | None:
     """ISO-8601 (например, expireAt из Posiflora) → epoch-секунды."""
     if not value:
@@ -195,7 +253,9 @@ def _budget_to_amount(budget: str) -> int:
 
 def _build_profile_notes(
     profile: dict[str, Any],
-    telegram_id: int,
+    messenger_user_id: int,
+    *,
+    channel: str = "telegram",
 ) -> str:
     """Полная карточка ответов анкеты → customers.attributes.notes."""
     name = str(profile.get("name", "")).strip() or "—"
@@ -203,9 +263,12 @@ def _build_profile_notes(
     budget = str(profile.get("budget", "")).strip() or "—"
     source = str(profile.get("source", "")).strip() or "—"
     amount = _budget_to_amount(budget) if budget != "—" else None
+    ch = str(channel or "telegram").strip().lower()
+    channel_label = "MAX-бот" if ch == "max" else "Telegram-бот"
+    id_label = "MAX ID" if ch == "max" else "Telegram ID"
 
     lines = [
-        "📱 Анкета Veresk (Telegram-бот)",
+        f"📱 Анкета Veresk ({channel_label})",
         "─────────────────────────",
         f"👤 Имя: {name}",
         f"📞 Телефон: {phone}",
@@ -216,7 +279,7 @@ def _build_profile_notes(
     lines.extend(
         [
             f"📣 Откуда узнали: {source}",
-            f"🆔 Telegram ID: {telegram_id}",
+            f"🆔 {id_label}: {messenger_user_id}",
             "",
             "📅 Важные даты:",
         ]
@@ -514,6 +577,8 @@ async def find_customer_by_phone(
     phone: str,
 ) -> str | None:
     normalized = _normalize_phone(phone)
+    if not normalized:
+        return None
     data = await _api_request(
         session,
         "GET",
@@ -523,7 +588,47 @@ async def find_customer_by_phone(
     customers = data.get("data") or []
     if not customers:
         return None
-    return str(customers[0]["id"])
+
+    # search в Posiflora может вернуть «похожих» — берём точное совпадение по цифрам
+    for item in customers:
+        attrs = item.get("attributes") or {}
+        cand = str(attrs.get("phone") or "")
+        country = attrs.get("countryCode")
+        if country is not None and cand and not cand.startswith(str(country)):
+            cand_full = f"{country}{cand}"
+        else:
+            cand_full = cand
+        if _phone_digits_match(cand, normalized) or _phone_digits_match(
+            cand_full, normalized
+        ):
+            return str(item["id"])
+
+    logger.warning(
+        "Posiflora search по телефону %s вернул %s записей без точного совпадения",
+        normalized,
+        len(customers),
+    )
+    return None
+
+
+async def fetch_customer(
+    session: aiohttp.ClientSession,
+    access_token: str,
+    customer_id: str,
+) -> dict[str, Any] | None:
+    """GET /customers/{id} → data object или None."""
+    try:
+        data = await _api_request(
+            session,
+            "GET",
+            f"/customers/{customer_id}",
+            access_token=access_token,
+        )
+    except PosifloraAPIError:
+        logger.debug("Posiflora: клиент #%s не найден", customer_id, exc_info=True)
+        return None
+    item = data.get("data")
+    return item if isinstance(item, dict) else None
 
 
 async def _list_customer_sources(
@@ -624,13 +729,17 @@ async def update_customer(
     *,
     title: str | None = None,
     notes: str | None = None,
+    phone: str | None = None,
     source_id: str | None = None,
 ) -> None:
-    attributes: dict[str, str] = {}
+    attributes: dict[str, Any] = {}
     if title is not None:
         attributes["title"] = title.strip()
     if notes is not None:
         attributes["notes"] = notes
+    if phone is not None and str(phone).strip():
+        attributes["phone"] = _normalize_phone(phone)
+        attributes["countryCode"] = 7
 
     payload: dict[str, Any] = {
         "data": {
@@ -657,10 +766,11 @@ async def sync_customer_card_from_survey(
     access_token: str,
     customer_id: str,
     profile: dict[str, Any],
-    telegram_id: int,
+    messenger_user_id: int,
     *,
     source_id: str | None,
-) -> None:
+    channel: str = "telegram",
+) -> str:
     """
     Заполняет карточку клиента Posiflora по ответам анкеты бота.
 
@@ -670,21 +780,35 @@ async def sync_customer_card_from_survey(
     | phone       | attributes.phone, countryCode  |
     | source      | relationships.customerSources  |
     | все ответы  | attributes.notes             |
+
+    Возвращает итоговые notes, записанные в Posiflora.
     """
     name = str(profile.get("name", "")).strip()
-    notes = _build_profile_notes(profile, telegram_id)
+    phone = str(profile.get("phone", "")).strip()
+    survey_notes = _build_profile_notes(
+        profile, messenger_user_id, channel=channel
+    )
+
+    existing_notes = ""
+    current = await fetch_customer(session, access_token, customer_id)
+    if current:
+        existing_notes = str((current.get("attributes") or {}).get("notes") or "")
+    notes = _merge_survey_notes(existing_notes, survey_notes)
+
     await update_customer(
         session,
         access_token,
         customer_id,
         title=name,
         notes=notes,
+        phone=phone or None,
         source_id=source_id,
     )
     logger.info(
-        "Posiflora: карточка клиента #%s — имя, источник, notes",
+        "Posiflora: карточка клиента #%s обновлена — имя, телефон, источник, notes",
         customer_id,
     )
+    return notes
 
 
 async def get_or_create_customer_id_by_phone(
@@ -705,14 +829,29 @@ async def get_or_create_customer_id_by_phone(
         logger.info("Posiflora: клиент найден по телефону, id=%s", customer_id)
         return customer_id, False
 
-    customer_id = await create_customer(
-        session,
-        access_token,
-        phone,
-        title,
-        notes=notes,
-        source_id=source_id,
-    )
+    try:
+        customer_id = await create_customer(
+            session,
+            access_token,
+            phone,
+            title,
+            notes=notes,
+            source_id=source_id,
+        )
+    except PosifloraAPIError as exc:
+        # гонка / дубликат: повторный поиск
+        logger.warning(
+            "Posiflora: создание клиента не удалось (%s) — повторный поиск по телефону",
+            exc,
+        )
+        customer_id = await find_customer_by_phone(session, access_token, phone)
+        if customer_id:
+            logger.info(
+                "Posiflora: клиент найден после ошибки создания, id=%s", customer_id
+            )
+            return customer_id, False
+        raise
+
     logger.info("Posiflora: клиент создан, id=%s", customer_id)
     return customer_id, True
 
@@ -742,6 +881,7 @@ async def find_or_create_customer(
             customer_id,
             title=title,
             notes=notes,
+            phone=phone,
             source_id=source_id,
         )
     return customer_id, created
@@ -1236,24 +1376,56 @@ async def create_customer_event_by_phone(
     return event_id, customer_id, created
 
 
+async def append_customer_prize_note_to_posiflora(
+    posiflora_id: str,
+    prize_note: str,
+) -> None:
+    """Дописать строку приза в notes карточки Posiflora."""
+    note = str(prize_note or "").strip()
+    pf_id = str(posiflora_id or "").strip()
+    if not note or not pf_id:
+        return
+    async with aiohttp.ClientSession() as session:
+        access_token = await _get_access_token(session)
+        current = await fetch_customer(session, access_token, pf_id)
+        existing = ""
+        if current:
+            existing = str((current.get("attributes") or {}).get("notes") or "")
+        if note in existing:
+            return
+        merged = f"{existing}\n{note}".strip() if existing else note
+        if len(merged) > 4000:
+            merged = merged[-4000:]
+        await update_customer(session, access_token, pf_id, notes=merged)
+        logger.info("Posiflora: приз записан в notes клиента #%s", pf_id)
+
+
 async def sync_survey_profile_to_posiflora(
     profile: dict[str, Any],
-    telegram_id: int,
+    messenger_user_id: int,
+    *,
+    channel: str = "telegram",
 ) -> dict[str, Any]:
     """
     Синхронизация анкеты (7 вопросов) с Posiflora:
     1. Поиск клиента по телефону → id (или создание → id)
-    2. Заполнение карточки: имя, источник, notes
+    2. Заполнение карточки: имя, телефон, источник, notes
     3. Каждая дата — отдельный POST /customer-events
+    4. Зеркало в локальную CRM (mailing customers)
     """
     name = str(profile.get("name", "")).strip()
     phone = str(profile.get("phone", "")).strip()
     events = list(profile.get("events") or [])
+    ch = str(channel or "telegram").strip().lower()
+    if ch not in ("telegram", "max"):
+        ch = "telegram"
 
     if not name or not phone:
         raise PosifloraAPIError("Для синхронизации нужны имя и телефон клиента")
 
-    notes = _build_profile_notes(profile, telegram_id)
+    survey_notes = _build_profile_notes(
+        profile, messenger_user_id, channel=ch
+    )
 
     async with aiohttp.ClientSession() as session:
         access_token = await _get_access_token(session)
@@ -1267,16 +1439,17 @@ async def sync_survey_profile_to_posiflora(
             access_token,
             phone,
             name,
-            notes=notes,
+            notes=survey_notes,
             source_id=source_id,
         )
-        await sync_customer_card_from_survey(
+        merged_notes = await sync_customer_card_from_survey(
             session,
             access_token,
             customer_id,
             profile,
-            telegram_id,
+            messenger_user_id,
             source_id=source_id,
+            channel=ch,
         )
 
         (
@@ -1291,10 +1464,56 @@ async def sync_survey_profile_to_posiflora(
             events,
         )
 
+    local_customer_id: int | None = None
+    try:
+        from mailing_db import get_customer_by_posiflora_id, upsert_customer
+
+        segment = "new"
+        if not created:
+            existing_local = await get_customer_by_posiflora_id(str(customer_id))
+            segment = str((existing_local or {}).get("segment") or "all")
+
+        local_customer_id = await upsert_customer(
+            posiflora_id=str(customer_id),
+            name=name,
+            phone=phone,
+            notes=merged_notes,
+            tg_user_id=int(messenger_user_id) if ch == "telegram" else None,
+            max_user_id=int(messenger_user_id) if ch == "max" else None,
+            segment=segment,
+        )
+        try:
+            from mailing_db import absorb_messenger_stub
+
+            await absorb_messenger_stub(
+                messenger_user_id=int(messenger_user_id),
+                channel=ch,
+                keep_customer_id=int(local_customer_id),
+            )
+        except Exception:
+            logger.debug(
+                "Не удалось поглотить messenger-stub для %s:%s",
+                ch,
+                messenger_user_id,
+                exc_info=True,
+            )
+        logger.info(
+            "Posiflora→CRM: клиент posiflora_id=%s → local_id=%s (%s)",
+            customer_id,
+            local_customer_id,
+            "создан в Posiflora" if created else "обновлён в Posiflora",
+        )
+    except Exception:
+        logger.exception(
+            "Не удалось зеркалировать клиента Posiflora #%s в локальную CRM",
+            customer_id,
+        )
+
     posiflora_ok = bool(customer_id)
     return {
         "customer_id": customer_id,
         "customer_created": created,
+        "local_customer_id": local_customer_id,
         "source_id": source_id,
         "event_ids": event_ids,
         "celebration_ids": celebration_ids,
