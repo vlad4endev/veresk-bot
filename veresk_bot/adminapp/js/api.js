@@ -253,6 +253,12 @@ const AdminAPI = (() => {
         method: "POST",
         body: JSON.stringify(body),
       }),
+    wheelConfig: () => request("/api/admin/wheel"),
+    wheelSave: (body) =>
+      request("/api/admin/wheel", {
+        method: "POST",
+        body: JSON.stringify(body),
+      }),
     chatAccounts: () => request("/api/admin/chats/accounts"),
     chatDialogs: (params = {}) => {
       const q = new URLSearchParams(params).toString();

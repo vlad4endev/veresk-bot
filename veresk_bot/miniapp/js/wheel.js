@@ -1,4 +1,4 @@
-/* Mini App — экран колеса фортуны (конфиг пока локальный, позже с API админки) */
+/* Mini App — экран колеса фортуны */
 
 (function () {
   const DEFAULT_CONFIG = {
@@ -15,16 +15,43 @@
 
   let widget = null;
   let lastPrize = null;
+  let cachedConfig = null;
+  let loading = null;
+
+  async function fetchWheelConfig(force) {
+    if (!force && cachedConfig) return cachedConfig;
+    if (loading) return loading;
+    loading = (async () => {
+      try {
+        const resp = await fetch("/api/wheel", { credentials: "same-origin" });
+        if (!resp.ok) throw new Error("wheel_http_" + resp.status);
+        const data = await resp.json();
+        if (!data || !Array.isArray(data.segments) || data.segments.length < 2) {
+          throw new Error("wheel_bad_payload");
+        }
+        cachedConfig = data;
+        return cachedConfig;
+      } catch (err) {
+        console.warn("[wheel] config fallback", err);
+        if (!cachedConfig) cachedConfig = DEFAULT_CONFIG;
+        return cachedConfig;
+      } finally {
+        loading = null;
+      }
+    })();
+    return loading;
+  }
 
   function mountWheel(config) {
     const root = document.getElementById("miniWheelMount");
     if (!root || !window.VereskWheel?.create) return null;
+    const cfg = config || cachedConfig || DEFAULT_CONFIG;
     if (widget) {
-      widget.setConfig(config || DEFAULT_CONFIG);
+      widget.setConfig(cfg);
       return widget;
     }
     widget = window.VereskWheel.create(root, {
-      ...(config || DEFAULT_CONFIG),
+      ...cfg,
       onSpinEnd(segment) {
         lastPrize = segment;
         try {
@@ -37,17 +64,26 @@
     return widget;
   }
 
-  function openWheelScreen(config) {
-    mountWheel(config || DEFAULT_CONFIG);
+  async function openWheelScreen(config) {
+    const cfg = config || (await fetchWheelConfig(true));
+    mountWheel(cfg);
     if (typeof window.goTo === "function") window.goTo("wheel");
   }
 
   window.VereskFortuneWheel = {
     DEFAULT_CONFIG,
-    mount: mountWheel,
+    mount: async (config) => {
+      const cfg = config || (await fetchWheelConfig(true));
+      return mountWheel(cfg);
+    },
     open: openWheelScreen,
     getWidget: () => widget,
     getLastPrize: () => lastPrize,
+    reload: async () => {
+      cachedConfig = null;
+      const cfg = await fetchWheelConfig(true);
+      return mountWheel(cfg);
+    },
   };
 
   document.getElementById("wheel-back")?.addEventListener("click", () => {

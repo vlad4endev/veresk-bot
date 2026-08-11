@@ -15,6 +15,7 @@ from typing import Any
 from aiohttp import web
 
 from ai_compose import (
+    DEEPSEEK_MODEL_ALIASES,
     PROVIDER_PRESETS,
     PROVIDERS,
     AiComposeError,
@@ -82,6 +83,7 @@ from mailing_db import (
     normalize_phone_db,
 )
 import runtime_settings
+from fortune_wheel import get_config as get_wheel_config, save_config as save_wheel_config
 from bot_metrics import get_bot_metrics, init_bot_metrics
 from posiflora_sync import last_sync_info, sync_from_posiflora
 from senders.matching import (
@@ -2527,6 +2529,15 @@ async def handle_ai_settings_save(request: web.Request) -> web.Response:
     elif "model" in body or provider:
         values["ai_model"] = model or preset["model"]
 
+    # DeepSeek: старые deepseek-chat / reasoner → v4-pro
+    if provider == "deepseek":
+        chosen = str(values.get("ai_model") or runtime_settings.get("ai_model") or "")
+        mapped = DEEPSEEK_MODEL_ALIASES.get(chosen.lower())
+        if mapped:
+            values["ai_model"] = mapped
+        elif not chosen:
+            values["ai_model"] = preset["model"]
+
     if provider == "yandexgpt":
         if folder_id:
             values["ai_folder_id"] = folder_id
@@ -4436,6 +4447,33 @@ async def handle_max_webhook_status(request: web.Request) -> web.Response:
     )
 
 
+
+async def handle_wheel_get(request: web.Request) -> web.Response:
+    err = await _require_perm(request, "wheel")
+    if err:
+        return err
+    return _json(get_wheel_config())
+
+
+async def handle_wheel_save(request: web.Request) -> web.Response:
+    err = await _require_perm(request, "wheel")
+    if err:
+        return err
+    try:
+        body = await request.json()
+    except Exception:
+        return _json({"error": "invalid_json"}, status=400)
+    try:
+        cfg = save_wheel_config(body)
+    except ValueError as exc:
+        return _json({"error": "validation_error", "detail": str(exc)}, status=400)
+    return _json({"ok": True, **cfg})
+
+
+async def handle_wheel_public_get(_request: web.Request) -> web.Response:
+    """Публичный конфиг для Mini App — без авторизации."""
+    return _json(get_wheel_config())
+
 def setup_admin_routes(app: web.Application) -> None:
     routes = [
         ("/api/admin/login", handle_login, "POST"),
@@ -4505,6 +4543,9 @@ def setup_admin_routes(app: web.Application) -> None:
         ("/api/admin/ai/chat", handle_ai_chat, "POST"),
         ("/api/admin/ai/settings", handle_ai_settings_get, "GET"),
         ("/api/admin/ai/settings", handle_ai_settings_save, "POST"),
+        ("/api/admin/wheel", handle_wheel_get, "GET"),
+        ("/api/admin/wheel", handle_wheel_save, "POST"),
+        ("/api/wheel", handle_wheel_public_get, "GET"),
     ]
     options_done: set[str] = set()
     for path, handler, method in routes:

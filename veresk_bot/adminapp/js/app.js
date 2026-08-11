@@ -6980,16 +6980,89 @@
     if (errEl) errEl.hidden = true;
   }
 
-  function resetWheelEditor() {
-    wheelState.segs = WHEEL_DEFAULT_SEGS.map((s) => ({ ...s, id: uidWheelSeg() }));
+  function applyWheelConfig(cfg) {
+    const data = cfg || {};
     const title = $("#wheelTitle");
     const note = $("#wheelNote");
     const err = $("#wheelError");
-    if (title) title.value = "Весенний розыгрыш";
-    if (note) note.value = "Крутите колесо — получите подарок от Veresk";
+    if (title) title.value = String(data.title || "");
+    if (note) note.value = String(data.note || "");
     if (err) err.hidden = true;
+    const segs = Array.isArray(data.segments) ? data.segments : [];
+    wheelState.segs = segs.map((s, i) => ({
+      id: String(s.id || uidWheelSeg()),
+      label: String(s.label || "").trim(),
+      color: s.color || WHEEL_COLORS[i % WHEEL_COLORS.length],
+      weight: Math.max(0, Number(s.weight) || 0),
+    }));
+    if (wheelState.segs.length < 2) {
+      wheelState.segs = WHEEL_DEFAULT_SEGS.map((s) => ({ ...s, id: uidWheelSeg() }));
+      if (title && !title.value) title.value = "Весенний розыгрыш";
+      if (note && !note.value) note.value = "Крутите колесо — получите подарок от Veresk";
+    }
     ensureWheelWidget();
     renderWheelSegs();
+  }
+
+  function resetWheelEditor() {
+    applyWheelConfig({
+      title: "Весенний розыгрыш",
+      note: "Крутите колесо — получите подарок от Veresk",
+      segments: WHEEL_DEFAULT_SEGS,
+    });
+  }
+
+  async function loadWheelEditor() {
+    const errEl = $("#wheelError");
+    try {
+      const cfg = await AdminAPI.wheelConfig();
+      applyWheelConfig(cfg);
+    } catch (err) {
+      console.warn("[wheel] load failed, using defaults", err);
+      resetWheelEditor();
+      if (errEl && err.status !== 401) {
+        errEl.textContent =
+          "Не удалось загрузить сохранённые настройки — показаны значения по умолчанию";
+        errEl.hidden = false;
+      }
+    }
+  }
+
+  async function saveWheelEditor() {
+    const msg = validateWheelDraft();
+    const errEl = $("#wheelError");
+    const btn = $("#wheelSave");
+    if (msg) {
+      if (errEl) {
+        errEl.textContent = msg;
+        errEl.hidden = false;
+      }
+      return;
+    }
+    if (errEl) errEl.hidden = true;
+    if (btn) {
+      btn.disabled = true;
+      btn.textContent = "Сохраняю…";
+    }
+    try {
+      const saved = await AdminAPI.wheelSave(collectWheelPayload());
+      applyWheelConfig(saved);
+      alert("Настройки фортуны сохранены");
+    } catch (err) {
+      const detail =
+        err.data?.detail || err.data?.error || err.message || "Ошибка сохранения";
+      if (errEl) {
+        errEl.textContent = detail;
+        errEl.hidden = false;
+      } else {
+        alert(detail);
+      }
+    } finally {
+      if (btn) {
+        btn.disabled = false;
+        btn.textContent = "Сохранить";
+      }
+    }
   }
 
   function initWheelEditor() {
@@ -7013,24 +7086,12 @@
       $("#wheelTitle")?.addEventListener("input", syncWheelWidget);
       $("#wheelNote")?.addEventListener("input", syncWheelWidget);
       $("#wheelSave")?.addEventListener("click", () => {
-        const msg = validateWheelDraft();
-        const errEl = $("#wheelError");
-        if (msg) {
-          if (errEl) {
-            errEl.textContent = msg;
-            errEl.hidden = false;
-          }
-          return;
-        }
-        if (errEl) errEl.hidden = true;
-        console.info("[wheel] draft ready", collectWheelPayload());
-        alert("Черновик собран. Сохранение в API подключим при встраивании раздела.");
+        saveWheelEditor();
       });
       wheelState.inited = true;
-      resetWheelEditor();
+      loadWheelEditor();
     } else {
-      ensureWheelWidget();
-      renderWheelSegs();
+      loadWheelEditor();
     }
   }
   window.initWheelEditor = initWheelEditor;
