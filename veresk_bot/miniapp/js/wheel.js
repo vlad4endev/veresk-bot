@@ -5,11 +5,11 @@
     title: "Весенний розыгрыш",
     note: "Крутите колесо — получите подарок от Veresk",
     segments: [
-      { id: "s1", label: "Скидка 10%", color: "#d64593", weight: 30 },
-      { id: "s2", label: "Скидка 15%", color: "#3a2558", weight: 18 },
-      { id: "s3", label: "Бесплатная доставка", color: "#e86aad", weight: 22 },
-      { id: "s4", label: "Попробуйте ещё", color: "#5a3d7a", weight: 20 },
-      { id: "s5", label: "Мини-букет", color: "#c43d86", weight: 10 },
+      { id: "s1", label: "Скидка 10%", color: "#E879B0", weight: 30 },
+      { id: "s2", label: "Скидка 15%", color: "#3D2A55", weight: 18 },
+      { id: "s3", label: "Бесплатная доставка", color: "#F3C4DC", weight: 22 },
+      { id: "s4", label: "Попробуйте ещё", color: "#6B4C8A", weight: 20 },
+      { id: "s5", label: "Мини-букет", color: "#D4569A", weight: 10 },
     ],
   };
 

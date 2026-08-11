@@ -5,15 +5,16 @@
 (function (global) {
   "use strict";
 
+  // Мягкая палитра Veresk (светлый / тёмный чередуются)
   const DEFAULT_COLORS = [
-    "#d64593",
-    "#3a2558",
-    "#e86aad",
-    "#5a3d7a",
-    "#c43d86",
-    "#7b4bd6",
-    "#f47db9",
-    "#241a38",
+    "#E879B0",
+    "#3D2A55",
+    "#F3C4DC",
+    "#6B4C8A",
+    "#D4569A",
+    "#52406A",
+    "#F0A8CB",
+    "#2A1B3D",
   ];
 
   function esc(s) {
@@ -60,56 +61,80 @@
     const g = parseInt(h.slice(2, 4), 16);
     const b = parseInt(h.slice(4, 6), 16);
     const lum = (0.299 * r + 0.587 * g + 0.114 * b) / 255;
-    return lum > 0.62 ? "#241a38" : "#ffffff";
+    return lum > 0.58 ? "#2A1B3D" : "#ffffff";
+  }
+
+  function shortenLabel(label, span) {
+    const raw = String(label || "").trim();
+    if (span < 18) return raw.slice(0, 8);
+    if (span < 28) return raw.slice(0, 12);
+    if (span < 40) return raw.slice(0, 16);
+    return raw.slice(0, 20);
   }
 
   function buildSvg(segments) {
     const size = 320;
     const cx = size / 2;
     const cy = size / 2;
-    const r = 148;
+    const r = 138;
     const total = totalWeight(segments);
     if (!segments.length || total <= 0) {
       return `<svg class="vw-svg" viewBox="0 0 ${size} ${size}" aria-hidden="true">
-        <circle cx="${cx}" cy="${cy}" r="${r}" fill="#f3ebf6"/>
-        <text x="${cx}" y="${cy}" text-anchor="middle" dominant-baseline="middle" fill="#9488a8" font-size="14">Нет секторов</text>
+        <circle cx="${cx}" cy="${cy}" r="${r}" fill="#F7F0F8"/>
+        <text x="${cx}" y="${cy}" text-anchor="middle" dominant-baseline="middle" fill="#9A8AAD" font-size="13" font-family="system-ui,sans-serif">Нет секторов</text>
       </svg>`;
     }
 
     let angle = 0;
     const parts = [];
     const labels = [];
+    const ticks = [];
     segments.forEach((s) => {
       const span = (Math.max(0, Number(s.weight) || 0) / total) * 360;
       const start = angle;
       const end = angle + span;
       const mid = start + span / 2;
       parts.push(
-        `<path d="${slicePath(cx, cy, r, start, end)}" fill="${esc(s.color)}" stroke="rgba(255,255,255,.55)" stroke-width="1.5"/>`
+        `<path d="${slicePath(cx, cy, r, start, end)}" fill="${esc(s.color)}" stroke="rgba(255,255,255,.72)" stroke-width="2"/>`
       );
 
-      if (span >= 12) {
-        const [tx, ty] = polar(cx, cy, r * 0.62, mid);
-        const rot = mid;
-        const text = String(s.label || "").slice(0, 18);
-        const fs = span < 28 ? 9 : span < 45 ? 11 : 13;
+      const [t1x, t1y] = polar(cx, cy, r - 1, start);
+      const [t2x, t2y] = polar(cx, cy, r + 8, start);
+      ticks.push(`<line x1="${t1x}" y1="${t1y}" x2="${t2x}" y2="${t2y}" stroke="rgba(255,255,255,.55)" stroke-width="2" stroke-linecap="round"/>`);
+
+      if (span >= 14) {
+        const [tx, ty] = polar(cx, cy, r * 0.64, mid);
+        const text = shortenLabel(s.label, span);
+        const fs = span < 24 ? 9.5 : span < 36 ? 11 : 12.5;
         labels.push(
-          `<text class="vw-label" x="${tx}" y="${ty}" fill="${contrastText(s.color)}" font-size="${fs}" text-anchor="middle" dominant-baseline="middle" transform="rotate(${rot} ${tx} ${ty})">${esc(text)}</text>`
+          `<text class="vw-label" x="${tx}" y="${ty}" fill="${contrastText(s.color)}" font-size="${fs}" text-anchor="middle" dominant-baseline="middle" transform="rotate(${mid} ${tx} ${ty})">${esc(text)}</text>`
         );
       }
       angle = end;
     });
 
+    const uid = "vw" + Math.random().toString(36).slice(2, 8);
+
     return `<svg class="vw-svg" viewBox="0 0 ${size} ${size}" aria-hidden="true">
       <defs>
-        <filter id="vwInner" x="-20%" y="-20%" width="140%" height="140%">
-          <feDropShadow dx="0" dy="1" stdDeviation="1.2" flood-color="#000" flood-opacity=".12"/>
-        </filter>
+        <radialGradient id="${uid}-glow" cx="50%" cy="42%" r="58%">
+          <stop offset="0%" stop-color="#fff" stop-opacity=".22"/>
+          <stop offset="55%" stop-color="#fff" stop-opacity="0"/>
+          <stop offset="100%" stop-color="#2A1B3D" stop-opacity=".08"/>
+        </radialGradient>
+        <linearGradient id="${uid}-rim" x1="0%" y1="0%" x2="100%" y2="100%">
+          <stop offset="0%" stop-color="#FFFFFF"/>
+          <stop offset="45%" stop-color="#F4ECF7"/>
+          <stop offset="100%" stop-color="#E4D5EE"/>
+        </linearGradient>
       </defs>
-      <g filter="url(#vwInner)">${parts.join("")}</g>
-      <circle cx="${cx}" cy="${cy}" r="${r}" fill="none" stroke="rgba(58,37,88,.35)" stroke-width="6"/>
-      <circle cx="${cx}" cy="${cy}" r="${r - 3}" fill="none" stroke="rgba(255,255,255,.35)" stroke-width="2"/>
+      <circle cx="${cx}" cy="${cy}" r="${r + 14}" fill="url(#${uid}-rim)"/>
+      <circle cx="${cx}" cy="${cy}" r="${r + 11}" fill="none" stroke="rgba(61,42,85,.08)" stroke-width="1"/>
+      <g>${parts.join("")}</g>
+      <circle cx="${cx}" cy="${cy}" r="${r}" fill="url(#${uid}-glow)"/>
+      <g opacity=".9">${ticks.join("")}</g>
       ${labels.join("")}
+      <circle cx="${cx}" cy="${cy}" r="${r}" fill="none" stroke="rgba(255,255,255,.4)" stroke-width="1.5"/>
     </svg>`;
   }
 
@@ -150,16 +175,20 @@
     root.classList.add("vw-root");
     root.innerHTML = `
       <div class="vw-meta">
+        <div class="vw-kicker">Колесо фортуны</div>
         <div class="vw-title"></div>
         <div class="vw-note"></div>
       </div>
       <div class="vw-stage">
-        <div class="vw-pointer" aria-hidden="true"></div>
+        <div class="vw-aura" aria-hidden="true"></div>
+        <div class="vw-pointer" aria-hidden="true"><span></span></div>
         <div class="vw-disc"></div>
-        <button type="button" class="vw-hub" aria-label="Крутить колесо">GO</button>
+        <button type="button" class="vw-hub" aria-label="Крутить колесо">
+          <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path fill="currentColor" d="M8.5 6.8v10.4c0 .7.8 1.1 1.4.7l8.2-5.2c.6-.4.6-1.2 0-1.5L9.9 6.1c-.6-.4-1.4 0-1.4.7z"/></svg>
+        </button>
       </div>
       <div class="vw-result" hidden></div>
-      <button type="button" class="vw-spin-btn">Крутить колесо</button>
+      <button type="button" class="vw-spin-btn">Крутить</button>
     `;
 
     const titleEl = root.querySelector(".vw-title");
@@ -170,8 +199,8 @@
     const spinBtn = root.querySelector(".vw-spin-btn");
 
     function paint() {
-      if (titleEl) titleEl.textContent = title || "Колесо фортуны";
-      if (noteEl) noteEl.textContent = note || "Нажмите GO, чтобы крутить";
+      if (titleEl) titleEl.textContent = title || "Розыгрыш";
+      if (noteEl) noteEl.textContent = note || "Нажмите, чтобы крутить";
       if (discEl) {
         const keep = discEl.style.transform;
         discEl.innerHTML = buildSvg(segments);
@@ -227,11 +256,13 @@
       const target = extraTurns * 360 + (360 - mid);
       rotation = (rotation % 360) + target;
       spinning = true;
+      root.classList.add("is-spinning");
       discEl.classList.add("is-spinning");
       discEl.style.transform = `rotate(${rotation}deg)`;
       if (resultEl) {
         resultEl.hidden = true;
         resultEl.textContent = "";
+        resultEl.classList.remove("is-show");
       }
       hubBtn.disabled = true;
       spinBtn.disabled = true;
@@ -241,12 +272,14 @@
         if (spinTimer) clearTimeout(spinTimer);
         spinTimer = setTimeout(() => {
           spinning = false;
+          root.classList.remove("is-spinning");
           discEl.classList.remove("is-spinning");
           hubBtn.disabled = false;
           spinBtn.disabled = false;
           if (resultEl) {
             resultEl.hidden = false;
-            resultEl.textContent = `🎉 ${picked.segment.label}`;
+            resultEl.textContent = picked.segment.label;
+            resultEl.classList.add("is-show");
           }
           if (typeof options.onSpinEnd === "function") {
             options.onSpinEnd(picked.segment, picked.index);
@@ -261,6 +294,7 @@
         if (err && err.message === "need segments" && resultEl) {
           resultEl.hidden = false;
           resultEl.textContent = "Добавьте минимум 2 сектора";
+          resultEl.classList.add("is-show");
         }
       });
     }
@@ -279,7 +313,7 @@
         hubBtn.removeEventListener("click", onSpinClick);
         spinBtn.removeEventListener("click", onSpinClick);
         root.innerHTML = "";
-        root.classList.remove("vw-root");
+        root.classList.remove("vw-root", "is-spinning");
       },
     };
   }

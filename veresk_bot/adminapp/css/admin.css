@@ -3058,40 +3058,39 @@
   .wheel-phone{display:flex;justify-content:center;}
   .wheel-phone-bezel{
     width:min(100%,320px);
-    border-radius:36px;
-    padding:10px;
-    background:linear-gradient(160deg,#2e1a48,#4a2f6e 55%,#241a38);
-    box-shadow:var(--shadow-lg),inset 0 1px 0 rgba(255,255,255,.12);
+    border-radius:40px;
+    padding:11px;
+    background:linear-gradient(165deg,#1f152c 0%,#3a2854 55%,#1a1224 100%);
+    box-shadow:var(--shadow-lg),inset 0 1px 0 rgba(255,255,255,.1);
   }
   .wheel-phone-island{
-    width:96px;height:22px;margin:2px auto 8px;border-radius:999px;
-    background:#1a1020;box-shadow:inset 0 0 0 1px rgba(255,255,255,.06);
+    width:88px;height:20px;margin:4px auto 10px;border-radius:999px;
+    background:#0f0a16;box-shadow:inset 0 0 0 1px rgba(255,255,255,.05);
   }
   .wheel-phone-screen{
-    border-radius:28px;overflow:hidden;
+    border-radius:30px;overflow:hidden;
     background:
-      radial-gradient(ellipse 90% 50% at 50% -10%,rgba(255,93,168,.18),transparent 60%),
-      #fff5fb;
-    min-height:520px;
+      radial-gradient(ellipse 80% 40% at 50% 0%,rgba(232,121,176,.14),transparent 55%),
+      linear-gradient(180deg,#FBF7FC 0%,#F4EDF7 100%);
+    min-height:540px;
     display:flex;flex-direction:column;
   }
   .wheel-phone-topbar{
     display:flex;align-items:center;justify-content:space-between;
-    padding:12px 14px 8px;border-bottom:1px solid rgba(64,44,96,.08);
+    padding:14px 16px 10px;
   }
   .wheel-phone-brand{
-    font-family:var(--font-display);font-weight:600;font-size:16px;color:#2e1a48;
+    font-family:var(--font);font-weight:700;font-size:14px;letter-spacing:-.02em;color:#2A1B3D;
   }
   .wheel-phone-chip{
-    font-size:11px;font-weight:700;letter-spacing:.04em;text-transform:uppercase;
-    color:#7b5bb8;background:#f3ebff;padding:4px 8px;border-radius:999px;
+    font-size:10px;font-weight:600;letter-spacing:.08em;text-transform:uppercase;
+    color:#8B7A9E;background:transparent;padding:0;border-radius:0;
   }
   .wheel-phone-body{
-    flex:1;padding:16px 14px 18px;
+    flex:1;padding:8px 16px 20px;
     display:flex;align-items:flex-start;justify-content:center;
   }
   .wheel-phone-body .vw-root{max-width:100%;}
-  .wheel-phone-body .vw-spin-btn{font-size:14.5px;min-height:44px;}
 
   .wheel-legend{list-style:none;margin:14px 0 0;padding:0;display:flex;flex-direction:column;gap:6px;}
   .wheel-legend li{
