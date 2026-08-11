@@ -107,6 +107,38 @@ body::before {
   font-weight: 600;
 }
 
+.tg-guard-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.tg-guard-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 36px;
+  padding: 8px 14px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.95);
+  color: #402C60;
+  font-weight: 600;
+  font-size: 13px;
+  text-decoration: none;
+  border: none;
+}
+
+.tg-guard-btn:active {
+  transform: scale(0.98);
+}
+
+.tg-guard-btn--ghost {
+  background: transparent;
+  color: #fff;
+  border: 1px solid rgba(255, 255, 255, 0.55);
+}
+
 #app {
   position: relative;
   z-index: 1;

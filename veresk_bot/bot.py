@@ -53,6 +53,7 @@ from webapp_buttons import (
     orders_list_keyboard,
     reset_bot_menu_button,
     wheel_keyboard,
+    wheel_promo_keyboard,
 )
 from webapp_server import start_webapp_server
 
@@ -662,13 +663,27 @@ async def cmd_start(message: Message, state: FSMContext, command: CommandObject)
         logger.debug("Не удалось записать запуск Telegram-бота", exc_info=True)
 
     payload = str(command.args or "").strip().lower()
-    ticket_intent = payload in {
-        "open_ticket",
-        "ticket",
-        "wheel_promo",
-        "promo",
-        "sealed",
-    }
+    promo_spin = payload in {"wheel_promo", "promo"}
+    ticket_intent = payload in {"open_ticket", "ticket", "sealed"}
+
+    # Вход из канала: сначала колесо (запечатанный билет), анкета — после спина.
+    if promo_spin:
+        await state.clear()
+        promo_kb = wheel_promo_keyboard()
+        text = (
+            "🎡 *Колесо фортуны Veresk*\n\n"
+            "Нажмите кнопку ниже — крутите колесо прямо в Telegram.\n"
+            "Приз будет *запечатан* в билете: откроете его после короткой анкеты."
+        )
+        if promo_kb:
+            await message.answer(text, parse_mode=PARSE_MODE, reply_markup=promo_kb)
+        else:
+            await message.answer(
+                text
+                + "\n\n_Мини\\-приложение временно недоступно — напишите флористу._",
+                parse_mode=PARSE_MODE,
+            )
+        return
 
     await state.clear()
     await state.update_data(events=[], ticket_intent=ticket_intent)

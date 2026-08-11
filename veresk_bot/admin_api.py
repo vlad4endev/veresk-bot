@@ -5202,15 +5202,30 @@ async def handle_wheel_save(request: web.Request) -> web.Response:
     return _json({"ok": True, **cfg})
 
 
-async def handle_wheel_public_get(_request: web.Request) -> web.Response:
+async def handle_wheel_public_get(request: web.Request) -> web.Response:
     """Публичный конфиг для Mini App — без авторизации."""
     cfg = dict(get_wheel_config())
+    tg_nick = None
     try:
-        from webapp_buttons import promo_bot_links
-
-        cfg["promo"] = promo_bot_links()
+        bot = request.app.get("bot")
+        if bot is not None:
+            me = await bot.get_me()
+            tg_nick = str(getattr(me, "username", None) or "").strip() or None
     except Exception:
-        cfg["promo"] = {"telegram_url": "", "max_url": ""}
+        logger.debug("wheel public: bot.get_me failed", exc_info=True)
+    try:
+        from webapp_buttons import promo_bot_links, wheel_promo_share_links
+
+        cfg["promo"] = promo_bot_links(telegram_username=tg_nick)
+        cfg["promo_links"] = wheel_promo_share_links(telegram_username=tg_nick)
+    except Exception:
+        cfg["promo"] = {
+            "telegram_url": "",
+            "telegram_spin_url": "",
+            "max_url": "",
+            "max_spin_url": "",
+        }
+        cfg["promo_links"] = {}
     return _json(cfg)
 
 

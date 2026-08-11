@@ -16,10 +16,107 @@ function hasMessengerAuth() {
   return Boolean(tg?.initData || maxApp?.initData);
 }
 
+function isPromoDeepLink() {
+  try {
+    const params = new URLSearchParams(location.search);
+    const startParam = String(
+      tg?.initDataUnsafe?.start_param ||
+        maxApp?.initDataUnsafe?.start_param ||
+        params.get("WebAppStartParam") ||
+        ""
+    ).toLowerCase();
+    return (
+      params.get("promo") === "1" ||
+      startParam === "wheel_promo" ||
+      startParam.includes("promo") ||
+      document.documentElement.classList.contains("is-wheel-promo")
+    );
+  } catch (_) {
+    return false;
+  }
+}
+
 function updateMessengerGuard() {
   const guard = document.getElementById("tg-guard");
   if (!guard) return;
-  guard.classList.toggle("hidden", hasMessengerAuth());
+  const ok = hasMessengerAuth();
+  guard.classList.toggle("hidden", ok);
+  if (ok) return;
+
+  const textEl = document.getElementById("tg-guard-text");
+  const actions = document.getElementById("tg-guard-actions");
+  const promo = isPromoDeepLink();
+  if (textEl) {
+    if (promo) {
+      textEl.textContent = "";
+      textEl.append(
+        "Эта ссылка открылась в браузере — аккаунт не виден. Нажмите кнопку ниже: бот пришлёт колесо "
+      );
+      const strong = document.createElement("strong");
+      strong.textContent = "внутри Telegram или MAX";
+      textEl.append(strong, ".");
+    } else {
+      textEl.textContent = "";
+      textEl.append(
+        "Сайт в браузере не видит ваш аккаунт. Откройте приложение из чата с ботом: "
+      );
+      const strong = document.createElement("strong");
+      strong.textContent = "/start";
+      textEl.append(
+        strong,
+        " → анкета → «Крутить колесо фортуны» или «Статус заказа»."
+      );
+    }
+  }
+  if (actions && promo) {
+    actions.hidden = false;
+    actions.replaceChildren();
+    const loading = document.createElement("span");
+    loading.className = "tg-guard-btn tg-guard-btn--ghost";
+    loading.textContent = "Загрузка ссылок…";
+    actions.append(loading);
+
+    const addLink = (href, label, ghost) => {
+      const a = document.createElement("a");
+      a.className = ghost ? "tg-guard-btn tg-guard-btn--ghost" : "tg-guard-btn";
+      a.href = href;
+      a.rel = "noopener";
+      a.textContent = label;
+      return a;
+    };
+    const addHint = (label) => {
+      const span = document.createElement("span");
+      span.className = "tg-guard-btn tg-guard-btn--ghost";
+      span.textContent = label;
+      return span;
+    };
+
+    fetch("/api/wheel", { credentials: "same-origin" })
+      .then((r) => (r.ok ? r.json() : null))
+      .then((cfg) => {
+        const p = cfg?.promo || {};
+        const links = cfg?.promo_links || {};
+        const tg =
+          p.telegram_spin_url ||
+          links.telegram_channel ||
+          links.telegram_startapp ||
+          "";
+        const max = p.max_spin_url || links.max_startapp || "";
+        actions.replaceChildren();
+        if (tg) actions.append(addLink(tg, "Открыть в Telegram", false));
+        if (max) actions.append(addLink(max, "Открыть в MAX", true));
+        if (!tg && !max) {
+          actions.append(addHint("Напишите боту /start wheel_promo"));
+        }
+      })
+      .catch(() => {
+        actions.replaceChildren();
+        actions.append(addHint("Напишите боту /start wheel_promo"));
+      });
+  } else if (actions) {
+    actions.hidden = true;
+    actions.replaceChildren();
+  }
 }
 
 function applyHostClass() {

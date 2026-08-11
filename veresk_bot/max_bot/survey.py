@@ -206,14 +206,17 @@ class SurveyBot:
                     or (update.get("user") or {}).get("payload")
                     or ""
                 ).strip().lower()
+                promo_spin = payload in {"wheel_promo", "promo"}
                 ticket_intent = payload in {
                     "open_ticket",
                     "ticket",
-                    "wheel_promo",
-                    "promo",
                     "sealed",
                 }
-                await self.cmd_start(int(user_id), ticket_intent=ticket_intent)
+                await self.cmd_start(
+                    int(user_id),
+                    ticket_intent=ticket_intent,
+                    promo_spin=promo_spin,
+                )
             return
 
         if update_type == "message_callback":
@@ -244,14 +247,17 @@ class SurveyBot:
         if lowered.startswith("/start") or lowered in ("start", "начать"):
             parts = lowered.split(None, 1)
             payload = parts[1].strip() if len(parts) > 1 else ""
+            promo_spin = payload in {"wheel_promo", "promo"}
             ticket_intent = payload in {
                 "open_ticket",
                 "ticket",
-                "wheel_promo",
-                "promo",
                 "sealed",
             }
-            await self.cmd_start(user_id, ticket_intent=ticket_intent)
+            await self.cmd_start(
+                user_id,
+                ticket_intent=ticket_intent,
+                promo_spin=promo_spin,
+            )
             return
         if lowered in ("/cancel", "отмена"):
             await self.cmd_cancel(user_id)
@@ -344,13 +350,44 @@ class SurveyBot:
 
     # ── Шаги анкеты ───────────────────────────────────────────
 
-    async def cmd_start(self, user_id: int, *, ticket_intent: bool = False) -> None:
+    async def cmd_start(
+        self,
+        user_id: int,
+        *,
+        ticket_intent: bool = False,
+        promo_spin: bool = False,
+    ) -> None:
         try:
             from bot_metrics import PLATFORM_MAX, record_bot_start
 
             await record_bot_start(PLATFORM_MAX, int(user_id))
         except Exception:
             logger.debug("Не удалось записать запуск MAX-бота", exc_info=True)
+
+        # Вход из канала: сначала колесо, анкета — после спина.
+        if promo_spin:
+            _reset(user_id)
+            wheel_kb = None
+            try:
+                from webapp_buttons import max_wheel_promo_keyboard
+
+                wheel_kb = await max_wheel_promo_keyboard()
+            except Exception:
+                logger.debug("Не удалось собрать промо-кнопку колеса MAX", exc_info=True)
+            text = (
+                "🎡 **Колесо фортуны Veresk**\n\n"
+                "Нажмите кнопку ниже — крутите колесо прямо в MAX.\n"
+                "Приз будет **запечатан** в билете: откроете его после короткой анкеты."
+            )
+            if wheel_kb:
+                await self._send(user_id, text, keyboard=wheel_kb)
+            else:
+                await self._send(
+                    user_id,
+                    text
+                    + "\n\n_Мини-приложение временно недоступно — напишите флористу._",
+                )
+            return
 
         has_sealed = False
         try:

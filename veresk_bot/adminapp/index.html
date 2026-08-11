@@ -14,7 +14,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,500;9..144,600;9..144,700&family=Manrope:wght@400;500;600;700&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="css/admin.css?v=69">
+<link rel="stylesheet" href="css/admin.css?v=68">
 <link rel="stylesheet" href="css/wheel.css?v=11">
 <link rel="stylesheet" href="css/promos.css?v=1">
 <!-- Критичный CSS до paint: иначе логин мелькнёт, пока качается admin.css -->
@@ -46,16 +46,13 @@
 
 <!-- LOGIN -->
 <div id="loginScreen" class="login-wrap">
-  <div class="login-showcase" aria-hidden="true">
-    <div class="login-showcase-burst">
-      <img src="assets/leaf-burst-deco.svg" alt="" width="640" height="640" decoding="async">
-    </div>
-    <div class="login-showcase-copy">
-      <p class="login-showcase-name">Veresk</p>
-      <p class="login-showcase-tagline">trail of happiness</p>
-      <span class="login-showcase-rule"></span>
-      <p class="login-showcase-caption">Коммуникации,<br>которые расцветают.</p>
-    </div>
+  <div class="login-aurora" aria-hidden="true">
+    <span class="login-orb login-orb--a"></span>
+    <span class="login-orb login-orb--b"></span>
+    <span class="login-orb login-orb--c"></span>
+  </div>
+  <div class="login-burst" aria-hidden="true">
+    <img src="assets/leaf-burst-deco.svg" alt="" width="640" height="640" decoding="async">
   </div>
 
   <form class="login-card" id="loginForm" novalidate>
@@ -1576,34 +1573,34 @@
         <div class="wheel-promo-head">
           <div>
             <h3 class="subh">Ссылка для канала</h3>
-            <p class="wsub">Клиент крутит колесо → получает запечатанный билет → приз открывается после анкеты в боте.</p>
+            <p class="wsub">В пост копируйте Telegram или MAX. Клиент открывает бота → жмёт кнопку → крутит колесо → билет → анкета.</p>
           </div>
         </div>
         <p class="msg-error" id="wheelPromoHint" hidden></p>
         <div class="wheel-promo-rows" id="wheelPromoRows">
           <div class="wheel-promo-row">
             <div class="wheel-promo-meta">
-              <span class="wheel-promo-label">Mini App (для поста)</span>
-              <span class="wheel-promo-desc">Прямая ссылка на промо-колесо</span>
-            </div>
-            <input class="wheel-inp wheel-promo-inp" id="wheelPromoMiniapp" type="text" readonly value="" placeholder="Загрузка…">
-            <button type="button" class="btn" data-copy-from="wheelPromoMiniapp">Копировать</button>
-          </div>
-          <div class="wheel-promo-row">
-            <div class="wheel-promo-meta">
-              <span class="wheel-promo-label">Telegram startapp</span>
-              <span class="wheel-promo-desc">Открывает Mini App внутри Telegram</span>
+              <span class="wheel-promo-label">Telegram (для поста)</span>
+              <span class="wheel-promo-desc">Открывает бота с кнопкой Mini App — так виден аккаунт</span>
             </div>
             <input class="wheel-inp wheel-promo-inp" id="wheelPromoTgApp" type="text" readonly value="" placeholder="Нужен @username бота">
-            <button type="button" class="btn" data-copy-from="wheelPromoTgApp">Копировать</button>
+            <button type="button" class="btn primary" data-copy-from="wheelPromoTgApp">Копировать</button>
           </div>
           <div class="wheel-promo-row">
             <div class="wheel-promo-meta">
-              <span class="wheel-promo-label">MAX startapp</span>
+              <span class="wheel-promo-label">MAX (для поста)</span>
               <span class="wheel-promo-desc">Промо-колесо внутри MAX</span>
             </div>
             <input class="wheel-inp wheel-promo-inp" id="wheelPromoMaxApp" type="text" readonly value="" placeholder="Нужен MAX_BOT_USERNAME">
             <button type="button" class="btn" data-copy-from="wheelPromoMaxApp">Копировать</button>
+          </div>
+          <div class="wheel-promo-row">
+            <div class="wheel-promo-meta">
+              <span class="wheel-promo-label">HTTPS Mini App (не для поста)</span>
+              <span class="wheel-promo-desc">В Safari/Chrome аккаунт не виден — только для отладки</span>
+            </div>
+            <input class="wheel-inp wheel-promo-inp" id="wheelPromoMiniapp" type="text" readonly value="" placeholder="Загрузка…">
+            <button type="button" class="btn" data-copy-from="wheelPromoMiniapp">Копировать</button>
           </div>
         </div>
       </section>
@@ -1697,6 +1694,6 @@
 <script src="js/qrcode.min.js?v=1"></script>
 <script src="js/api.js?v=41"></script>
 <script src="js/wheel-widget.js?v=13"></script>
-<script src="js/app.js?v=74"></script>
+<script src="js/app.js?v=75"></script>
 </body>
 </html>

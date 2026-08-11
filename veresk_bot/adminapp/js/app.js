@@ -8248,9 +8248,9 @@
 
   function fillWheelPromoLinks(links) {
     const map = {
-      wheelPromoMiniapp: links.miniapp_url || "",
-      wheelPromoTgApp: links.telegram_startapp || "",
+      wheelPromoTgApp: links.telegram_channel || links.telegram_startapp || "",
       wheelPromoMaxApp: links.max_startapp || "",
+      wheelPromoMiniapp: links.miniapp_url || "",
     };
     Object.entries(map).forEach(([id, value]) => {
       const el = document.getElementById(id);

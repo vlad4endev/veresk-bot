@@ -58,33 +58,43 @@ def wheel_promo_miniapp_url() -> str | None:
     )
 
 
-def telegram_bot_start_url(payload: str = "open_ticket") -> str:
-    """https://t.me/<bot>?start=open_ticket — анкета → раскрытие билета."""
-    try:
-        from config import TELEGRAM_BOT_USERNAME
-
-        nick = str(TELEGRAM_BOT_USERNAME or "").strip().lstrip("@")
-    except Exception:
-        nick = ""
+def telegram_bot_start_url(
+    payload: str = "open_ticket", *, telegram_username: str | None = None
+) -> str:
+    """https://t.me/<bot>?start=<payload> — диплинк в чат с ботом."""
+    nick = str(telegram_username or "").strip().lstrip("@") or _telegram_bot_username()
     if not nick:
         return ""
     arg = str(payload or "open_ticket").strip() or "open_ticket"
     return f"https://t.me/{nick}?start={arg}"
 
 
-def promo_bot_links() -> dict[str, str]:
-    """Ссылки на ботов для экрана запечатанного билета."""
-    tg = telegram_bot_start_url("open_ticket")
+def promo_bot_links(*, telegram_username: str | None = None) -> dict[str, str]:
+    """Ссылки на ботов: вход в промо-колесо и раскрытие билета после анкеты."""
+    tg_ticket = telegram_bot_start_url(
+        "open_ticket", telegram_username=telegram_username
+    )
+    tg_spin = telegram_bot_start_url(
+        "wheel_promo", telegram_username=telegram_username
+    )
     max_url = ""
+    max_spin = ""
     try:
         from config import MAX_BOT_USERNAME
 
-        nick = str(MAX_BOT_USERNAME or "").strip().lstrip("@/")
+        nick = _normalize_max_bot_username(MAX_BOT_USERNAME)
         if nick:
             max_url = f"https://max.ru/{nick}"
+            max_spin = max_wheel_deeplink(nick, start_param="wheel_promo") or max_url
     except Exception:
         max_url = ""
-    return {"telegram_url": tg, "max_url": max_url}
+        max_spin = ""
+    return {
+        "telegram_url": tg_ticket,
+        "telegram_spin_url": tg_spin,
+        "max_url": max_url,
+        "max_spin_url": max_spin,
+    }
 
 
 def _telegram_bot_username() -> str:
@@ -114,6 +124,10 @@ def wheel_promo_share_links(
         max_username or _max_bot_username_for_promo()
     )
     miniapp = wheel_promo_miniapp_url() or ""
+    # Надёжный вход для поста в канал: бот → кнопка Mini App (с initData).
+    tg_channel = (
+        f"https://t.me/{tg_nick}?start=wheel_promo" if tg_nick else ""
+    )
     tg_startapp = (
         f"https://t.me/{tg_nick}?startapp=wheel_promo" if tg_nick else ""
     )
@@ -124,7 +138,10 @@ def wheel_promo_share_links(
         max_wheel_deeplink(max_nick, start_param="wheel_promo") if max_nick else ""
     )
     max_bot = f"https://max.ru/{max_nick}" if max_nick else ""
-    hint_parts: list[str] = []
+    hint_parts: list[str] = [
+        "В пост канала копируйте Telegram/MAX — не HTTPS Mini App "
+        "(в Safari аккаунт не виден)."
+    ]
     if not tg_nick:
         hint_parts.append(
             "Задайте TELEGRAM_BOT_USERNAME в .env — появятся ссылки t.me"
@@ -133,13 +150,14 @@ def wheel_promo_share_links(
         hint_parts.append("MAX_BOT_USERNAME пуст — ссылка MAX недоступна")
     return {
         "miniapp_url": miniapp,
+        "telegram_channel": tg_channel,
         "telegram_startapp": tg_startapp,
         "telegram_bot": tg_bot,
         "max_startapp": max_startapp,
         "max_bot": max_bot,
         "telegram_bot_username": tg_nick,
         "max_bot_username": max_nick,
-        "hint": ". ".join(hint_parts),
+        "hint": " ".join(hint_parts),
     }
 
 
@@ -374,6 +392,50 @@ def wheel_keyboard() -> InlineKeyboardMarkup | None:
             [InlineKeyboardButton(text=WHEEL_OPEN_LABEL, web_app=WebAppInfo(url=url))]
         ]
     )
+
+
+def wheel_promo_keyboard() -> InlineKeyboardMarkup | None:
+    """Inline Web App: промо-колесо с запечатанным билетом (вход из канала)."""
+    url = wheel_promo_miniapp_url()
+    if not url:
+        return None
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text=WHEEL_OPEN_LABEL, web_app=WebAppInfo(url=url)
+                )
+            ]
+        ]
+    )
+
+
+async def max_wheel_promo_keyboard() -> list[list[dict[str, Any]]] | None:
+    """Кнопка промо-колеса для MAX (payload=wheel_promo)."""
+    from max_bot.api import btn_link, btn_open_app
+
+    username, bot_user_id = await resolve_max_bot_identity()
+    if not username and bot_user_id is None:
+        return None
+
+    rows: list[list[dict[str, Any]]] = []
+    open_web_app = username or ""
+    if open_web_app or bot_user_id is not None:
+        rows.append(
+            [
+                btn_open_app(
+                    WHEEL_OPEN_LABEL,
+                    open_web_app,
+                    payload="wheel_promo",
+                    contact_id=bot_user_id,
+                )
+            ]
+        )
+    if username:
+        deep = max_wheel_deeplink(username, start_param="wheel_promo")
+        if deep:
+            rows.append([btn_link("🎡 Открыть через MAX", deep)])
+    return rows or None
 
 
 def tracking_keyboard(order_id: str) -> InlineKeyboardMarkup | None:
