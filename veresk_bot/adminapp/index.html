@@ -46,53 +46,100 @@
 </div>
 
 <!-- LOGIN -->
-<div id="loginScreen" class="login-wrap">
-  <div class="login-aurora" aria-hidden="true">
-    <span class="login-orb login-orb--a"></span>
-    <span class="login-orb login-orb--b"></span>
-    <span class="login-orb login-orb--c"></span>
-  </div>
-  <div class="login-burst" aria-hidden="true">
-    <img src="assets/leaf-burst-deco.svg" alt="" width="640" height="640" decoding="async">
-  </div>
+<div id="loginScreen" class="page">
+  <div class="paper" id="loginPaper" aria-hidden="true"></div>
+  <div class="calm" aria-hidden="true"></div>
 
-  <form class="login-card" id="loginForm" novalidate>
-    <div class="login-brand">
-      <div class="login-logo">
-        <img src="assets/logo-circle.png?v=6" alt="" width="120" height="120" decoding="async">
+  <div>
+    <div class="card">
+      <!-- печать из листа наклеек: плашка + эмблема + кольцо бусин -->
+      <div class="stamp" aria-hidden="true">
+        <svg viewBox="0 0 200 200">
+          <circle cx="100" cy="100" r="95" fill="#FFFFFF"/>
+          <circle cx="100" cy="100" r="88" fill="#FF92CE"/>
+          <circle cx="100" cy="100" r="87" fill="none" stroke="#402C60" stroke-opacity=".2" stroke-width="1.4"/>
+          <g class="beads" id="loginBeads"></g>
+          <g transform="translate(34 34) scale(1.32)" fill="#402C60">
+            <path d="M56.51 95.31C58.07 90.35 60.33 84.48 63.02 78.13L76.92 71.99L63.69 80.2C67.44 81.59 71.76 81.44 75.58 79.42C79.85 77.16 82.54 73.1 83.21 68.66C79.17 66.71 74.3 66.65 70.02 68.89C68.13 69.9 66.54 71.26 65.3 72.86C67.42 68.08 69.72 63.09 72.13 58.12L84.02 52.86L72.32 60.13C75.64 61.36 79.46 61.23 82.84 59.45C86.61 57.45 89 53.84 89.6 49.93C86.02 48.2 81.7 48.14 77.92 50.14C76.82 50.72 75.85 51.44 74.99 52.27C79.33 43.5 83.83 34.97 87.9 27.66C91.4 34.27 93.39 41.88 93.39 49.99C93.39 72.96 77.39 91.99 56.51 95.31M6.61 49.99C6.61 41.88 8.6 34.27 12.1 27.66C16.17 34.97 20.67 43.5 25.01 52.27C24.15 51.44 23.18 50.72 22.08 50.14C18.3 48.14 13.98 48.2 10.4 49.93C11 53.84 13.39 57.45 17.16 59.45C20.54 61.23 24.36 61.36 27.68 60.13L15.98 52.86L27.87 58.12C30.28 63.09 32.58 68.08 34.7 72.86C33.46 71.26 31.87 69.9 29.98 68.89C25.7 66.65 20.83 66.71 16.79 68.66C17.46 73.1 20.15 77.16 24.42 79.42C28.24 81.44 32.56 81.59 36.31 80.2L23.08 71.99L36.98 78.13C39.67 84.48 41.93 90.35 43.49 95.31C22.61 91.99 6.61 72.96 6.61 49.99M50 4.15C62.39 4.15 73.54 9.65 81.45 18.42C80.14 22.64 78.35 27.46 76.27 32.61C76.32 31.86 76.3 31.09 76.22 30.34C75.73 25.75 73.07 21.93 69.38 19.76C66.23 22.65 64.44 26.95 64.93 31.54C65.36 35.64 67.54 39.13 70.64 41.37L70.1 26.52L72.7 41.14C70.62 45.95 68.37 50.88 66.1 55.74C66.22 54.7 66.22 53.63 66.1 52.55C65.56 47.47 62.61 43.22 58.5 40.83C55.01 44.04 53.03 48.81 53.56 53.89C54.05 58.46 56.47 62.34 59.91 64.82L59.31 48.33L62.12 64.15C57.48 73.8 53.05 82.54 50 88.48C46.95 82.54 42.52 73.8 37.88 64.15L40.69 48.33L40.09 64.82C43.53 62.34 45.95 58.46 46.44 53.89C46.97 48.81 44.99 44.04 41.5 40.83C37.39 43.22 34.44 47.47 33.9 52.55C33.78 53.63 33.78 54.7 33.9 55.74C31.63 50.88 29.38 45.95 27.3 41.14L29.9 26.52L29.36 41.37C32.46 39.13 34.64 35.64 35.07 31.54C35.56 26.95 33.77 22.65 30.62 19.76C26.93 21.93 24.27 25.75 23.78 30.34C23.7 31.09 23.68 31.86 23.73 32.61C21.65 27.46 19.86 22.64 18.55 18.42C26.46 9.65 37.61 4.15 50 4.15M50 0C22.39 0 0 22.38 0 49.99C0 77.6 22.39 99.99 50 99.99C77.61 99.99 100 77.6 100 49.99C100 22.38 77.61 0 50 0"/>
+          </g>
+        </svg>
       </div>
-      <p class="login-wordmark">Veresk</p>
-      <p class="login-tagline">trail of happiness</p>
-    </div>
-    <h1 class="login-title">Добро пожаловать</h1>
-    <p class="login-sub">Панель рассылок команды</p>
 
-    <div class="login-err" id="loginErr" role="alert"></div>
+      <div class="head">
+        <h1>
+          <!-- настоящий вордмарк из брендбука, не шрифт -->
+          <svg class="mark" viewBox="0 0 1000 231" role="img" aria-label="Veresk">
+            <path d="M565.08 88.04C573.56 78.45 584.91 73.56 598.93 73.56C621.76 73.56 632.84 84.97 632.84 108.45C632.84 113.93 632.26 119.47 631.21 125.02L550.28 128.41C551.72 111.06 556.74 97.5 565.08 88.04M622.8 227.27C631.21 225.12 637.93 222.51 642.82 219.71C647.71 216.97 652.28 213.77 656.32 210.25C660.49 206.73 663.04 204.25 664.15 202.82C665.19 201.45 665.97 200.21 666.49 199.23L666.75 198.64L659.51 191.01L653.25 196.03C649.67 198.97 643.6 201.9 635.19 204.71C626.71 207.58 617.58 209.01 608 209.01C589.6 209.01 575.19 203.34 565.21 192.12C555.37 181.04 550.22 164.41 549.82 142.75L659.38 142.75C659.38 142.75 667.6 132.45 667.6 113.02C667.6 95.41 661.73 81.78 650.06 72.32C638.52 63 621.69 58.24 600.04 58.24C571.21 58.24 548.32 66.13 532.15 81.58C515.98 97.1 507.76 118.17 507.76 144.25C507.76 170.08 515.85 191.21 531.82 206.93C547.74 222.64 569.32 230.6 595.87 230.6C605.39 230.6 614.45 229.49 622.8 227.27"/>
+            <path d="M266.79 88.04C275.27 78.45 286.62 73.56 300.64 73.56C323.46 73.56 334.49 84.97 334.49 108.45C334.49 113.93 333.96 119.47 332.92 125.02L251.99 128.41C253.42 111.06 258.45 97.5 266.79 88.04M358.03 210.25C362.2 206.73 364.75 204.25 365.85 202.82C366.9 201.45 367.68 200.21 368.2 199.23L368.46 198.64L361.22 191.01L354.96 196.03C351.38 198.97 345.31 201.9 336.9 204.71C328.42 207.58 319.29 209.01 309.7 209.01C291.31 209.01 276.9 203.34 266.92 192.12C257.08 181.04 251.92 164.41 251.53 142.75L361.09 142.75C361.09 142.75 369.31 132.45 369.31 113.02C369.31 95.41 363.44 81.78 351.77 72.32C340.22 63 323.33 58.24 301.68 58.24C272.92 58.24 250.03 66.13 233.86 81.58C217.69 97.1 209.47 118.17 209.47 144.25C209.47 170.08 217.56 191.21 233.53 206.93C249.45 222.64 271.03 230.6 297.57 230.6C307.1 230.6 316.16 229.49 324.51 227.27C332.86 225.12 339.64 222.51 344.53 219.71C349.42 216.97 353.98 213.77 358.03 210.25"/>
+            <path d="M402.11 227.86L437.79 227.86L437.79 117.84C437.79 117.84 463.35 88.63 505.54 92.15C505.54 79.17 504.37 68.02 502.02 58.95L501.89 58.24L501.17 58.24C493.67 58.24 486.17 59.74 478.81 62.67C471.44 65.61 465.31 68.87 460.68 72.32C456.05 75.84 451.55 79.95 447.37 84.58C443.07 89.34 440.39 92.47 439.15 94.24C438.18 95.47 437.39 96.65 436.74 97.69L436.42 97.37C436.42 97.37 435.11 70.11 423.5 48.58L389.07 52.24C389.07 52.24 402.11 80.61 402.11 122.73ZM402.11 227.86"/>
+            <path d="M757.66 230.6C778.79 230.6 795.36 226.69 806.96 218.99C818.64 211.23 824.57 199.49 824.57 184.23C824.57 172.43 820.66 162.84 812.96 155.73C805.4 148.82 791.64 140.54 771.81 131.21C771.16 131.02 770.51 130.82 769.92 130.56C769.47 130.36 768.88 130.04 768.1 129.58C751.53 121.95 740.05 115.89 733.86 111.39C727.86 107.08 724.86 101.54 724.86 94.95C724.86 81.26 734.77 74.61 755.18 74.61C760.86 74.61 766.27 75.58 771.23 77.54C776.18 79.43 780.23 81.65 783.1 84C786.1 86.34 788.7 89.15 790.99 92.34C793.27 95.6 794.77 97.82 795.42 99C796.07 100.23 796.53 101.21 796.73 101.8L796.92 102.45C796.92 102.45 804.81 100.95 813.29 88.95C816.36 84.58 817.59 78.58 817.27 74.41L817.27 73.95C817.27 73.95 809.57 66.78 790.66 62.08C780.81 59.67 769.66 58.24 757.66 58.24C736.73 58.24 720.49 62.21 709.53 70.04C698.45 78 692.84 89.34 692.84 103.95C692.84 116.93 697.01 127.17 705.3 134.54C713.45 141.71 726.23 149.02 743.38 156.19C762.68 164.47 775.86 170.86 782.51 175.23C789.03 179.47 792.16 185.01 792.16 192.19C792.16 199.36 789.16 204.71 783.03 208.62C776.84 212.6 768.68 214.56 758.64 214.56C752.58 214.56 746.58 213.45 740.97 211.16C735.29 208.88 730.6 206.34 727.08 203.47C723.62 200.67 720.23 197.4 717.16 193.69C714.1 190.04 712.14 187.56 711.36 186.19C710.51 184.82 709.93 183.71 709.47 182.8L709.21 182.27C709.21 182.27 698.97 184.3 693.1 195.58C690.69 200.14 689.32 204.9 689.32 209.93L689.32 210.32C689.32 210.32 700.86 220.88 719.38 225.71C730.73 228.71 743.51 230.6 757.66 230.6"/>
+            <path d="M1000 227.79L923.5 130.23L985.39 61.04L952.46 61.04L949.07 64.04L945.74 69.45C943.72 73.11 939.09 79.56 931.98 88.63C924.81 97.76 916.07 107.93 905.9 119.02L899.57 126.39L885.29 127.95C885.29 127.95 885.29 93.97 885.29 75.71C885.16 29.67 873.81 0 873.81 0L838.66 8.87C838.66 8.87 848.64 45.19 848.64 81.39L848.64 227.86L885.29 227.86L885.29 143.41L892.59 143.41L956.76 227.79ZM1000 227.79"/>
+            <path d="M135.71 227.86L232.03 4.37L209.99 4.37L130.23 191.14L46.76 4.37L0 4.37L3.07 9.46C5.28 12.65 8.8 18.65 13.37 27.46C18 36.26 22.83 46.37 27.65 57.52L104.02 227.86ZM135.71 227.86"/>
+          </svg>
+        </h1>
+        <p><b>Панель рассылок</b> · вход для сотрудников</p>
+      </div>
 
-    <div class="login-field">
-      <label for="loginUsername">Логин</label>
-      <input type="text" id="loginUsername" name="username" placeholder="+7(999)999-99-99" autocomplete="username" autocapitalize="none" autocorrect="off" spellcheck="false" required enterkeyhint="next">
-      <div class="login-hint">Телефон сотрудника или основной логин</div>
-    </div>
+      <form id="loginForm" novalidate autocomplete="on">
+        <div class="alert" id="loginErr" role="alert" aria-live="assertive">
+          <svg viewBox="0 0 20 20" fill="currentColor"><path d="M10 1.7 19 18H1L10 1.7Zm0 5.6a.9.9 0 0 0-.9 1v3.3a.9.9 0 0 0 1.8 0V8.3a.9.9 0 0 0-.9-1Zm0 6.4a1.05 1.05 0 1 0 0 2.1 1.05 1.05 0 0 0 0-2.1Z"/></svg>
+          <span id="loginErrMsg"></span>
+        </div>
+        <div class="done" id="loginDone" role="status" aria-live="polite">
+          <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><path d="M4 10.5 8 14.5 16 6"/></svg>
+          <span>Печать снята — открываем панель…</span>
+        </div>
 
-    <div class="login-field">
-      <label for="loginPassword">Пароль</label>
-      <div class="pass-wrap">
-        <input type="password" id="loginPassword" name="password" placeholder="••••••••" autocomplete="current-password" required enterkeyhint="go">
-        <button type="button" class="pass-toggle" id="passToggle" aria-label="Показать пароль" tabindex="-1">
-          <svg class="eye-show" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7-10-7-10-7z"/><circle cx="12" cy="12" r="3"/></svg>
-          <svg class="eye-hide hidden" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7-10-7-10-7z"/><circle cx="12" cy="12" r="3"/><path d="M4 4l16 16"/></svg>
+        <div class="grp">
+          <label for="loginUsername">Логин</label>
+          <div class="box">
+            <input id="loginUsername" name="username" type="text" autocomplete="username"
+                   autocapitalize="off" spellcheck="false"
+                   placeholder="admin или +7 900 000-00-00"
+                   aria-describedby="loginHint loginBad" enterkeyhint="next">
+          </div>
+          <p class="hint" id="loginHint">Телефон сотрудника или основной логин</p>
+          <p class="bad" id="loginBad">Введите логин</p>
+        </div>
+
+        <div class="grp">
+          <label for="loginPassword">Пароль</label>
+          <div class="box">
+            <input id="loginPassword" name="password" type="password" autocomplete="current-password"
+                   placeholder="••••••••" aria-describedby="passBad capsHint" enterkeyhint="go">
+            <button type="button" class="peek" id="passToggle" aria-label="Показать пароль" aria-pressed="false" tabindex="-1">
+              <svg id="passEye" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M1.8 12S5.6 5.2 12 5.2 22.2 12 22.2 12 18.4 18.8 12 18.8 1.8 12 1.8 12Z"/>
+                <circle cx="12" cy="12" r="3.1"/>
+              </svg>
+            </button>
+          </div>
+          <p class="caps" id="capsHint">Включён Caps Lock</p>
+          <p class="bad" id="passBad">Введите пароль</p>
+        </div>
+
+        <div class="row">
+          <label class="check">
+            <input type="checkbox" id="loginRemember" checked>
+            <span class="tick"><svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M4 10.5 8 14.5 16 6"/></svg></span>
+            Не выходить 30 дней
+          </label>
+          <a class="forgot" href="#" id="loginForgot">Забыли пароль?</a>
+        </div>
+
+        <button class="submit" type="submit" id="loginSubmit">
+          <svg class="spin" id="loginSpinner" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.8" stroke-linecap="round">
+            <path d="M12 2.6a9.4 9.4 0 1 0 9.4 9.4" opacity=".9"/>
+          </svg>
+          <span id="loginSubmitLabel">Войти</span>
         </button>
-      </div>
-      <div class="login-caps hidden" id="capsHint">⇪ Включён Caps Lock</div>
+
+        <p class="note">Доступ только для сотрудников салона.<br>Не передавайте пароль третьим лицам.</p>
+      </form>
     </div>
 
-    <button type="submit" class="btn primary block big login-submit" id="loginSubmit">
-      <span class="spinner hidden" id="loginSpinner"></span>
-      <span id="loginSubmitLabel">Войти</span>
-    </button>
-    <p class="login-mobile-foot">Только для команды Veresk</p>
-  </form>
+    <p class="sign">trail of happiness</p>
+  </div>
 </div>
 
 <div class="app hidden" id="appShell">
@@ -1742,7 +1789,8 @@
 <script>window.__VERESK_BUILD__="auth-boot-v41";</script>
 <script src="js/qrcode.min.js?v=1"></script>
 <script src="js/api.js?v=41"></script>
+<script src="js/login-ui.js?v=1"></script>
 <script src="js/wheel-widget.js?v=13"></script>
-<script src="js/app.js?v=76"></script>
+<script src="js/app.js?v=77"></script>
 </body>
 </html>

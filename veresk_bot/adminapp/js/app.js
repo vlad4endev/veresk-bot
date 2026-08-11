@@ -259,12 +259,9 @@
           stopAdminKeepalive();
           AdminAPI.setToken("");
           showLogin();
-          const errEl = $("#loginErr");
-          if (errEl) {
-            errEl.textContent =
-              "Сессия истекла — войдите снова. Пока вы работаете в панели, вход продлевается сам.";
-            errEl.style.display = "block";
-          }
+          showLoginError(
+            "Сессия истекла — войдите снова. Пока вы работаете в панели, вход продлевается сам."
+          );
         }
       }
     }, ADMIN_KEEPALIVE_MS);
@@ -350,76 +347,119 @@
 
   function focusLogin() {
     const userEl = $("#loginUsername");
+    if (!userEl) return;
     const saved = localStorage.getItem(LOGIN_KEY) || "";
     if (saved && !userEl.value) userEl.value = saved;
-    (userEl.value ? $("#loginPassword") : userEl).focus();
+    (userEl.value ? $("#loginPassword") : userEl)?.focus();
   }
 
   function setLoginBusy(busy) {
-    $("#loginSubmit").disabled = busy;
-    $("#loginSpinner").classList.toggle("hidden", !busy);
-    $("#loginSubmitLabel").textContent = busy ? "Входим…" : "Войти";
+    $("#loginScreen")?.classList.toggle("loading", busy);
+    const submit = $("#loginSubmit");
+    if (submit) submit.disabled = busy;
+    const label = $("#loginSubmitLabel");
+    if (label) label.textContent = busy ? "Проверяем" : "Войти";
+  }
+
+  function clearLoginFieldErrors() {
+    $("#loginUsername")?.classList.remove("err");
+    $("#loginPassword")?.classList.remove("err");
+    $("#loginBad")?.classList.remove("on");
+    $("#passBad")?.classList.remove("on");
   }
 
   function showLoginError(text) {
+    $("#loginDone")?.classList.remove("on");
     const errEl = $("#loginErr");
-    errEl.textContent = text;
-    errEl.style.display = "block";
-    const card = $("#loginForm");
-    card.classList.remove("shake");
-    void card.offsetWidth; // перезапуск анимации
-    card.classList.add("shake");
+    const msg = $("#loginErrMsg");
+    if (msg) msg.textContent = text;
+    else if (errEl) errEl.textContent = text;
+    errEl?.classList.add("on");
+    $("#loginPassword")?.classList.add("err");
+  }
+
+  function hideLoginError() {
+    $("#loginErr")?.classList.remove("on");
   }
 
   // Показать/скрыть пароль
   $("#passToggle")?.addEventListener("click", () => {
     const inp = $("#loginPassword");
-    const show = inp.type === "password";
-    inp.type = show ? "text" : "password";
-    $("#passToggle .eye-show").classList.toggle("hidden", show);
-    $("#passToggle .eye-hide").classList.toggle("hidden", !show);
-    $("#passToggle").setAttribute("aria-label", show ? "Скрыть пароль" : "Показать пароль");
+    const peek = $("#passToggle");
+    const eye = $("#passEye");
+    if (!inp || !peek) return;
+    const shown = inp.type === "text";
+    inp.type = shown ? "password" : "text";
+    peek.setAttribute("aria-pressed", String(!shown));
+    peek.setAttribute("aria-label", shown ? "Показать пароль" : "Скрыть пароль");
+    if (eye) {
+      eye.innerHTML = shown
+        ? '<path d="M1.8 12S5.6 5.2 12 5.2 22.2 12 22.2 12 18.4 18.8 12 18.8 1.8 12 1.8 12Z"/><circle cx="12" cy="12" r="3.1"/>'
+        : '<path d="M2.5 2.5l19 19"/><path d="M9.6 5.6A9.9 9.9 0 0 1 12 5.2c6.4 0 10.2 6.8 10.2 6.8a19 19 0 0 1-2.6 3.6M6.4 7A19 19 0 0 0 1.8 12S5.6 18.8 12 18.8c1 0 1.9-.2 2.8-.5"/><path d="M9.9 9.9a3.1 3.1 0 0 0 4.2 4.2"/>';
+    }
     inp.focus();
   });
 
   // Подсказка про Caps Lock
   $("#loginPassword")?.addEventListener("keyup", (e) => {
     if (typeof e.getModifierState === "function") {
-      $("#capsHint").classList.toggle("hidden", !e.getModifierState("CapsLock"));
+      $("#capsHint")?.classList.toggle("on", e.getModifierState("CapsLock"));
     }
   });
   $("#loginPassword")?.addEventListener("blur", () => {
-    $("#capsHint").classList.add("hidden");
+    $("#capsHint")?.classList.remove("on");
   });
 
   // Скрываем ошибку, как только начали исправлять
   ["#loginUsername", "#loginPassword"].forEach((sel) => {
     $(sel)?.addEventListener("input", () => {
-      $("#loginErr").style.display = "none";
+      hideLoginError();
+      clearLoginFieldErrors();
     });
+  });
+
+  $("#loginForgot")?.addEventListener("click", (e) => {
+    e.preventDefault();
+    showLoginError("Пароль восстанавливает администратор салона — напишите ему в рабочий чат.");
   });
 
   $("#loginForm")?.addEventListener("submit", async (e) => {
     e.preventDefault();
+    hideLoginError();
+    $("#loginDone")?.classList.remove("on");
+    clearLoginFieldErrors();
+
     const username = $("#loginUsername").value.trim();
     const pwd = $("#loginPassword").value;
+    let ok = true;
     if (!username) {
-      showLoginError("Введите логин");
-      $("#loginUsername").focus();
-      return;
+      $("#loginUsername")?.classList.add("err");
+      $("#loginBad")?.classList.add("on");
+      ok = false;
     }
     if (!pwd) {
-      showLoginError("Введите пароль");
-      $("#loginPassword").focus();
+      $("#loginPassword")?.classList.add("err");
+      const bad = $("#passBad");
+      if (bad) {
+        bad.textContent = "Введите пароль";
+        bad.classList.add("on");
+      }
+      ok = false;
+    }
+    if (!ok) {
+      ($("#loginUsername")?.classList.contains("err") ? $("#loginUsername") : $("#loginPassword"))?.focus();
       return;
     }
-    $("#loginErr").style.display = "none";
+
     setLoginBusy(true);
     try {
       const res = await AdminAPI.login(username, pwd);
       AdminAPI.setToken(res.token);
       localStorage.setItem(LOGIN_KEY, username);
       $("#loginPassword").value = "";
+      $("#loginDone")?.classList.add("on");
+      const label = $("#loginSubmitLabel");
+      if (label) label.textContent = "Готово";
       await showApp();
     } catch (err) {
       if (err.status === 503) {
@@ -428,7 +468,7 @@
         showLoginError("Доступ отключён. Обратитесь к администратору.");
       } else if (err.status === 401) {
         showLoginError("Неверный логин или пароль");
-        $("#loginPassword").select();
+        $("#loginPassword")?.select();
       } else {
         showLoginError("Сервер недоступен. Попробуйте ещё раз.");
       }

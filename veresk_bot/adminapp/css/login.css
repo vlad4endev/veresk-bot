@@ -1,0 +1,166 @@
+/* ==========================================================================
+   VERESK · вход в панель рассылок — центрированная карточка
+   Композиция: письмо на фирменной обёрточной бумаге.
+   · фон — настоящий паттерн из листьев брендбука, а не размытые пятна;
+   · печать из листа наклеек садится на кромку карточки, как наклейка;
+   · кольцо бусин внутри печати — индикатор загрузки;
+   · палитра — ровно два фирменных цвета + белый.
+   ========================================================================== */
+
+:root{
+  /* фирменные цвета */
+  --v-login-pink:#FF92CE;
+  --v-login-plum:#402C60;
+  --v-login-white:#FFFFFF;
+  /* производные — только светлота тех же двух */
+  --v-login-pink-600:#E86BB4;
+  --v-login-pink-100:#FFE9F5;
+  --v-login-blush:#FDF4F9;
+  --v-login-plum-40:#9B90AC;
+  --v-login-line:#EFE4F0;
+  --v-login-err:#C4325F;
+
+  --v-login-font:'PT Astra Sans','PT Sans',-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;
+  --v-login-seal:96px;
+}
+
+#loginScreen.page{
+  position:relative;min-height:100dvh;
+  display:grid;place-items:center;
+  padding:clamp(28px,6vh,72px) 20px;
+  overflow:hidden;
+  font-family:var(--v-login-font);color:var(--v-login-plum);background:var(--v-login-blush);
+  -webkit-font-smoothing:antialiased;
+}
+#loginScreen.page button{font-family:inherit;font-size:inherit;border:0;background:none;cursor:pointer}
+#loginScreen.page *{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+
+/* ─────────── обёрточная бумага ─────────── */
+#loginScreen .paper{position:absolute;inset:-5%;z-index:0;pointer-events:none}
+#loginScreen .paper svg{width:100%;height:100%;display:block}
+#loginScreen .paper g{animation:vLoginDrift 66s ease-in-out infinite}
+#loginScreen .paper g:last-child{animation-duration:88s;animation-direction:reverse}
+@keyframes vLoginDrift{0%,100%{transform:translate3d(0,0,0) rotate(0)}50%{transform:translate3d(-16px,20px,0) rotate(2.5deg)}}
+/* успокаиваем бумагу вокруг карточки, чтобы текст читался */
+#loginScreen .calm{
+  position:absolute;left:50%;top:50%;translate:-50% -50%;z-index:1;pointer-events:none;
+  width:min(1000px,150vw);height:min(1000px,150vh);
+  background:radial-gradient(closest-side,rgba(253,244,249,.94) 0%,rgba(253,244,249,.78) 52%,transparent 100%);
+}
+
+/* ─────────── карточка-письмо ─────────── */
+#loginScreen .card{
+  position:relative;z-index:2;width:100%;max-width:424px;
+  background:var(--v-login-white);
+  border:1px solid #F7E6F0;border-radius:24px;
+  padding:74px 38px 34px;
+  box-shadow:0 30px 70px -24px rgba(64,44,96,.30),0 2px 10px rgba(64,44,96,.05);
+}
+#loginScreen .stamp{
+  position:absolute;left:50%;top:0;translate:-50% -50%;
+  width:var(--v-login-seal);height:var(--v-login-seal);
+  filter:drop-shadow(0 5px 14px rgba(64,44,96,.24));
+}
+#loginScreen .stamp svg{width:100%;height:100%;display:block}
+#loginScreen .beads{transform-origin:100px 100px}
+#loginScreen.loading .beads{animation:vLoginTurn 1.1s linear infinite}
+@keyframes vLoginTurn{to{transform:rotate(360deg)}}
+
+#loginScreen .head{text-align:center;margin-bottom:28px}
+#loginScreen .mark{display:block;width:132px;height:auto;margin:0 auto 12px;fill:var(--v-login-plum)}
+#loginScreen h1{margin:0}
+#loginScreen .head p{
+  margin:0;font-size:13px;letter-spacing:.02em;color:var(--v-login-plum-40);
+}
+#loginScreen .head p b{color:var(--v-login-plum);font-weight:600}
+
+/* ─────────── поля ─────────── */
+#loginScreen .grp{margin-bottom:16px}
+#loginScreen label{display:block;font-size:12.5px;font-weight:600;margin-bottom:7px}
+#loginScreen .box{position:relative}
+#loginScreen input[type=text],#loginScreen input[type=password]{
+  width:100%;font-family:inherit;font-size:15.5px;color:var(--v-login-plum);
+  padding:14px 15px;border-radius:12px;
+  background:#FDFBFC;border:1.5px solid var(--v-login-line);
+  transition:border-color .16s,box-shadow .16s,background .16s;
+}
+#loginScreen input::placeholder{color:#C6BCD0}
+#loginScreen input:hover{border-color:#E2D3E6}
+#loginScreen input:focus{outline:0;background:var(--v-login-white);border-color:var(--v-login-pink);box-shadow:0 0 0 4px var(--v-login-pink-100)}
+#loginScreen input.err{border-color:var(--v-login-err);background:#FFF7FA}
+#loginScreen #loginPassword{padding-right:50px}
+/* Chrome красит автозаполненные поля в #E8F0FE и перекрывает заливку — гасим */
+#loginScreen input:-webkit-autofill,#loginScreen input:-webkit-autofill:hover,#loginScreen input:-webkit-autofill:focus{
+  -webkit-box-shadow:0 0 0 1000px #FDFBFC inset;
+  -webkit-text-fill-color:var(--v-login-plum);
+  caret-color:var(--v-login-plum);
+}
+#loginScreen .peek{
+  position:absolute;right:7px;top:50%;translate:0 -50%;
+  width:38px;height:38px;display:grid;place-items:center;border-radius:9px;color:var(--v-login-plum-40);
+}
+#loginScreen .peek:hover{color:var(--v-login-plum);background:var(--v-login-pink-100)}
+#loginScreen .peek:focus-visible{outline:2px solid var(--v-login-plum);outline-offset:1px}
+#loginScreen .peek svg{width:19px;height:19px}
+#loginScreen .hint{margin:7px 0 0;font-size:12px;color:var(--v-login-plum-40)}
+#loginScreen .bad{display:none;margin:7px 0 0;font-size:12.5px;font-weight:600;color:var(--v-login-err)}
+#loginScreen .bad.on{display:block}
+#loginScreen .caps{display:none;margin:7px 0 0;font-size:12.5px;font-weight:600;color:#9A5B08}
+#loginScreen .caps.on{display:block}
+
+#loginScreen .row{display:flex;align-items:center;justify-content:space-between;gap:12px;margin:18px 0 20px}
+#loginScreen .check{display:inline-flex;align-items:center;gap:9px;font-size:13px;cursor:pointer;user-select:none;margin:0}
+#loginScreen .check input{position:absolute;opacity:0;width:0;height:0}
+#loginScreen .tick{
+  width:19px;height:19px;flex:0 0 auto;border-radius:6px;
+  border:1.5px solid var(--v-login-line);background:var(--v-login-white);
+  display:grid;place-items:center;transition:background .14s,border-color .14s;
+}
+#loginScreen .tick svg{width:12px;height:12px;color:var(--v-login-plum);opacity:0;transition:opacity .14s}
+#loginScreen .check input:checked + .tick{background:var(--v-login-pink);border-color:var(--v-login-pink)}
+#loginScreen .check input:checked + .tick svg{opacity:1}
+#loginScreen .check input:focus-visible + .tick{box-shadow:0 0 0 4px var(--v-login-pink-100)}
+#loginScreen .forgot{font-size:13px;font-weight:600;color:var(--v-login-pink-600);text-decoration:none}
+#loginScreen .forgot:hover{text-decoration:underline}
+
+#loginScreen .submit{
+  width:100%;min-height:54px;padding:16px;border-radius:12px;
+  font-size:15.5px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;
+  color:var(--v-login-plum);background:var(--v-login-pink);
+  box-shadow:0 10px 24px -6px rgba(255,146,206,.62);
+  display:flex;align-items:center;justify-content:center;gap:10px;
+  transition:transform .15s,background .16s,opacity .16s;
+}
+#loginScreen .submit:hover{background:var(--v-login-pink-600)}
+#loginScreen .submit:active{transform:scale(.985)}
+#loginScreen .submit:focus-visible{outline:2px solid var(--v-login-plum);outline-offset:3px}
+#loginScreen .submit[disabled]{opacity:.55;pointer-events:none}
+#loginScreen .spin{display:none;width:17px;height:17px}
+#loginScreen.loading .spin{display:block;animation:vLoginTurn .9s linear infinite}
+
+#loginScreen .alert,#loginScreen .done{
+  display:none;align-items:flex-start;gap:10px;margin-bottom:18px;
+  padding:12px 14px;border-radius:11px;font-size:13px;line-height:1.45;
+}
+#loginScreen .alert{background:#FFF1F5;border:1px solid #F5C9D8;color:#8E2447}
+#loginScreen .done{background:#F1FAF4;border:1px solid #C3E7D2;color:#1B6B41;font-weight:600;align-items:center}
+#loginScreen .alert.on,#loginScreen .done.on{display:flex}
+#loginScreen .alert svg,#loginScreen .done svg{width:17px;height:17px;flex:0 0 auto;margin-top:1px}
+
+#loginScreen .note{margin:22px 0 0;font-size:11.5px;line-height:1.5;color:#BEB3C7;text-align:center}
+
+/* подпись под карточкой */
+#loginScreen .sign{
+  position:relative;z-index:2;margin:22px 0 0;text-align:center;
+  font-family:Georgia,'Times New Roman',serif;font-style:italic;
+  font-size:14px;color:var(--v-login-pink-600);letter-spacing:.02em;
+}
+
+@media (max-width:420px){
+  #loginScreen .card{padding:64px 22px 28px;border-radius:20px}
+  #loginScreen{--v-login-seal:84px}
+  #loginScreen .mark{width:116px}
+}
+@media (prefers-reduced-motion:reduce){
+  #loginScreen *{animation:none!important;transition:none!important}
+}
