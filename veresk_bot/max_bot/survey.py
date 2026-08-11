@@ -717,9 +717,13 @@ class SurveyBot:
 
         already_played = False
         try:
+            from fortune_wheel import is_retry_prize
             from mailing_db import get_fortune_play
 
-            already_played = bool(await get_fortune_play("max", str(user_id)))
+            play = await get_fortune_play("max", str(user_id))
+            already_played = bool(play) and not is_retry_prize(
+                play.get("prize_label"), play.get("prize_id")
+            )
         except Exception:
             logger.debug("Не удалось проверить fortune_plays (MAX)", exc_info=True)
 

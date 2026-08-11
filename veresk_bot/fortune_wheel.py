@@ -195,7 +195,7 @@ def format_prize_label(prize_label: str, discount_pct: float | None = None) -> s
 
 
 def is_retry_prize(prize_label: str | None = None, prize_id: str | None = None) -> bool:
-    """Сектор «Попробуйте ещё» — без поздравления и без записи в карточку."""
+    """Сектор «Попробуйте ещё» — без фиксации спина, без карточки и без поздравления."""
     label = str(prize_label or "").strip().lower().replace("ё", "е")
     pid = str(prize_id or "").strip().lower()
     if pid in {"s4", "retry", "try_again", "try-again"}:

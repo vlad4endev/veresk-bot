@@ -428,6 +428,9 @@
       } else if (label === "done") {
         spinBtn.textContent = "Приз получен";
         if (chipText) chipText.textContent = "Попытка использована";
+      } else if (label === "retry") {
+        spinBtn.textContent = "Крутить ещё раз";
+        if (chipText) chipText.textContent = "Ещё одна попытка";
       } else {
         spinBtn.textContent = "Крутить";
         if (chipText) chipText.textContent = "Одна попытка";
@@ -512,12 +515,18 @@
             root.classList.remove("is-spinning");
             discEl.classList.remove("is-spinning");
             revealPrize(picked).then(() => {
-              if (options.once) setBusy(false, "done");
-              else setBusy(false, "idle");
+              const isRetry = Boolean(so.retry);
+              if (options.once && !isRetry) setBusy(false, "done");
+              else setBusy(false, isRetry ? "retry" : "idle");
               if (typeof options.onSpinEnd === "function") {
-                options.onSpinEnd(picked.segment, picked.index);
+                options.onSpinEnd(picked.segment, picked.index, { retry: isRetry });
               }
-              resolve({ segment: picked.segment, index: picked.index, turns });
+              resolve({
+                segment: picked.segment,
+                index: picked.index,
+                turns,
+                retry: isRetry,
+              });
             });
           }
         };
@@ -534,6 +543,7 @@
             winnerIndex: resolved.winnerIndex,
             turns: resolved.turns,
             durationMs: resolved.durationMs,
+            retry: Boolean(resolved.retry),
           });
           return;
         }

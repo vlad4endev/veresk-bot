@@ -57,6 +57,23 @@
     return text;
   }
 
+  function isRetryPrize(segmentOrPlay) {
+    const id = String(segmentOrPlay?.prize_id || segmentOrPlay?.id || "")
+      .trim()
+      .toLowerCase();
+    if (id === "s4" || id === "retry" || id === "try_again" || id === "try-again") {
+      return true;
+    }
+    const label = String(segmentOrPlay?.prize_label || segmentOrPlay?.label || "")
+      .trim()
+      .toLowerCase()
+      .replace(/ё/g, "е");
+    if (!label) return false;
+    if (label.includes("попробуй") && label.includes("ещ")) return true;
+    if (label.includes("try again") || label.includes("try_again")) return true;
+    return false;
+  }
+
   function setWheelHeader(mode) {
     const screen = document.getElementById("screen-wheel");
     const header = document.querySelector("#screen-wheel .screen-header");
@@ -190,6 +207,20 @@
     return data;
   }
 
+  async function requestPrizeNotify() {
+    try {
+      const { channel, headers } = authHeaders();
+      await fetch("/api/wheel/notify", {
+        method: "POST",
+        credentials: "same-origin",
+        headers,
+        body: JSON.stringify({ channel }),
+      });
+    } catch (err) {
+      console.warn("[wheel] notify", err);
+    }
+  }
+
   function mountWheel(config) {
     const root = mountRoot();
     if (!root || !window.VereskWheel?.create) return null;
@@ -208,8 +239,13 @@
             cachedConfig = result.config;
             widget.setConfig(result.config);
           }
-          cachedPlay = result.play || cachedPlay;
-          return { winnerIndex: result.winner_index };
+          const retry = Boolean(result.retry) || isRetryPrize(result.segment);
+          if (retry) {
+            cachedPlay = null;
+          } else {
+            cachedPlay = result.play || cachedPlay;
+          }
+          return { winnerIndex: result.winner_index, retry };
         } catch (err) {
           if (err.code === "already_played" || err.status === 409) {
             const play = err.data?.play || {
@@ -217,6 +253,10 @@
               prize_id: err.data?.segment?.id,
               discount_pct: err.data?.discount_pct,
             };
+            if (isRetryPrize(play) || isRetryPrize(err.data?.segment)) {
+              cachedPlay = null;
+              return null;
+            }
             showPrizePanel(play, {
               segment: err.data?.segment,
               discount_pct: err.data?.discount_pct,
@@ -235,15 +275,20 @@
           throw err;
         }
       },
-      onSpinEnd(segment) {
+      onSpinEnd(segment, _index, meta) {
         lastPrize = segment;
+        const retry = Boolean(meta?.retry) || isRetryPrize(segment);
         try {
-          window.tg?.HapticFeedback?.notificationOccurred?.("success");
-          window.WebApp?.HapticFeedback?.notificationOccurred?.("success");
+          window.tg?.HapticFeedback?.notificationOccurred?.(retry ? "warning" : "success");
+          window.WebApp?.HapticFeedback?.notificationOccurred?.(retry ? "warning" : "success");
         } catch (_) {
           /* ignore */
         }
-        // После анимации — красивое окно с призом вместо колеса
+        if (retry) {
+          cachedPlay = null;
+          return;
+        }
+        // После анимации — окно с призом и поздравление в боте
         window.setTimeout(() => {
           showPrizePanel(
             cachedPlay || {
@@ -253,6 +298,7 @@
             },
             { segment }
           );
+          requestPrizeNotify();
         }, 900);
       },
     });
