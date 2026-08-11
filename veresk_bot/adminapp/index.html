@@ -14,7 +14,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,500;9..144,600;9..144,700&family=Manrope:wght@400;500;600;700&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="css/admin.css?v=75">
+<link rel="stylesheet" href="css/admin.css?v=76">
 <link rel="stylesheet" href="css/login.css?v=2">
 <link rel="stylesheet" href="css/wheel.css?v=11">
 <link rel="stylesheet" href="css/promos.css?v=1">
@@ -361,12 +361,16 @@
                   <h3>Автосообщение</h3>
                   <p>Новому подписчику — личное сообщение в Telegram.</p>
                 </div>
-                <label class="subs-welcome-toggle">
-                  <input type="checkbox" id="subsWelcomeEnabled">
-                  <span>Включить автосообщение</span>
-                </label>
-                <p class="hint" id="subsWelcomeHint">при подписке → личка</p>
-                <div class="subs-welcome-source-row">
+
+                <div class="subs-welcome-body">
+                  <div class="subs-welcome-enable">
+                    <label class="subs-welcome-toggle">
+                      <input type="checkbox" id="subsWelcomeEnabled">
+                      <span>Включить автосообщение</span>
+                    </label>
+                    <span class="subs-welcome-status" id="subsWelcomeHint">выключено</span>
+                  </div>
+
                   <label class="field">
                     <span>Источник текста</span>
                     <select id="subsWelcomeSource">
@@ -374,32 +378,35 @@
                       <option value="promo">Из раздела Акции</option>
                     </select>
                   </label>
-                  <div class="subs-welcome-promo-pick" id="subsWelcomePromoWrap" hidden>
+
+                  <div class="subs-welcome-promo" id="subsWelcomePromoWrap" hidden>
                     <label class="field">
                       <span>Акция</span>
                       <select id="subsWelcomePromo">
                         <option value="">Авто · живая «Приветственная»</option>
                       </select>
                     </label>
-                    <button type="button" class="btn ghost" id="btnSubsWelcomePullPromo" title="Подставить текст акции в поле ниже">Подтянуть текст</button>
+                    <button type="button" class="btn ghost subs-welcome-pull" id="btnSubsWelcomePullPromo" title="Подставить текст акции в поле ниже">Подтянуть текст</button>
+                    <p class="hint" id="subsWelcomePromoHint">
+                      В личку уйдёт шаблон выбранной акции. Ниже — запасной текст, если акции нет.
+                    </p>
                   </div>
-                </div>
-                <label class="field subs-welcome-text">
-                  <span id="subsWelcomeTextLabel">Текст</span>
-                  <textarea id="subsWelcomeText" rows="4" placeholder="Здравствуйте, {имя}!…"></textarea>
-                </label>
-                <p class="hint" id="subsWelcomePromoHint" hidden>
-                  При источнике «Акции» в личку уйдёт шаблон выбранной (или авто) акции.
-                  Поле ниже — запасной текст, если акции нет.
-                </p>
-                <div class="subs-welcome-row">
-                  <label class="field">
-                    <span>Задержка, мин</span>
-                    <input type="number" id="subsWelcomeDelay" min="0" max="10080" step="1" value="0">
+
+                  <label class="field subs-welcome-text">
+                    <span id="subsWelcomeTextLabel">Текст</span>
+                    <textarea id="subsWelcomeText" rows="5" placeholder="Здравствуйте, {имя}!…"></textarea>
                   </label>
-                  <button type="button" class="btn primary" id="btnSubsWelcomeSave">Сохранить</button>
+
+                  <div class="subs-welcome-footer">
+                    <label class="field subs-welcome-delay">
+                      <span>Задержка, мин</span>
+                      <input type="number" id="subsWelcomeDelay" min="0" max="10080" step="1" value="0">
+                    </label>
+                    <button type="button" class="btn primary" id="btnSubsWelcomeSave">Сохранить</button>
+                  </div>
+
+                  <p class="hint subs-welcome-placeholders">Плейсхолдеры <code>{имя}</code>, <code>{скидка}</code>. Нужен Telegram-аккаунт в Настройках.</p>
                 </div>
-                <p class="hint">Плейсхолдеры <code>{имя}</code>, <code>{скидка}</code>. Нужен Telegram-аккаунт в Настройках.</p>
               </section>
             </div>
           </div>
@@ -1814,6 +1821,6 @@
 <script src="js/api.js?v=42"></script>
 <script src="js/login-ui.js?v=1"></script>
 <script src="js/wheel-widget.js?v=13"></script>
-<script src="js/app.js?v=84"></script>
+<script src="js/app.js?v=85"></script>
 </body>
 </html>

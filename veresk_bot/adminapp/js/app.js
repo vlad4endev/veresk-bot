@@ -1378,10 +1378,8 @@
   function syncSubsWelcomeSourceUi() {
     const source = $("#subsWelcomeSource")?.value === "promo" ? "promo" : "custom";
     const wrap = $("#subsWelcomePromoWrap");
-    const promoHint = $("#subsWelcomePromoHint");
     const label = $("#subsWelcomeTextLabel");
     if (wrap) wrap.hidden = source !== "promo";
-    if (promoHint) promoHint.hidden = source !== "promo";
     if (label) label.textContent = source === "promo" ? "Запасной текст" : "Текст";
   }
 

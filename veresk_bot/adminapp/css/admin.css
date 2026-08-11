@@ -780,30 +780,50 @@
   .subs-setup .field input:focus{outline:none;border-color:var(--accent);background:var(--surface);}
   .subs-welcome-toggle{
     display:inline-flex;align-items:center;gap:8px;font-size:13.5px;font-weight:650;
-    color:var(--ink);cursor:pointer;
+    color:var(--ink);cursor:pointer;margin:0;
   }
-  .subs-welcome-toggle input{width:16px;height:16px;accent-color:var(--accent);}
-  .subs-welcome-source-row{
-    display:flex;flex-wrap:wrap;gap:10px;align-items:flex-end;margin:4px 0 10px;
+  .subs-welcome-toggle input{width:16px;height:16px;accent-color:var(--accent);flex:0 0 auto;}
+  .subs-welcome-body{
+    display:flex;flex-direction:column;gap:12px;margin-top:4px;
   }
-  .subs-welcome-source-row .field{min-width:160px;flex:1;}
-  .subs-welcome-source-row select{
-    width:100%;border:1.5px solid var(--line);border-radius:11px;padding:8px 10px;
-    background:var(--surface-2);color:var(--ink);font:inherit;font-size:13.5px;
+  .subs-welcome-enable{
+    display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;
+    padding:10px 12px;border-radius:12px;background:var(--surface-2);border:1px solid var(--line);
   }
-  .subs-welcome-promo-pick{
-    display:flex;flex-wrap:wrap;gap:8px;align-items:flex-end;flex:2;min-width:220px;
+  .subs-welcome-status{
+    font-size:12.5px;font-weight:600;color:var(--ink-3);white-space:nowrap;
   }
-  .subs-welcome-promo-pick .field{flex:1;min-width:180px;}
+  #subsWelcome .field{width:100%;min-width:0;margin:0;}
+  #subsWelcome .field > span{
+    display:block;margin:0 0 5px;font-size:12.5px;font-weight:600;color:var(--ink-2);
+  }
+  #subsWelcome select{
+    width:100%;box-sizing:border-box;
+    border:1.5px solid var(--line);border-radius:11px;padding:9px 11px;
+    background:var(--surface-2);color:var(--ink);font:inherit;font-size:13.5px;min-height:40px;
+  }
+  #subsWelcome select:focus{outline:none;border-color:var(--accent);background:var(--surface);}
+  .subs-welcome-promo{
+    display:flex;flex-direction:column;gap:10px;
+    padding:12px;border-radius:12px;border:1px solid var(--line);background:var(--surface);
+  }
+  .subs-welcome-promo[hidden]{display:none !important;}
+  .subs-welcome-pull{width:100%;justify-content:center;}
+  .subs-welcome-promo .hint{margin:0;line-height:1.4;}
   .subs-welcome-text textarea{
-    width:100%;min-height:96px;resize:vertical;font:inherit;font-size:13.5px;
-    padding:10px 11px;border-radius:11px;border:1.5px solid var(--line);
-    background:var(--surface-2);color:var(--ink);line-height:1.45;
+    width:100%;box-sizing:border-box;min-height:110px;resize:vertical;
+    font:inherit;font-size:13.5px;padding:10px 11px;border-radius:11px;
+    border:1.5px solid var(--line);background:var(--surface-2);color:var(--ink);line-height:1.45;
   }
   .subs-welcome-text textarea:focus{outline:none;border-color:var(--accent);background:var(--surface);}
-  .subs-welcome-row{display:flex;flex-wrap:wrap;gap:10px;align-items:flex-end;}
-  .subs-welcome-row .field{min-width:120px;max-width:150px;}
-  .subs-welcome-row .field input{width:100%;}
+  .subs-welcome-footer{
+    display:flex;align-items:flex-end;justify-content:space-between;gap:12px;flex-wrap:wrap;
+    padding-top:4px;border-top:1px solid var(--line);
+  }
+  .subs-welcome-delay{flex:0 0 120px;max-width:140px;}
+  .subs-welcome-delay input{width:100%;}
+  .subs-welcome-footer .btn.primary{margin-left:auto;min-width:140px;}
+  .subs-welcome-placeholders{margin:0;line-height:1.4;}
 
   .subs-list-block{display:flex;flex-direction:column;gap:10px;}
   .subs-list-toolbar{
@@ -1007,6 +1027,9 @@
     .subs-setup-fields{flex-direction:column;align-items:stretch;}
     .subs-card .field,.subs-setup .field{min-width:0;}
     .subs-card #btnSubsSaveChannel,.subs-setup #btnSubsSaveChannel{width:100%;}
+    .subs-welcome-footer{flex-direction:column;align-items:stretch;}
+    .subs-welcome-delay{flex:none;max-width:none;width:100%;}
+    .subs-welcome-footer .btn.primary{margin-left:0;width:100%;}
     .subs-channel-actions{width:100%;}
     .subs-channel-actions .btn{flex:1;justify-content:center;}
     .subs-summary-side{width:100%;justify-content:space-between;}
