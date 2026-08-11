@@ -303,6 +303,15 @@ def extract_customer_search_queries(text: str) -> list[str]:
     return queries[:6]
 
 
+AI_BY_PROVIDER_KEY = "ai_by_provider"
+
+
+def _mask_key(key: str) -> str:
+    if len(key) <= 10:
+        return "••••••••"
+    return key[:4] + "…" + key[-4:]
+
+
 def get_ai_provider() -> str:
     raw = runtime_settings.get("ai_provider")
     if raw and str(raw).strip() in PROVIDERS:
@@ -312,102 +321,282 @@ def get_ai_provider() -> str:
     return "openai"
 
 
-def get_ai_api_key() -> str:
-    raw = runtime_settings.get("ai_api_key")
-    if raw and str(raw).strip():
-        return str(raw).strip()
-    return AI_API_KEY
+def _legacy_provider_slot() -> dict[str, Any]:
+    """Старые плоские ключи → слот активного (или env) провайдера."""
+    slot: dict[str, Any] = {}
+    if runtime_settings.get("ai_api_key"):
+        slot["api_key"] = str(runtime_settings.get("ai_api_key")).strip()
+    if runtime_settings.get("ai_model"):
+        slot["model"] = str(runtime_settings.get("ai_model")).strip()
+    if runtime_settings.get("ai_api_base"):
+        slot["api_base"] = str(runtime_settings.get("ai_api_base")).strip().rstrip("/")
+    if runtime_settings.get("ai_folder_id"):
+        slot["folder_id"] = str(runtime_settings.get("ai_folder_id")).strip()
+    return slot
 
 
-def get_ai_folder_id() -> str:
-    raw = runtime_settings.get("ai_folder_id")
-    if raw and str(raw).strip():
-        return str(raw).strip()
-    return AI_FOLDER_ID
+def get_ai_by_provider() -> dict[str, dict[str, Any]]:
+    """Словарь настроек по операторам; мигрирует legacy-ключи при первом чтении."""
+    raw = runtime_settings.get(AI_BY_PROVIDER_KEY)
+    data: dict[str, dict[str, Any]] = {}
+    if isinstance(raw, dict):
+        for pid, slot in raw.items():
+            if pid in PROVIDERS and isinstance(slot, dict):
+                data[pid] = dict(slot)
+
+    # Миграция: один общий ключ → слот текущего провайдера (если слот пуст)
+    legacy = _legacy_provider_slot()
+    if legacy.get("api_key"):
+        active = get_ai_provider()
+        cur = data.get(active) or {}
+        if not (cur.get("api_key") or "").strip():
+            merged = {**legacy, **{k: v for k, v in cur.items() if v}}
+            data[active] = merged
+            try:
+                runtime_settings.set_many({AI_BY_PROVIDER_KEY: data})
+            except Exception:
+                logger.debug("AI by-provider migrate failed", exc_info=True)
+    return data
 
 
-def get_ai_api_base() -> str:
-    provider = get_ai_provider()
-    raw = runtime_settings.get("ai_api_base")
-    if raw and str(raw).strip():
-        return str(raw).strip().rstrip("/")
-    if AI_API_BASE and provider in ("custom", "openai"):
+def get_provider_slot(provider: str | None = None) -> dict[str, Any]:
+    pid = (provider or get_ai_provider()).strip().lower()
+    if pid not in PROVIDERS:
+        pid = get_ai_provider()
+    return dict(get_ai_by_provider().get(pid) or {})
+
+
+def _env_fallback_key(provider: str) -> str:
+    """Ключ из .env только если активный провайдер совпадает с AI_PROVIDER."""
+    if provider == (AI_PROVIDER if AI_PROVIDER in PROVIDERS else "openai"):
+        return AI_API_KEY or ""
+    return ""
+
+
+def get_ai_api_key(provider: str | None = None) -> str:
+    pid = (provider or get_ai_provider()).strip().lower()
+    slot = get_provider_slot(pid)
+    key = str(slot.get("api_key") or "").strip()
+    if key:
+        return key
+    # Legacy flat (до миграции в рантайме)
+    if pid == get_ai_provider():
+        legacy = str(runtime_settings.get("ai_api_key") or "").strip()
+        if legacy:
+            return legacy
+    return _env_fallback_key(pid)
+
+
+def get_ai_folder_id(provider: str | None = None) -> str:
+    pid = (provider or get_ai_provider()).strip().lower()
+    slot = get_provider_slot(pid)
+    folder = str(slot.get("folder_id") or "").strip()
+    if folder:
+        return folder
+    if pid == get_ai_provider():
+        legacy = str(runtime_settings.get("ai_folder_id") or "").strip()
+        if legacy:
+            return legacy
+    if pid == "yandexgpt" or pid == (AI_PROVIDER if AI_PROVIDER in PROVIDERS else ""):
+        return AI_FOLDER_ID or ""
+    return ""
+
+
+def get_ai_api_base(provider: str | None = None) -> str:
+    pid = (provider or get_ai_provider()).strip().lower()
+    preset = PROVIDER_PRESETS.get(pid) or PROVIDER_PRESETS["openai"]
+    slot = get_provider_slot(pid)
+    raw = str(slot.get("api_base") or "").strip().rstrip("/")
+    if raw:
+        return raw
+    if pid == get_ai_provider():
+        legacy = str(runtime_settings.get("ai_api_base") or "").strip().rstrip("/")
+        if legacy:
+            return legacy
+    if AI_API_BASE and pid in ("custom", "openai") and pid == (
+        AI_PROVIDER if AI_PROVIDER in PROVIDERS else "openai"
+    ):
         return AI_API_BASE.rstrip("/")
-    preset = PROVIDER_PRESETS.get(provider) or PROVIDER_PRESETS["openai"]
     return preset["api_base"].rstrip("/")
 
 
-def get_ai_model() -> str:
-    raw = runtime_settings.get("ai_model")
-    if raw and str(raw).strip():
-        return str(raw).strip()
-    if AI_MODEL:
+def get_ai_model(provider: str | None = None) -> str:
+    pid = (provider or get_ai_provider()).strip().lower()
+    preset = PROVIDER_PRESETS.get(pid) or PROVIDER_PRESETS["openai"]
+    slot = get_provider_slot(pid)
+    model = str(slot.get("model") or "").strip()
+    if model:
+        return model
+    if pid == get_ai_provider():
+        legacy = str(runtime_settings.get("ai_model") or "").strip()
+        if legacy:
+            return legacy
+    if AI_MODEL and pid == (AI_PROVIDER if AI_PROVIDER in PROVIDERS else "openai"):
         return AI_MODEL
-    preset = PROVIDER_PRESETS.get(get_ai_provider()) or PROVIDER_PRESETS["openai"]
     return preset["model"]
 
 
-def is_ai_configured() -> bool:
-    if not get_ai_api_key():
+def is_provider_configured(provider: str) -> bool:
+    pid = (provider or "").strip().lower()
+    if pid not in PROVIDERS:
         return False
-    if get_ai_provider() == "yandexgpt" and not get_ai_folder_id():
+    if not get_ai_api_key(pid):
+        return False
+    if pid == "yandexgpt" and not get_ai_folder_id(pid):
         return False
     return True
 
 
-def resolve_model_uri() -> str:
+def is_ai_configured() -> bool:
+    return is_provider_configured(get_ai_provider())
+
+
+def resolve_model_uri(provider: str | None = None) -> str:
     """Для YandexGPT модель должна быть gpt://folder_id/name."""
-    model = get_ai_model()
-    provider = get_ai_provider()
-    if provider == "deepseek":
+    pid = (provider or get_ai_provider()).strip().lower()
+    model = get_ai_model(pid)
+    if pid == "deepseek":
         return DEEPSEEK_MODEL_ALIASES.get(model.lower(), model)
-    if provider != "yandexgpt":
+    if pid != "yandexgpt":
         return model
-    folder = get_ai_folder_id()
+    folder = get_ai_folder_id(pid)
     if model.startswith("gpt://") or model.startswith("emb://"):
         return model
-    # yandexgpt-lite/latest → gpt://<folder>/yandexgpt-lite/latest
     name = model.lstrip("/")
     if folder:
         return f"gpt://{folder}/{name}"
     return model
 
 
+def save_provider_settings(
+    provider: str,
+    *,
+    api_key: str | None = None,
+    api_base: str | None = None,
+    model: str | None = None,
+    folder_id: str | None = None,
+    activate: bool = True,
+) -> None:
+    """Сохранить настройки одного оператора, не затирая остальные."""
+    pid = (provider or "").strip().lower()
+    if pid not in PROVIDERS:
+        raise ValueError("invalid_provider")
+
+    preset = PROVIDER_PRESETS.get(pid) or PROVIDER_PRESETS["openai"]
+    all_slots = get_ai_by_provider()
+    slot = dict(all_slots.get(pid) or {})
+
+    if api_key is not None and str(api_key).strip():
+        slot["api_key"] = str(api_key).strip()
+
+    if model is not None:
+        m = str(model).strip()
+        if pid == "deepseek":
+            m = DEEPSEEK_MODEL_ALIASES.get(m.lower(), m) if m else preset["model"]
+        slot["model"] = m or preset["model"]
+    elif not slot.get("model"):
+        slot["model"] = preset["model"]
+
+    if pid == "custom":
+        if api_base is not None:
+            base = str(api_base).strip().rstrip("/")
+            slot["api_base"] = base or preset["api_base"]
+        elif not slot.get("api_base"):
+            slot["api_base"] = preset["api_base"]
+    else:
+        # Фиксированный endpoint; явный api_base можно сохранить как override
+        if api_base is not None and str(api_base).strip():
+            slot["api_base"] = str(api_base).strip().rstrip("/")
+        else:
+            slot["api_base"] = preset["api_base"]
+
+    if pid == "yandexgpt":
+        if folder_id is not None and str(folder_id).strip():
+            slot["folder_id"] = str(folder_id).strip()
+    elif folder_id is not None:
+        # для остальных folder не нужен
+        slot.pop("folder_id", None)
+
+    all_slots[pid] = slot
+    values: dict[str, Any] = {AI_BY_PROVIDER_KEY: all_slots}
+    if activate:
+        values["ai_provider"] = pid
+        # Зеркало в плоские ключи — совместимость со старым кодом/логами
+        if slot.get("api_key"):
+            values["ai_api_key"] = slot["api_key"]
+        if slot.get("model"):
+            values["ai_model"] = slot["model"]
+        if slot.get("api_base"):
+            values["ai_api_base"] = slot["api_base"]
+        if pid == "yandexgpt" and slot.get("folder_id"):
+            values["ai_folder_id"] = slot["folder_id"]
+        elif pid != "yandexgpt":
+            # не удаляем folder_id чужого слота из by_provider, только из плоского зеркала
+            pass
+
+    runtime_settings.set_many(values)
+
+
+def clear_ai_settings() -> None:
+    """Сбросить все сохранённые ключи ИИ в панели."""
+    runtime_settings.delete_keys(
+        "ai_provider",
+        "ai_api_key",
+        "ai_api_base",
+        "ai_model",
+        "ai_folder_id",
+        AI_BY_PROVIDER_KEY,
+    )
+
+
 def ai_settings_public() -> dict[str, Any]:
-    """Статус для админки (без полного ключа)."""
-    key = get_ai_api_key()
+    """Статус для админки (без полных ключей), с настройками по каждому оператору."""
     provider = get_ai_provider()
-    from_panel = bool(runtime_settings.get("ai_api_key"))
-    folder = get_ai_folder_id()
-    return {
-        "configured": is_ai_configured(),
-        "provider": provider,
-        "providers": [
+    key = get_ai_api_key(provider)
+    folder = get_ai_folder_id(provider)
+    slot = get_provider_slot(provider)
+    from_panel = bool(str(slot.get("api_key") or "").strip()) or bool(
+        runtime_settings.get("ai_api_key")
+    )
+
+    providers_out: list[dict[str, Any]] = []
+    for pid, meta in PROVIDER_PRESETS.items():
+        p_slot = get_provider_slot(pid)
+        p_key = get_ai_api_key(pid)
+        p_model = get_ai_model(pid)
+        if pid == "deepseek":
+            p_model = DEEPSEEK_MODEL_ALIASES.get(p_model.lower(), p_model)
+        p_folder = get_ai_folder_id(pid) if pid == "yandexgpt" else ""
+        configured = is_provider_configured(pid)
+        providers_out.append(
             {
                 "id": pid,
                 "label": meta["label"],
-                "api_base": meta["api_base"],
-                "model": meta["model"],
+                "api_base": get_ai_api_base(pid),
+                "model": p_model,
                 "hint": meta["hint"],
                 "needs_folder": pid == "yandexgpt",
+                "configured": configured,
+                "api_key_set": bool(p_key),
+                "api_key_masked": _mask_key(p_key) if p_key else None,
+                "folder_id": p_folder or None,
+                "from_panel": bool(str(p_slot.get("api_key") or "").strip()),
             }
-            for pid, meta in PROVIDER_PRESETS.items()
-        ],
+        )
+
+    return {
+        "configured": is_ai_configured(),
+        "provider": provider,
+        "providers": providers_out,
         "api_key_set": bool(key),
         "api_key_masked": _mask_key(key) if key else None,
-        "api_base": get_ai_api_base(),
-        "model": resolve_model_uri() if provider == "deepseek" else get_ai_model(),
+        "api_base": get_ai_api_base(provider),
+        "model": resolve_model_uri(provider) if provider == "deepseek" else get_ai_model(provider),
         "folder_id": folder or None,
         "folder_id_set": bool(folder),
         "from_env": bool(key) and not from_panel,
         "from_panel": from_panel,
     }
-
-
-def _mask_key(key: str) -> str:
-    if len(key) <= 10:
-        return "••••••••"
-    return key[:4] + "…" + key[-4:]
 
 
 def _build_user_content(

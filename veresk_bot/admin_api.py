@@ -15,17 +15,19 @@ from typing import Any
 from aiohttp import web
 
 from ai_compose import (
-    DEEPSEEK_MODEL_ALIASES,
-    PROVIDER_PRESETS,
     PROVIDERS,
     AiComposeError,
     admin_assistant_reply,
     ai_settings_public,
+    clear_ai_settings,
     detect_chat_intent,
     extract_customer_search_queries,
     generate_mailing_text,
+    get_ai_folder_id,
     is_ai_configured,
+    is_provider_configured,
     normalize_chat_messages,
+    save_provider_settings,
     suggest_chat_followups,
 )
 from config import ADMIN_PASSWORD, ADMIN_USERNAME, BOT_TOKEN
@@ -2612,17 +2614,13 @@ async def handle_ai_settings_save(request: web.Request) -> web.Response:
         return _json({"error": "invalid_json"}, status=400)
 
     if body.get("clear"):
-        runtime_settings.delete_keys(
-            "ai_provider",
-            "ai_api_key",
-            "ai_api_base",
-            "ai_model",
-            "ai_folder_id",
-        )
+        clear_ai_settings()
         return _json({"ok": True, "cleared": True, **ai_settings_public()})
 
     provider = str(body.get("provider") or "").strip().lower()
-    if provider and provider not in PROVIDERS:
+    if not provider:
+        provider = str(runtime_settings.get("ai_provider") or "openai")
+    if provider not in PROVIDERS:
         return _json({"error": "invalid_provider", "detail": "Неизвестный оператор"}, status=400)
 
     api_key = str(body.get("api_key") or "").strip()
@@ -2630,46 +2628,19 @@ async def handle_ai_settings_save(request: web.Request) -> web.Response:
     model = str(body.get("model") or "").strip()
     folder_id = str(body.get("folder_id") or "").strip()
 
-    if not api_key and not is_ai_configured():
-        return _json({"error": "api_key_required", "detail": "Укажите API-ключ"}, status=400)
-
-    values: dict = {}
-    if provider:
-        values["ai_provider"] = provider
-    else:
-        provider = str(runtime_settings.get("ai_provider") or "openai")
-
-    if api_key:
-        values["ai_api_key"] = api_key
-
-    preset = PROVIDER_PRESETS.get(provider) or PROVIDER_PRESETS["openai"]
-    if provider == "custom":
-        if api_base:
-            values["ai_api_base"] = api_base
-        elif "api_base" in body:
-            values["ai_api_base"] = preset["api_base"]
-    else:
-        # Фиксированный endpoint оператора (можно переопределить явно)
-        values["ai_api_base"] = api_base or preset["api_base"]
-
-    if model:
-        values["ai_model"] = model
-    elif "model" in body or provider:
-        values["ai_model"] = model or preset["model"]
-
-    # DeepSeek: старые deepseek-chat / reasoner → v4-pro
-    if provider == "deepseek":
-        chosen = str(values.get("ai_model") or runtime_settings.get("ai_model") or "")
-        mapped = DEEPSEEK_MODEL_ALIASES.get(chosen.lower())
-        if mapped:
-            values["ai_model"] = mapped
-        elif not chosen:
-            values["ai_model"] = preset["model"]
+    # Ключ обязателен только если у ЭТОГО оператора ещё нет сохранённого
+    if not api_key and not is_provider_configured(provider):
+        return _json(
+            {
+                "error": "api_key_required",
+                "detail": f"Укажите API-ключ для {provider}",
+            },
+            status=400,
+        )
 
     if provider == "yandexgpt":
-        if folder_id:
-            values["ai_folder_id"] = folder_id
-        elif not runtime_settings.get("ai_folder_id"):
+        has_folder = bool(folder_id) or bool(get_ai_folder_id("yandexgpt"))
+        if not has_folder:
             return _json(
                 {
                     "error": "folder_id_required",
@@ -2677,11 +2648,15 @@ async def handle_ai_settings_save(request: web.Request) -> web.Response:
                 },
                 status=400,
             )
-    elif "folder_id" in body:
-        values["ai_folder_id"] = folder_id
 
-    if values:
-        runtime_settings.set_many(values)
+    save_provider_settings(
+        provider,
+        api_key=api_key or None,
+        api_base=api_base if "api_base" in body or api_base else None,
+        model=model if ("model" in body or model) else None,
+        folder_id=folder_id if ("folder_id" in body or folder_id) else None,
+        activate=True,
+    )
 
     return _json({"ok": True, **ai_settings_public()})
 

@@ -575,6 +575,11 @@
   .contact-chip .ci2.tg{background:var(--tg);} .contact-chip .ci2.max{background:var(--max);} .contact-chip .ci2.ph{background:var(--plum);}
   .contact-chip .phone-link{color:inherit;text-decoration:none;}
   .contact-chip .phone-link:hover{text-decoration:underline;}
+  .cl-fortune-row .v{display:flex;flex-wrap:wrap;gap:8px;align-items:flex-start;justify-content:flex-end;}
+  .cl-fortune-chip{align-items:flex-start;}
+  .cl-fortune-body{display:flex;flex-direction:column;gap:2px;min-width:0;line-height:1.25;text-align:left;}
+  .cl-fortune-prize{font-weight:600;}
+  .cl-fortune-when{font-size:11.5px;color:var(--ink-3);font-weight:500;}
   .cl-strip{display:flex;gap:12px;flex-wrap:wrap;margin-bottom:6px;}
   .cl-cols{display:grid;grid-template-columns:1fr;gap:12px;margin:18px 0;}
   @media (min-width:900px){ .cl-cols{grid-template-columns:1fr 1fr;} }
@@ -1411,12 +1416,18 @@
   .integ-ai-form .form-foot{margin:10px 0 0;font-size:12.5px;color:var(--ink-3);line-height:1.4;}
   .ai-prov-row{display:flex;flex-wrap:wrap;gap:7px;margin:2px 0 4px;}
   .ai-prov{
+    position:relative;display:inline-flex;align-items:center;gap:6px;
     font-size:13px;font-weight:600;padding:8px 12px;min-height:36px;border-radius:999px;
     border:1.5px solid var(--line);background:var(--surface);color:var(--ink-2);
   }
   .ai-prov:hover{border-color:var(--accent);color:var(--accent);}
   .ai-prov.on{border-color:var(--accent);background:var(--accent-soft);color:var(--plum);}
+  .ai-prov.has-key{border-color:color-mix(in srgb, var(--ok) 45%, var(--line));}
+  .ai-prov-dot{
+    width:7px;height:7px;border-radius:50%;background:var(--ok);flex:0 0 auto;
+  }
   .ai-prov-hint{margin:0 0 4px;font-size:12.5px;color:var(--ink-3);line-height:1.4;}
+  .ai-key-status{font-weight:500;color:var(--ink-3);font-size:12px;}
   .integ-actions{display:flex;gap:8px;flex-wrap:wrap;margin-top:4px;}
   .badge-soft{display:inline-flex;align-items:center;gap:6px;font-size:12px;font-weight:600;padding:3px 10px;border-radius:20px;background:var(--surface-2);color:var(--ink-2);}
   .badge-soft.ok{background:var(--ok-soft);color:var(--ok);}

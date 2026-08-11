@@ -1195,7 +1195,11 @@
                 p.discount_pct != null && p.discount_pct !== ""
                   ? ` (−${esc(p.discount_pct)}%)`
                   : "";
-              return `<span class="contact-chip"><span class="ci2 ${ch === "MAX" ? "max" : "tg"}">${ch}</span>${prize}${disc}</span>`;
+              const when = formatWheelWhen(p.created_at);
+              const whenBit = when
+                ? `<span class="cl-fortune-when">${esc(when)}</span>`
+                : "";
+              return `<span class="contact-chip cl-fortune-chip"><span class="ci2 ${ch === "MAX" ? "max" : "tg"}">${ch}</span><span class="cl-fortune-body"><span class="cl-fortune-prize">${prize}${disc}</span>${whenBit}</span></span>`;
             })
             .join(" ");
         }
@@ -2848,16 +2852,22 @@
       : `<span class="status-pill warn"><span class="d"></span>Не подключён</span>`;
 
     const providerChips = (ai.providers || [])
-      .map(
-        (p) =>
-          `<button type="button" class="ai-prov ${
-            p.id === ai.provider ? "on" : ""
-          }" data-provider="${esc(p.id)}" data-base="${esc(p.api_base)}" data-model="${esc(
-            p.model
-          )}" data-hint="${esc(p.hint)}" data-folder="${p.needs_folder ? "1" : "0"}">${esc(
-            p.label
-          )}</button>`
-      )
+      .map((p) => {
+        const saved = !!p.configured || !!p.api_key_set;
+        return `<button type="button" class="ai-prov ${
+          p.id === ai.provider ? "on" : ""
+        }${saved ? " has-key" : ""}" data-provider="${esc(p.id)}" data-base="${esc(
+          p.api_base || ""
+        )}" data-model="${esc(p.model || "")}" data-hint="${esc(
+          p.hint || ""
+        )}" data-folder="${p.needs_folder ? "1" : "0"}" data-key-set="${
+          saved ? "1" : "0"
+        }" data-key-masked="${esc(p.api_key_masked || "")}" data-folder-id="${esc(
+          p.folder_id || ""
+        )}" title="${saved ? "Ключ сохранён" : "Ключ не задан"}">${esc(p.label)}${
+          saved ? '<span class="ai-prov-dot" aria-hidden="true"></span>' : ""
+        }</button>`;
+      })
       .join("");
 
     const curProv =
@@ -2919,12 +2929,17 @@
           </div>
 
           <div class="svc-field">
-            <label for="aiApiKey">API-ключ</label>
+            <label for="aiApiKey">API-ключ <span class="ai-key-status" id="aiKeyStatus">${
+              curProv.api_key_set || curProv.configured
+                ? "· сохранён для " + esc(curProv.label || "")
+                : "· для этого оператора ещё не задан"
+            }</span></label>
             <input id="aiApiKey" type="password" autocomplete="off" placeholder="${
-              ai.configured
-                ? "Оставьте пустым, чтобы не менять · " + esc(ai.api_key_masked || "••••")
-                : "Вставьте ключ выбранного провайдера"
+              curProv.api_key_set || curProv.configured
+                ? "Оставьте пустым, чтобы не менять · " + esc(curProv.api_key_masked || ai.api_key_masked || "••••")
+                : "Вставьте ключ выбранного оператора"
             }">
+            <p class="form-foot" id="aiKeyFoot">Ключи OpenRouter, DeepSeek и остальных хранятся отдельно — можно переключаться без потери.</p>
           </div>
 
           <div class="svc-field" id="aiFolderRow" ${needsFolder ? "" : "hidden"}>
@@ -2961,21 +2976,48 @@
       </div>`;
 
     let selectedProvider = ai.provider || "openai";
+    const providersById = Object.fromEntries(
+      (ai.providers || []).map((p) => [p.id, p])
+    );
 
     function applyProviderUi(btn) {
       selectedProvider = btn.dataset.provider;
       $$("#aiProviderRow .ai-prov").forEach((b) => b.classList.remove("on"));
       btn.classList.add("on");
+      const meta = providersById[selectedProvider] || {};
       const hint = $("#aiProvHint");
-      if (hint) hint.textContent = btn.dataset.hint || "";
+      if (hint) hint.textContent = btn.dataset.hint || meta.hint || "";
+
       const model = $("#aiModel");
-      if (model && (!model.value || model.dataset.autofill !== "0")) {
-        model.value = btn.dataset.model || "";
+      if (model) {
+        model.value = meta.model || btn.dataset.model || "";
+        model.dataset.autofill = "1";
       }
       const base = $("#aiApiBase");
-      if (base) base.value = btn.dataset.base || "";
+      if (base) base.value = meta.api_base || btn.dataset.base || "";
+
       const folderRow = $("#aiFolderRow");
       if (folderRow) folderRow.hidden = btn.dataset.folder !== "1";
+      const folderInp = $("#aiFolderId");
+      if (folderInp) folderInp.value = meta.folder_id || btn.dataset.folderId || "";
+
+      const keyInp = $("#aiApiKey");
+      if (keyInp) {
+        keyInp.value = "";
+        const hasKey = btn.dataset.keySet === "1" || !!meta.api_key_set || !!meta.configured;
+        const masked = meta.api_key_masked || btn.dataset.keyMasked || "";
+        keyInp.placeholder = hasKey
+          ? "Оставьте пустым, чтобы не менять · " + (masked || "••••")
+          : "Вставьте ключ выбранного оператора";
+      }
+      const keyStatus = $("#aiKeyStatus");
+      if (keyStatus) {
+        const hasKey = btn.dataset.keySet === "1" || !!meta.api_key_set || !!meta.configured;
+        keyStatus.textContent = hasKey
+          ? "· сохранён для " + (meta.label || selectedProvider)
+          : "· для этого оператора ещё не задан";
+      }
+
       const baseWrap = $("#aiBaseWrap");
       if (baseWrap) baseWrap.hidden = selectedProvider !== "custom";
       const modelWrap = $("#aiModelWrap");
@@ -3029,13 +3071,23 @@
           model: ($("#aiModel")?.value || "").trim(),
           folder_id: ($("#aiFolderId")?.value || "").trim(),
         };
-        if (!body.api_key && !ai.configured) {
-          alert("Укажите API-ключ");
-        } else if (selectedProvider === "yandexgpt" && !body.folder_id && !ai.folder_id) {
+        const selMeta = providersById[selectedProvider] || {};
+        const selHasKey = !!(selMeta.configured || selMeta.api_key_set);
+        if (!body.api_key && !selHasKey) {
+          alert("Укажите API-ключ для " + (selMeta.label || selectedProvider));
+        } else if (
+          selectedProvider === "yandexgpt" &&
+          !body.folder_id &&
+          !(selMeta.folder_id || ai.folder_id)
+        ) {
           alert("Для YandexGPT укажите Folder ID");
         } else {
           await AdminAPI.aiSaveSettings(body);
-          alert("Настройки ИИ сохранены");
+          alert(
+            selHasKey && !body.api_key
+              ? "Активирован " + (selMeta.label || selectedProvider) + " (ключ сохранён ранее)"
+              : "Настройки ИИ сохранены для " + (selMeta.label || selectedProvider)
+          );
           loadIntegrationsPane();
           return;
         }
@@ -3049,7 +3101,12 @@
     });
 
     $("#aiSettingsClear")?.addEventListener("click", async () => {
-      if (!confirm("Отключить ИИ в панели? Останется ключ из .env, если он задан.")) return;
+      if (
+        !confirm(
+          "Удалить сохранённые ключи всех операторов (OpenAI, OpenRouter, DeepSeek…)? Останется только ключ из .env, если он задан."
+        )
+      )
+        return;
       try {
         await AdminAPI.aiSaveSettings({ clear: true });
         loadIntegrationsPane();
