@@ -3546,26 +3546,28 @@
   }
 
   function renderTgQr(url) {
-    const canvas = $("#tgQrCanvas");
-    if (!canvas || !url) return;
-    const draw = () => {
-      if (typeof QRCode === "undefined" || !QRCode.toCanvas) {
-        canvas.getContext("2d")?.clearRect(0, 0, canvas.width, canvas.height);
-        return;
-      }
-      QRCode.toCanvas(
-        canvas,
-        url,
-        { width: 220, margin: 2, color: { dark: "#1a1a1a", light: "#ffffff" } },
-        (err) => {
-          if (err) console.warn("QR render failed", err);
-        }
-      );
-    };
+    const box = $("#tgQrBox");
+    if (!box || !url) return;
+    box.innerHTML = "";
     if (typeof QRCode === "undefined") {
-      setTimeout(draw, 300);
-    } else {
-      draw();
+      box.innerHTML =
+        '<p class="form-foot" style="padding:12px;text-align:center">Не удалось загрузить генератор QR. Обновите страницу (Cmd+Shift+R).</p>';
+      return;
+    }
+    try {
+      // qrcodejs: рисует в переданный DOM-элемент (img/table/canvas)
+      // eslint-disable-next-line no-new
+      new QRCode(box, {
+        text: String(url),
+        width: 220,
+        height: 220,
+        colorDark: "#1a1a1a",
+        colorLight: "#ffffff",
+        correctLevel: QRCode.CorrectLevel.M,
+      });
+    } catch (err) {
+      console.warn("QR render failed", err);
+      box.textContent = "Ошибка отрисовки QR. Нажмите «Обновить QR».";
     }
   }
 

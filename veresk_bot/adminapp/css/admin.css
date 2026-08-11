@@ -2520,9 +2520,9 @@
   .tg-qr-box{
     display:flex;justify-content:center;align-items:center;
     margin:12px 0;padding:14px;border-radius:14px;background:#fff;
-    border:1px solid rgba(217,78,151,.2);
+    border:1px solid rgba(217,78,151,.2);min-height:248px;
   }
-  .tg-qr-box canvas{display:block;width:220px;height:220px;max-width:100%;}
+  .tg-qr-box img,.tg-qr-box canvas{display:block;width:220px;height:220px;max-width:100%;}
   .tg-phone-fallback{margin-top:14px;border-top:1px solid rgba(217,78,151,.18);padding-top:10px;}
   .tg-phone-fallback summary{
     cursor:pointer;font-weight:600;font-size:13px;color:var(--ink-2);
