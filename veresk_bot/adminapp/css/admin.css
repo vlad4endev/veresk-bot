@@ -1580,6 +1580,139 @@
     font-family:var(--font);
   }
 
+  /* Calm, editorial composition: the brand gets a stage, the form gets clarity. */
+  @media (min-width:721px){
+    .login-wrap{
+      min-height:100dvh;
+      grid-template-columns:minmax(360px,44vw) minmax(440px,1fr);
+      place-items:stretch;
+      align-content:stretch;
+      padding:0;
+      overflow:hidden;
+      background:#fff;
+    }
+    .login-showcase{
+      position:relative;
+      z-index:0;
+      min-height:100%;
+      overflow:hidden;
+      color:#fff;
+      background:
+        radial-gradient(720px 600px at 46% 42%,rgba(244,125,185,.22),transparent 62%),
+        linear-gradient(145deg,#2f204c 0%,#402c60 55%,#281a45 100%);
+    }
+    .login-showcase::before{
+      content:"";
+      position:absolute;
+      inset:20px;
+      border:1px solid rgba(255,255,255,.18);
+      pointer-events:none;
+    }
+    .login-showcase-burst{
+      position:absolute;
+      width:min(63vw,770px);
+      aspect-ratio:1;
+      left:50%;
+      top:46%;
+      transform:translate(-50%,-50%);
+      opacity:.87;
+    }
+    .login-showcase-burst img{
+      display:block;
+      width:100%;
+      height:100%;
+      filter:brightness(1.15) saturate(1.12);
+    }
+    .login-showcase-copy{
+      position:absolute;
+      z-index:1;
+      left:clamp(34px,5vw,76px);
+      right:32px;
+      bottom:clamp(38px,7vh,76px);
+    }
+    .login-showcase-name{
+      margin:0;
+      font-family:var(--font-brand);
+      font-weight:600;
+      font-size:clamp(40px,4.2vw,68px);
+      letter-spacing:.015em;
+      line-height:.95;
+    }
+    .login-showcase-tagline{
+      margin:8px 0 0;
+      color:var(--brand-pink-bright);
+      font-family:var(--font-display);
+      font-size:clamp(18px,1.6vw,25px);
+      font-style:italic;
+    }
+    .login-showcase-rule{
+      display:block;
+      width:42px;
+      height:2px;
+      margin:clamp(22px,3vh,34px) 0 16px;
+      background:var(--brand-pink);
+    }
+    .login-showcase-caption{
+      margin:0;
+      font-family:var(--font-display);
+      font-size:clamp(19px,1.6vw,27px);
+      font-style:italic;
+      line-height:1.15;
+      color:rgba(255,255,255,.93);
+    }
+    .login-aurora,.login-burst{display:none;}
+    .login-card{
+      z-index:1;
+      align-self:center;
+      justify-self:center;
+      width:min(100% - 64px,408px);
+      margin:0;
+      padding:0;
+      border:0;
+      border-radius:0;
+      box-shadow:none;
+      background:transparent;
+      text-align:left;
+      animation:loginCardIn .55s cubic-bezier(.22,1,.36,1) both;
+    }
+    .login-card::before{display:none;}
+    .login-brand{
+      display:flex;
+      align-items:center;
+      gap:14px;
+      margin:0 0 46px;
+      text-align:left;
+    }
+    .login-logo{
+      width:58px;
+      flex:none;
+      margin:0;
+      filter:none;
+    }
+    .login-wordmark{font-size:24px;}
+    .login-tagline{margin:2px 0 0;font-size:13px;}
+    .login-title{
+      margin-bottom:9px;
+      font-size:31px;
+      letter-spacing:-.025em;
+    }
+    .login-sub{margin-bottom:32px;font-size:14px;}
+    .login-field{margin-bottom:20px;}
+    .login-card input{
+      min-height:54px;
+      padding:14px 16px;
+      border-color:rgba(64,44,96,.18);
+      border-radius:8px;
+      background:#fff;
+    }
+    .login-submit{
+      min-height:54px;
+      margin-top:14px;
+      border-radius:8px !important;
+      box-shadow:0 12px 22px rgba(244,125,185,.28) !important;
+    }
+  }
+
   /* Mobile / tablet portrait */
   @media (max-width:720px){
     .login-wrap{
@@ -1590,10 +1723,7 @@
         max(16px, env(safe-area-inset-bottom,0px))
         max(16px, env(safe-area-inset-left,0px));
     }
-    .login-orb--a{width:min(72vw,300px);height:min(72vw,300px);opacity:.75;top:-8%;left:-8%;}
-    .login-orb--b{width:min(62vw,260px);height:min(62vw,260px);opacity:.55;bottom:-10%;right:-12%;}
-    .login-orb--c{opacity:.45;}
-    .login-burst{width:min(120vw,620px);opacity:.07;top:38%;}
+    .login-showcase{display:none;}
     .login-card{
       max-width:420px;
       padding:30px 22px 24px;

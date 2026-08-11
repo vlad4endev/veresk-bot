@@ -14,7 +14,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,500;9..144,600;9..144,700&family=Manrope:wght@400;500;600;700&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="css/admin.css?v=68">
+<link rel="stylesheet" href="css/admin.css?v=69">
 <link rel="stylesheet" href="css/wheel.css?v=11">
 <link rel="stylesheet" href="css/promos.css?v=1">
 <!-- Критичный CSS до paint: иначе логин мелькнёт, пока качается admin.css -->
@@ -46,13 +46,16 @@
 
 <!-- LOGIN -->
 <div id="loginScreen" class="login-wrap">
-  <div class="login-aurora" aria-hidden="true">
-    <span class="login-orb login-orb--a"></span>
-    <span class="login-orb login-orb--b"></span>
-    <span class="login-orb login-orb--c"></span>
-  </div>
-  <div class="login-burst" aria-hidden="true">
-    <img src="assets/leaf-burst-deco.svg" alt="" width="640" height="640" decoding="async">
+  <div class="login-showcase" aria-hidden="true">
+    <div class="login-showcase-burst">
+      <img src="assets/leaf-burst-deco.svg" alt="" width="640" height="640" decoding="async">
+    </div>
+    <div class="login-showcase-copy">
+      <p class="login-showcase-name">Veresk</p>
+      <p class="login-showcase-tagline">trail of happiness</p>
+      <span class="login-showcase-rule"></span>
+      <p class="login-showcase-caption">Коммуникации,<br>которые расцветают.</p>
+    </div>
   </div>
 
   <form class="login-card" id="loginForm" novalidate>
