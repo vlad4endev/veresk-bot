@@ -111,13 +111,18 @@ from senders.max_userbot import (
     start_max_login,
 )
 from senders.telegram_userbot import (
+    cancel_telegram_qr_login,
     check_telegram_session,
     confirm_telegram_login,
+    confirm_telegram_qr_2fa,
     get_api_credentials,
     is_telethon_configured,
+    poll_telegram_qr_login,
+    refresh_telegram_qr_login,
     remove_session_file,
     resend_telegram_login_code,
     start_telegram_login,
+    start_telegram_qr_login,
 )
 
 logger = logging.getLogger(__name__)
@@ -1585,6 +1590,99 @@ async def handle_telegram_connect_confirm(request: web.Request) -> web.Response:
 
     registered = await _register_telegram_account(result, phone)
     return _json(registered)
+
+
+async def handle_telegram_qr_start(request: web.Request) -> web.Response:
+    """Старт входа по QR — без SMS/кода."""
+    err = await _require_admin(request)
+    if err:
+        return err
+    result = await start_telegram_qr_login()
+    if not result.get("ok"):
+        return _json(result, status=400)
+    if result.get("already_authorized"):
+        registered = await _register_telegram_account(
+            result, str(result.get("phone") or "")
+        )
+        return _json(registered)
+    return _json(result)
+
+
+async def handle_telegram_qr_poll(request: web.Request) -> web.Response:
+    err = await _require_admin(request)
+    if err:
+        return err
+    try:
+        body = await request.json()
+    except Exception:
+        return _json({"error": "invalid_json"}, status=400)
+    login_id = str(body.get("login_id") or "").strip()
+    if not login_id:
+        return _json({"error": "login_id_required"}, status=400)
+    result = await poll_telegram_qr_login(login_id)
+    if result.get("pending"):
+        return _json(result)
+    if result.get("need_2fa"):
+        return _json(result)
+    if not result.get("ok"):
+        return _json(result, status=400)
+    registered = await _register_telegram_account(
+        result, str(result.get("phone") or "")
+    )
+    return _json(registered)
+
+
+async def handle_telegram_qr_refresh(request: web.Request) -> web.Response:
+    err = await _require_admin(request)
+    if err:
+        return err
+    try:
+        body = await request.json()
+    except Exception:
+        return _json({"error": "invalid_json"}, status=400)
+    login_id = str(body.get("login_id") or "").strip()
+    if not login_id:
+        return _json({"error": "login_id_required"}, status=400)
+    result = await refresh_telegram_qr_login(login_id)
+    if not result.get("ok"):
+        return _json(result, status=400)
+    return _json(result)
+
+
+async def handle_telegram_qr_2fa(request: web.Request) -> web.Response:
+    err = await _require_admin(request)
+    if err:
+        return err
+    try:
+        body = await request.json()
+    except Exception:
+        return _json({"error": "invalid_json"}, status=400)
+    login_id = str(body.get("login_id") or "").strip()
+    password = str(body.get("password") or "").strip()
+    if not login_id:
+        return _json({"error": "login_id_required"}, status=400)
+    result = await confirm_telegram_qr_2fa(login_id, password)
+    if not result.get("ok"):
+        status = 200 if result.get("need_2fa") else 400
+        return _json(result, status=status)
+    registered = await _register_telegram_account(
+        result, str(result.get("phone") or "")
+    )
+    return _json(registered)
+
+
+async def handle_telegram_qr_cancel(request: web.Request) -> web.Response:
+    err = await _require_admin(request)
+    if err:
+        return err
+    login_id = ""
+    try:
+        body = await request.json()
+        login_id = str(body.get("login_id") or "").strip()
+    except Exception:
+        pass
+    await cancel_telegram_qr_login(login_id or None)
+    return _json({"ok": True})
 
 
 async def handle_telegram_account_check(request: web.Request) -> web.Response:
@@ -4734,6 +4832,11 @@ def setup_admin_routes(app: web.Application) -> None:
         ("/api/admin/accounts/telegram/start", handle_telegram_connect_start, "POST"),
         ("/api/admin/accounts/telegram/resend", handle_telegram_connect_resend, "POST"),
         ("/api/admin/accounts/telegram/confirm", handle_telegram_connect_confirm, "POST"),
+        ("/api/admin/accounts/telegram/qr/start", handle_telegram_qr_start, "POST"),
+        ("/api/admin/accounts/telegram/qr/poll", handle_telegram_qr_poll, "POST"),
+        ("/api/admin/accounts/telegram/qr/refresh", handle_telegram_qr_refresh, "POST"),
+        ("/api/admin/accounts/telegram/qr/2fa", handle_telegram_qr_2fa, "POST"),
+        ("/api/admin/accounts/telegram/qr/cancel", handle_telegram_qr_cancel, "POST"),
         ("/api/admin/accounts/telegram/keepalive", handle_telegram_keepalive, "POST"),
         ("/api/admin/accounts/max/userbot/start", handle_max_userbot_connect_start, "POST"),
         ("/api/admin/accounts/max/userbot/confirm", handle_max_userbot_connect_confirm, "POST"),

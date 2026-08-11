@@ -5,6 +5,8 @@ from __future__ import annotations
 import asyncio
 import logging
 import re
+import uuid
+from datetime import timezone
 from pathlib import Path
 from typing import Any
 
@@ -16,6 +18,8 @@ logger = logging.getLogger(__name__)
 
 # phone → pending Telethon client during login flow
 _pending_logins: dict[str, Any] = {}
+# login_id → pending QR login ({client, qr, session_base, ...})
+_pending_qr: dict[str, Any] = {}
 
 TELETHON_MISSING_DETAIL = (
     "Библиотека Telethon не установлена в окружении сервера. "
@@ -183,6 +187,43 @@ def _code_delivery_hint(code_type: str | None, *, resent: bool = False) -> str:
     )
 
 
+def _friendly_telethon_error(exc: BaseException) -> str:
+    name = type(exc).__name__
+    msg = str(exc)
+    msg_l = msg.lower()
+    if (
+        "SendCodeUnavailable" in name
+        or "all available options" in msg_l
+        or "caused by ResendCodeRequest" in msg
+    ):
+        return (
+            "Другой способ доставки недоступен (SMS Telegram не шлёт в админку). "
+            "Код уже должен быть в приложении Telegram → чат «Telegram». "
+            "Закройте это окно и введите код оттуда — не нажимайте повторную отправку."
+        )
+    if "PhoneCodeInvalid" in name or "phone code entered was invalid" in msg_l:
+        return (
+            "Неверный код. Запросите новый кнопкой «Получить код» "
+            "и введите свежий код из чата «Telegram» в приложении."
+        )
+    if "PhoneCodeExpired" in name or "expired" in msg_l:
+        return "Код устарел. Нажмите «Получить код» ещё раз и введите новый."
+    if "FloodWait" in name:
+        wait = getattr(exc, "seconds", None)
+        return (
+            f"Слишком много попыток. Подождите {wait} сек. и попробуйте снова."
+            if wait
+            else "Слишком много попыток. Подождите немного и попробуйте снова."
+        )
+    if "PhoneNumberInvalid" in name:
+        return "Неверный номер телефона. Укажите в формате +79001234567."
+    if "PhoneNumberBanned" in name:
+        return "Этот номер заблокирован в Telegram."
+    if "SessionPasswordNeeded" in name:
+        return "Нужен пароль 2FA"
+    return msg
+
+
 async def resend_telegram_login_code(phone: str) -> dict[str, Any]:
     """Повторная отправка кода (Telegram сам выбирает канал; SMS в сторонние клиенты обычно недоступны)."""
     if not is_telethon_configured():
@@ -197,6 +238,19 @@ async def resend_telegram_login_code(phone: str) -> dict[str, Any]:
             "ok": False,
             "error": "Сначала запросите код для этого номера (кнопка «Получить код»)",
         }
+    # Если код уже ушёл в App — повтор почти всегда даёт SendCodeUnavailable.
+    prev_type = str(pending.get("code_type") or "").lower()
+    if "app" in prev_type:
+        return {
+            "ok": False,
+            "error": (
+                "Код уже отправлен в приложение Telegram (чат «Telegram»). "
+                "SMS недоступны — введите код из приложения. "
+                "Если кода нет: подождите 1–2 минуты или нажмите «Получить код» заново."
+            ),
+            "code_type": pending.get("code_type"),
+            "code_hint": _code_delivery_hint(pending.get("code_type")),
+        }
     client = pending["client"]
     phone_code_hash = pending.get("phone_code_hash") or ""
     if not phone_code_hash:
@@ -209,14 +263,7 @@ async def resend_telegram_login_code(phone: str) -> dict[str, Any]:
         sent = await client(ResendCodeRequest(phone_norm, phone_code_hash))
     except Exception as exc:
         logger.exception("Telethon ResendCodeRequest failed")
-        err = _friendly_telethon_error(exc)
-        name = type(exc).__name__
-        if "SendCodeUnavailable" in name or "unavailable" in str(exc).lower():
-            err = (
-                "Другой способ доставки недоступен. Код уже должен быть в приложении "
-                "Telegram (чат «Telegram»). SMS для входа через админку Telegram не шлёт."
-            )
-        return {"ok": False, "error": err}
+        return {"ok": False, "error": _friendly_telethon_error(exc)}
 
     new_hash = getattr(sent, "phone_code_hash", None) or phone_code_hash
     code_type = type(getattr(sent, "type", None)).__name__ if sent else None
@@ -233,32 +280,6 @@ async def resend_telegram_login_code(phone: str) -> dict[str, Any]:
         "detail": hint,
         "resent": True,
     }
-
-
-def _friendly_telethon_error(exc: BaseException) -> str:
-    name = type(exc).__name__
-    msg = str(exc)
-    if "PhoneCodeInvalid" in name or "phone code entered was invalid" in msg.lower():
-        return (
-            "Неверный код. Запросите новый кнопкой «Получить код» "
-            "и введите свежий код из чата «Telegram» в приложении."
-        )
-    if "PhoneCodeExpired" in name or "expired" in msg.lower():
-        return "Код устарел. Нажмите «Получить код» ещё раз и введите новый."
-    if "FloodWait" in name:
-        wait = getattr(exc, "seconds", None)
-        return (
-            f"Слишком много попыток. Подождите {wait} сек. и попробуйте снова."
-            if wait
-            else "Слишком много попыток. Подождите немного и попробуйте снова."
-        )
-    if "PhoneNumberInvalid" in name:
-        return "Неверный номер телефона. Укажите в формате +79001234567."
-    if "PhoneNumberBanned" in name:
-        return "Этот номер заблокирован в Telegram."
-    if "SessionPasswordNeeded" in name:
-        return "Нужен пароль 2FA"
-    return msg
 
 
 async def confirm_telegram_login(
@@ -357,6 +378,220 @@ async def cancel_telegram_login(phone: str) -> None:
         await client.disconnect()
     except Exception:
         pass
+
+
+def _qr_expires_iso(expires: Any) -> str | None:
+    if expires is None:
+        return None
+    try:
+        if getattr(expires, "tzinfo", None) is None:
+            expires = expires.replace(tzinfo=timezone.utc)
+        return expires.astimezone(timezone.utc).isoformat()
+    except Exception:
+        return str(expires)
+
+
+async def _finalize_authorized_client(
+    client: Any,
+    *,
+    session_base: str,
+) -> dict[str, Any]:
+    """Сохранить авторизованный клиент как acc_{phone}.session и вернуть метаданные."""
+    me = await client.get_me()
+    raw_phone = getattr(me, "phone", None) if me else None
+    phone_norm = _normalize_phone(f"+{raw_phone}" if raw_phone else "")
+    digits_only = re.sub(r"\D", "", phone_norm) or "unknown"
+    label = ""
+    if me:
+        label = " ".join(
+            filter(
+                None,
+                [getattr(me, "first_name", None), getattr(me, "last_name", None)],
+            )
+        ) or phone_norm
+    tg_id = getattr(me, "id", None) if me else None
+    await client.disconnect()
+
+    target_base = str(sessions_path() / f"acc_{digits_only}")
+    session_file = f"{target_base}.session"
+    if session_base != target_base:
+        for suffix in (".session", ".session-journal"):
+            src = Path(f"{session_base}{suffix}")
+            dst = Path(f"{target_base}{suffix}")
+            try:
+                if src.exists():
+                    if dst.exists():
+                        dst.unlink()
+                    src.replace(dst)
+            except OSError:
+                logger.warning("Не удалось переименовать session %s → %s", src, dst)
+
+    return {
+        "ok": True,
+        "phone": phone_norm or None,
+        "session_file": session_file,
+        "label": label or phone_norm or "Telegram",
+        "tg_id": tg_id,
+    }
+
+
+async def start_telegram_qr_login() -> dict[str, Any]:
+    """Старт входа по QR (без SMS/кода) — как в Telegram Desktop."""
+    if not is_telethon_configured():
+        return {
+            "ok": False,
+            "error": "TELEGRAM_API_ID / TELEGRAM_API_HASH не заданы — укажите их в настройках",
+        }
+    try:
+        from telethon import TelegramClient
+    except ImportError:
+        return _telethon_missing_error()
+
+    api_id, api_hash = get_api_credentials()
+    login_id = uuid.uuid4().hex[:16]
+    session_base = str(sessions_path() / f"qr_{login_id}")
+    client = TelegramClient(session_base, api_id, api_hash)
+    try:
+        await client.connect()
+        if await client.is_user_authorized():
+            result = await _finalize_authorized_client(client, session_base=session_base)
+            return {**result, "already_authorized": True, "login_id": login_id}
+        qr = await client.qr_login()
+    except Exception as exc:
+        try:
+            await client.disconnect()
+        except Exception:
+            pass
+        remove_session_file(session_base + ".session")
+        logger.exception("Telegram QR login start failed")
+        return {"ok": False, "error": _friendly_telethon_error(exc)}
+
+    _pending_qr[login_id] = {
+        "client": client,
+        "qr": qr,
+        "session_base": session_base,
+        "need_2fa": False,
+    }
+    logger.info("Telegram QR login started id=%s", login_id)
+    return {
+        "ok": True,
+        "login_id": login_id,
+        "url": qr.url,
+        "expires_at": _qr_expires_iso(getattr(qr, "expires", None)),
+        "detail": (
+            "Откройте Telegram на телефоне → Настройки → Устройства → "
+            "Подключить устройство → наведите камеру на QR."
+        ),
+    }
+
+
+async def refresh_telegram_qr_login(login_id: str) -> dict[str, Any]:
+    """Обновить истёкший QR."""
+    pending = _pending_qr.get(str(login_id or "").strip())
+    if not pending:
+        return {"ok": False, "error": "QR-сессия не найдена — нажмите «Войти по QR» снова"}
+    qr = pending.get("qr")
+    if not qr:
+        return {"ok": False, "error": "QR-сессия повреждена — начните заново"}
+    try:
+        await qr.recreate()
+    except Exception as exc:
+        logger.exception("Telegram QR recreate failed")
+        return {"ok": False, "error": _friendly_telethon_error(exc)}
+    return {
+        "ok": True,
+        "login_id": login_id,
+        "url": qr.url,
+        "expires_at": _qr_expires_iso(getattr(qr, "expires", None)),
+    }
+
+
+async def poll_telegram_qr_login(login_id: str, *, timeout: float = 2.5) -> dict[str, Any]:
+    """Короткое ожидание скана QR. Вызывать с фронта в цикле."""
+    key = str(login_id or "").strip()
+    pending = _pending_qr.get(key)
+    if not pending:
+        return {"ok": False, "error": "QR-сессия не найдена — нажмите «Войти по QR» снова"}
+    if pending.get("need_2fa"):
+        return {"ok": False, "need_2fa": True, "login_id": key, "error": "Нужен пароль 2FA"}
+
+    client = pending["client"]
+    qr = pending["qr"]
+    try:
+        from telethon.errors import SessionPasswordNeededError
+    except ImportError:
+        return _telethon_missing_error()
+
+    try:
+        await qr.wait(timeout=timeout)
+    except asyncio.TimeoutError:
+        return {
+            "ok": True,
+            "pending": True,
+            "login_id": key,
+            "url": getattr(qr, "url", None),
+            "expires_at": _qr_expires_iso(getattr(qr, "expires", None)),
+        }
+    except SessionPasswordNeededError:
+        pending["need_2fa"] = True
+        return {
+            "ok": False,
+            "need_2fa": True,
+            "login_id": key,
+            "error": "Нужен пароль двухфакторной защиты Telegram",
+        }
+    except Exception as exc:
+        logger.exception("Telegram QR wait failed")
+        return {"ok": False, "error": _friendly_telethon_error(exc)}
+
+    result = await _finalize_authorized_client(
+        client, session_base=pending["session_base"]
+    )
+    _pending_qr.pop(key, None)
+    return {**result, "login_id": key}
+
+
+async def confirm_telegram_qr_2fa(login_id: str, password: str) -> dict[str, Any]:
+    """Подтвердить 2FA после успешного скана QR."""
+    key = str(login_id or "").strip()
+    pending = _pending_qr.get(key)
+    if not pending:
+        return {"ok": False, "error": "QR-сессия не найдена — начните вход по QR заново"}
+    pwd = (password or "").strip()
+    if not pwd:
+        return {"ok": False, "need_2fa": True, "error": "Введите пароль 2FA"}
+    client = pending["client"]
+    try:
+        await client.sign_in(password=pwd)
+    except Exception as exc:
+        return {"ok": False, "need_2fa": True, "error": f"2FA: {_friendly_telethon_error(exc)}"}
+
+    result = await _finalize_authorized_client(
+        client, session_base=pending["session_base"]
+    )
+    _pending_qr.pop(key, None)
+    return {**result, "login_id": key}
+
+
+async def cancel_telegram_qr_login(login_id: str | None = None) -> None:
+    """Отменить одну или все незавершённые QR-сессии."""
+    if login_id:
+        keys = [str(login_id).strip()]
+    else:
+        keys = list(_pending_qr.keys())
+    for key in keys:
+        pending = _pending_qr.pop(key, None)
+        if not pending:
+            continue
+        client = pending.get("client")
+        session_base = str(pending.get("session_base") or "")
+        if client:
+            try:
+                await client.disconnect()
+            except Exception:
+                pass
+        if session_base:
+            remove_session_file(session_base + ".session")
 
 
 async def check_telegram_session(session_file: str) -> dict[str, Any]:

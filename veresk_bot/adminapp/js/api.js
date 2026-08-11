@@ -216,6 +216,31 @@ const AdminAPI = (() => {
         method: "POST",
         body: JSON.stringify({ phone, code, password }),
       }),
+    tgQrStart: () =>
+      request("/api/admin/accounts/telegram/qr/start", {
+        method: "POST",
+        body: JSON.stringify({}),
+      }),
+    tgQrPoll: (loginId) =>
+      request("/api/admin/accounts/telegram/qr/poll", {
+        method: "POST",
+        body: JSON.stringify({ login_id: loginId }),
+      }),
+    tgQrRefresh: (loginId) =>
+      request("/api/admin/accounts/telegram/qr/refresh", {
+        method: "POST",
+        body: JSON.stringify({ login_id: loginId }),
+      }),
+    tgQr2fa: (loginId, password) =>
+      request("/api/admin/accounts/telegram/qr/2fa", {
+        method: "POST",
+        body: JSON.stringify({ login_id: loginId, password }),
+      }),
+    tgQrCancel: (loginId) =>
+      request("/api/admin/accounts/telegram/qr/cancel", {
+        method: "POST",
+        body: JSON.stringify({ login_id: loginId || "" }),
+      }),
     maxUserbotStart: (phone, opts = {}) =>
       request("/api/admin/accounts/max/userbot/start", {
         method: "POST",

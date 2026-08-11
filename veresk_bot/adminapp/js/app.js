@@ -3272,23 +3272,32 @@
   }
 
   function resetConnectForm() {
+    stopTgQrPoll();
     $("#tgConnectFields")?.classList.remove("hidden");
     $("#tgConnectDone")?.classList.add("hidden");
     $("#tgCodeStep")?.classList.add("hidden");
     $("#tg2faWrap")?.classList.add("hidden");
+    $("#tgQrStep")?.classList.add("hidden");
+    $("#tgQr2faWrap")?.classList.add("hidden");
     if ($("#tgPhone")) $("#tgPhone").value = "";
     if ($("#tgCode")) $("#tgCode").value = "";
     if ($("#tg2fa")) $("#tg2fa").value = "";
+    if ($("#tgQr2fa")) $("#tgQr2fa").value = "";
+    const status = $("#tgQrStatus");
+    if (status) status.textContent = "Ожидаем сканирование…";
+    state.tgQrLoginId = null;
     setConnectStep(1);
   }
 
   function openConnectForm(show) {
     const form = $("#acctForm");
     if (!form) return;
+    if (!show && state.tgQrLoginId) {
+      AdminAPI.tgQrCancel(state.tgQrLoginId).catch(() => {});
+    }
     form.classList.toggle("hidden", !show);
     if (show) {
       resetConnectForm();
-      $("#tgPhone")?.focus();
     } else {
       resetConnectForm();
     }
@@ -3524,6 +3533,162 @@
     }
     return data.detail || data.error || errOrRes.message || "Ошибка";
   }
+
+  let tgQrPollTimer = null;
+  let tgQrBusy = false;
+
+  function stopTgQrPoll() {
+    if (tgQrPollTimer) {
+      clearTimeout(tgQrPollTimer);
+      tgQrPollTimer = null;
+    }
+    tgQrBusy = false;
+  }
+
+  function renderTgQr(url) {
+    const canvas = $("#tgQrCanvas");
+    if (!canvas || !url) return;
+    const draw = () => {
+      if (typeof QRCode === "undefined" || !QRCode.toCanvas) {
+        canvas.getContext("2d")?.clearRect(0, 0, canvas.width, canvas.height);
+        return;
+      }
+      QRCode.toCanvas(
+        canvas,
+        url,
+        { width: 220, margin: 2, color: { dark: "#1a1a1a", light: "#ffffff" } },
+        (err) => {
+          if (err) console.warn("QR render failed", err);
+        }
+      );
+    };
+    if (typeof QRCode === "undefined") {
+      setTimeout(draw, 300);
+    } else {
+      draw();
+    }
+  }
+
+  async function scheduleTgQrPoll() {
+    stopTgQrPoll();
+    const tick = async () => {
+      const loginId = state.tgQrLoginId;
+      if (!loginId || tgQrBusy) return;
+      tgQrBusy = true;
+      try {
+        const res = await AdminAPI.tgQrPoll(loginId);
+        if (res.need_2fa) {
+          $("#tgQr2faWrap")?.classList.remove("hidden");
+          const status = $("#tgQrStatus");
+          if (status) status.textContent = "Скан принят. Введите пароль 2FA.";
+          $("#tgQr2fa")?.focus();
+          return;
+        }
+        if (res.pending) {
+          if (res.url) renderTgQr(res.url);
+          const status = $("#tgQrStatus");
+          if (status) status.textContent = "Ожидаем сканирование…";
+          tgQrPollTimer = setTimeout(tick, 1800);
+          return;
+        }
+        if (!res.ok) {
+          alert(tgErrorText(res));
+          return;
+        }
+        stopTgQrPoll();
+        state.tgQrLoginId = null;
+        showConnectDone(res);
+        loadAccounts({ check: true });
+      } catch (err) {
+        const status = $("#tgQrStatus");
+        if (status) status.textContent = tgErrorText(err);
+        tgQrPollTimer = setTimeout(tick, 2500);
+      } finally {
+        tgQrBusy = false;
+      }
+    };
+    tgQrPollTimer = setTimeout(tick, 1200);
+  }
+
+  $("#tgQrStart")?.addEventListener("click", async () => {
+    const btn = $("#tgQrStart");
+    if (btn) {
+      btn.disabled = true;
+      btn.textContent = "Готовим QR…";
+    }
+    stopTgQrPoll();
+    try {
+      const res = await AdminAPI.tgQrStart();
+      if (!res.ok) return alert(tgErrorText(res));
+      if (res.already_authorized || res.account_id) {
+        showConnectDone(res);
+        loadAccounts({ check: true });
+        return;
+      }
+      state.tgQrLoginId = res.login_id;
+      $("#tgQrStep")?.classList.remove("hidden");
+      setConnectStep(2);
+      const hint = $("#tgQrHint");
+      if (hint && res.detail) hint.textContent = res.detail;
+      renderTgQr(res.url);
+      const status = $("#tgQrStatus");
+      if (status) status.textContent = "Ожидаем сканирование…";
+      scheduleTgQrPoll();
+    } catch (err) {
+      alert(tgErrorText(err));
+    } finally {
+      if (btn) {
+        btn.disabled = false;
+        btn.textContent = "Войти по QR";
+      }
+    }
+  });
+
+  $("#tgQrRefresh")?.addEventListener("click", async () => {
+    const loginId = state.tgQrLoginId;
+    if (!loginId) return alert("Сначала нажмите «Войти по QR»");
+    try {
+      const res = await AdminAPI.tgQrRefresh(loginId);
+      if (!res.ok) return alert(tgErrorText(res));
+      renderTgQr(res.url);
+      const status = $("#tgQrStatus");
+      if (status) status.textContent = "QR обновлён. Отсканируйте снова.";
+      scheduleTgQrPoll();
+    } catch (err) {
+      alert(tgErrorText(err));
+    }
+  });
+
+  $("#tgQrConfirm2fa")?.addEventListener("click", async () => {
+    const loginId = state.tgQrLoginId;
+    const password = $("#tgQr2fa")?.value?.trim();
+    if (!loginId) return alert("Сначала отсканируйте QR");
+    if (!password) return alert("Введите пароль 2FA");
+    const btn = $("#tgQrConfirm2fa");
+    if (btn) {
+      btn.disabled = true;
+      btn.textContent = "Проверка…";
+    }
+    try {
+      const res = await AdminAPI.tgQr2fa(loginId, password);
+      if (res.need_2fa) {
+        alert(tgErrorText(res));
+        return;
+      }
+      if (!res.ok) return alert(tgErrorText(res));
+      stopTgQrPoll();
+      state.tgQrLoginId = null;
+      showConnectDone(res);
+      loadAccounts({ check: true });
+    } catch (err) {
+      alert(tgErrorText(err));
+    } finally {
+      if (btn) {
+        btn.disabled = false;
+        btn.textContent = "Подтвердить 2FA";
+      }
+    }
+  });
 
   $("#tgSendCode")?.addEventListener("click", async () => {
     const phone = $("#tgPhone").value.trim();

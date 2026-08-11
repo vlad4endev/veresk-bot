@@ -2517,6 +2517,19 @@
   .connect-step.on{color:var(--accent);background:#fff;}
   .connect-bar{flex:1;min-width:12px;max-width:28px;height:2px;background:rgba(217,78,151,.25);border-radius:2px;}
   .connect-next{margin-top:12px;padding-top:12px;border-top:1px solid rgba(217,78,151,.2);}
+  .tg-qr-box{
+    display:flex;justify-content:center;align-items:center;
+    margin:12px 0;padding:14px;border-radius:14px;background:#fff;
+    border:1px solid rgba(217,78,151,.2);
+  }
+  .tg-qr-box canvas{display:block;width:220px;height:220px;max-width:100%;}
+  .tg-phone-fallback{margin-top:14px;border-top:1px solid rgba(217,78,151,.18);padding-top:10px;}
+  .tg-phone-fallback summary{
+    cursor:pointer;font-weight:600;font-size:13px;color:var(--ink-2);
+    list-style:none;
+  }
+  .tg-phone-fallback summary::-webkit-details-marker{display:none;}
+  .tg-phone-fallback[open] summary{margin-bottom:8px;color:var(--accent);}
 
   .settings-pane .note{margin:14px 0 0;}
   .settings-pane .users-list{margin:0;}

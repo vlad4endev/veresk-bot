@@ -14,7 +14,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,500;9..144,600;9..144,700&family=Manrope:wght@400;500;600;700&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="css/admin.css?v=55">
+<link rel="stylesheet" href="css/admin.css?v=56">
 <link rel="stylesheet" href="css/wheel.css?v=8">
 <!-- Критичный CSS до paint: иначе логин мелькнёт, пока качается admin.css -->
 <style>
@@ -429,34 +429,58 @@
 
               <div class="acct-form connect-card hidden" id="acctForm">
                 <div class="connect-steps" aria-hidden="true">
-                  <span class="connect-step on" data-cstep="1">1. Телефон</span>
+                  <span class="connect-step on" data-cstep="1">1. QR / телефон</span>
                   <span class="connect-bar"></span>
-                  <span class="connect-step" data-cstep="2">2. Код</span>
+                  <span class="connect-step" data-cstep="2">2. Подтверждение</span>
                   <span class="connect-bar"></span>
                   <span class="connect-step" data-cstep="3">3. Коннект</span>
                 </div>
                 <div id="tgConnectFields">
                   <div class="acct-form-title">Новый номер Telegram</div>
-                  <p class="form-lead">Введите телефон в формате +79001234567. Код придёт <strong>только в приложение Telegram</strong> (чат «Telegram») — SMS для входа через админку Telegram с 2023 года не отправляет.</p>
-                  <label for="tgPhone">Телефон</label>
-                  <input id="tgPhone" type="tel" placeholder="+79001234567" autocomplete="tel">
+                  <p class="form-lead">Если код не приходит — войдите по QR (как в Telegram Desktop). SMS для входа через админку Telegram не отправляет.</p>
                   <div class="form-actions">
-                    <button type="button" class="btn primary" id="tgSendCode">Получить код</button>
+                    <button type="button" class="btn primary" id="tgQrStart">Войти по QR</button>
                     <button type="button" class="btn" id="tgConnectCancel">Отмена</button>
                   </div>
-                  <div id="tgCodeStep" class="hidden connect-next">
-                    <p class="form-lead" id="tgCodeHint" role="status"></p>
-                    <label for="tgCode">Код из чата «Telegram»</label>
-                    <input id="tgCode" type="text" inputmode="numeric" placeholder="код из приложения Telegram" autocomplete="one-time-code">
-                    <div id="tg2faWrap" class="hidden">
-                      <label for="tg2fa">Пароль 2FA</label>
-                      <input id="tg2fa" type="password" placeholder="Пароль облака Telegram" autocomplete="current-password">
+                  <div id="tgQrStep" class="hidden connect-next">
+                    <p class="form-lead" id="tgQrHint" role="status">Откройте Telegram → Настройки → Устройства → Подключить устройство и наведите камеру на QR.</p>
+                    <div class="tg-qr-box" id="tgQrBox">
+                      <canvas id="tgQrCanvas" width="220" height="220" aria-label="QR для входа в Telegram"></canvas>
+                    </div>
+                    <p class="form-foot" id="tgQrStatus">Ожидаем сканирование…</p>
+                    <div id="tgQr2faWrap" class="hidden">
+                      <label for="tgQr2fa">Пароль 2FA</label>
+                      <input id="tgQr2fa" type="password" placeholder="Пароль облака Telegram" autocomplete="current-password">
+                      <div class="form-actions">
+                        <button type="button" class="btn primary" id="tgQrConfirm2fa">Подтвердить 2FA</button>
+                      </div>
                     </div>
                     <div class="form-actions">
-                      <button type="button" class="btn primary" id="tgConfirm">Подтвердить</button>
-                      <button type="button" class="btn" id="tgResendCode" title="Повторный запрос кода (SMS всё равно недоступны)">Запросить код ещё раз</button>
+                      <button type="button" class="btn" id="tgQrRefresh">Обновить QR</button>
                     </div>
                   </div>
+                  <details class="tg-phone-fallback" id="tgPhoneFallback">
+                    <summary>Вход по телефону и коду</summary>
+                    <p class="form-lead">Код придёт <strong>только в приложение Telegram</strong> (чат «Telegram»), не в SMS.</p>
+                    <label for="tgPhone">Телефон</label>
+                    <input id="tgPhone" type="tel" placeholder="+79001234567" autocomplete="tel">
+                    <div class="form-actions">
+                      <button type="button" class="btn primary" id="tgSendCode">Получить код</button>
+                    </div>
+                    <div id="tgCodeStep" class="hidden connect-next">
+                      <p class="form-lead" id="tgCodeHint" role="status"></p>
+                      <label for="tgCode">Код из чата «Telegram»</label>
+                      <input id="tgCode" type="text" inputmode="numeric" placeholder="код из приложения Telegram" autocomplete="one-time-code">
+                      <div id="tg2faWrap" class="hidden">
+                        <label for="tg2fa">Пароль 2FA</label>
+                        <input id="tg2fa" type="password" placeholder="Пароль облака Telegram" autocomplete="current-password">
+                      </div>
+                      <div class="form-actions">
+                        <button type="button" class="btn primary" id="tgConfirm">Подтвердить</button>
+                        <button type="button" class="btn" id="tgResendCode" title="Повторный запрос кода (SMS всё равно недоступны)">Запросить код ещё раз</button>
+                      </div>
+                    </div>
+                  </details>
                 </div>
                 <div id="tgConnectDone" class="hidden connect-done">
                   <div class="connect-done-ic" aria-hidden="true">
@@ -1287,8 +1311,9 @@
 </div>
 
 <script>window.__VERESK_BUILD__="auth-boot-v39";</script>
-<script src="js/api.js?v=37"></script>
+<script src="https://cdn.jsdelivr.net/npm/qrcode@1.5.4/build/qrcode.min.js" defer></script>
+<script src="js/api.js?v=38"></script>
 <script src="js/wheel-widget.js?v=10"></script>
-<script src="js/app.js?v=55"></script>
+<script src="js/app.js?v=56"></script>
 </body>
 </html>
