@@ -87,6 +87,62 @@ def promo_bot_links() -> dict[str, str]:
     return {"telegram_url": tg, "max_url": max_url}
 
 
+def _telegram_bot_username() -> str:
+    try:
+        from config import TELEGRAM_BOT_USERNAME
+
+        return str(TELEGRAM_BOT_USERNAME or "").strip().lstrip("@")
+    except Exception:
+        return ""
+
+
+def _max_bot_username_for_promo() -> str:
+    try:
+        from config import MAX_BOT_USERNAME
+
+        return _normalize_max_bot_username(MAX_BOT_USERNAME)
+    except Exception:
+        return ""
+
+
+def wheel_promo_share_links(
+    *, telegram_username: str | None = None, max_username: str | None = None
+) -> dict[str, str]:
+    """Ссылки для публикации промо-колеса (админка «Фортуна»)."""
+    tg_nick = str(telegram_username or "").strip().lstrip("@") or _telegram_bot_username()
+    max_nick = _normalize_max_bot_username(
+        max_username or _max_bot_username_for_promo()
+    )
+    miniapp = wheel_promo_miniapp_url() or ""
+    tg_startapp = (
+        f"https://t.me/{tg_nick}?startapp=wheel_promo" if tg_nick else ""
+    )
+    tg_bot = (
+        f"https://t.me/{tg_nick}?start=open_ticket" if tg_nick else ""
+    )
+    max_startapp = (
+        max_wheel_deeplink(max_nick, start_param="wheel_promo") if max_nick else ""
+    )
+    max_bot = f"https://max.ru/{max_nick}" if max_nick else ""
+    hint_parts: list[str] = []
+    if not tg_nick:
+        hint_parts.append(
+            "Задайте TELEGRAM_BOT_USERNAME в .env — появятся ссылки t.me"
+        )
+    if not max_nick:
+        hint_parts.append("MAX_BOT_USERNAME пуст — ссылка MAX недоступна")
+    return {
+        "miniapp_url": miniapp,
+        "telegram_startapp": tg_startapp,
+        "telegram_bot": tg_bot,
+        "max_startapp": max_startapp,
+        "max_bot": max_bot,
+        "telegram_bot_username": tg_nick,
+        "max_bot_username": max_nick,
+        "hint": ". ".join(hint_parts),
+    }
+
+
 _max_bot_username_cache: str | None = None
 _max_bot_user_id_cache: int | None = None
 

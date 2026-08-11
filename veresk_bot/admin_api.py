@@ -4933,7 +4933,30 @@ async def handle_wheel_get(request: web.Request) -> web.Response:
     err = await _require_perm(request, "wheel")
     if err:
         return err
-    return _json(get_wheel_config())
+    cfg = dict(get_wheel_config())
+    tg_nick = None
+    try:
+        bot = request.app.get("bot")
+        if bot is not None:
+            me = await bot.get_me()
+            tg_nick = str(getattr(me, "username", None) or "").strip() or None
+    except Exception:
+        logger.debug("wheel promo: bot.get_me failed", exc_info=True)
+    try:
+        from webapp_buttons import wheel_promo_share_links
+
+        cfg["promo_links"] = wheel_promo_share_links(telegram_username=tg_nick)
+    except Exception:
+        logger.debug("wheel promo links failed", exc_info=True)
+        cfg["promo_links"] = {
+            "miniapp_url": "",
+            "telegram_startapp": "",
+            "telegram_bot": "",
+            "max_startapp": "",
+            "max_bot": "",
+            "hint": "Не удалось собрать ссылки",
+        }
+    return _json(cfg)
 
 
 async def handle_wheel_save(request: web.Request) -> web.Response:

@@ -8225,9 +8225,11 @@
     try {
       const cfg = await AdminAPI.wheelConfig();
       applyWheelConfig(cfg);
+      fillWheelPromoLinks(cfg?.promo_links || {});
     } catch (err) {
       console.warn("[wheel] load failed, using defaults", err);
       resetWheelEditor();
+      fillWheelPromoLinks({});
       if (errEl && err.status !== 401) {
         errEl.textContent =
           "Не удалось загрузить сохранённые настройки — показаны значения по умолчанию";
@@ -8235,6 +8237,59 @@
       }
     }
     loadWheelPlays();
+  }
+
+  function fillWheelPromoLinks(links) {
+    const map = {
+      wheelPromoMiniapp: links.miniapp_url || "",
+      wheelPromoTgApp: links.telegram_startapp || "",
+      wheelPromoMaxApp: links.max_startapp || "",
+    };
+    Object.entries(map).forEach(([id, value]) => {
+      const el = document.getElementById(id);
+      if (el) el.value = value;
+    });
+    const hint = $("#wheelPromoHint");
+    if (hint) {
+      const text = String(links.hint || "").trim();
+      hint.textContent = text;
+      hint.hidden = !text;
+    }
+  }
+
+  async function copyWheelPromoLink(inputId, btn) {
+    const el = document.getElementById(inputId);
+    const value = String(el?.value || "").trim();
+    if (!value) {
+      const hint = $("#wheelPromoHint");
+      if (hint) {
+        hint.textContent = "Ссылка ещё не готова — проверьте username бота в .env";
+        hint.hidden = false;
+      }
+      return;
+    }
+    const markDone = () => {
+      const prev = btn?.textContent;
+      if (btn) {
+        btn.textContent = "Скопировано";
+        setTimeout(() => {
+          if (btn) btn.textContent = prev || "Копировать";
+        }, 1400);
+      }
+    };
+    try {
+      await navigator.clipboard.writeText(value);
+      markDone();
+    } catch (_) {
+      try {
+        el.focus();
+        el.select();
+        document.execCommand("copy");
+        markDone();
+      } catch (__) {
+        /* ignore */
+      }
+    }
   }
 
   function wheelInitials(name) {
@@ -8393,6 +8448,11 @@
         saveWheelEditor();
       });
       $("#wheelPlaysRefresh")?.addEventListener("click", () => loadWheelPlays());
+      document.querySelectorAll("[data-copy-from]").forEach((btn) => {
+        btn.addEventListener("click", () => {
+          copyWheelPromoLink(btn.getAttribute("data-copy-from"), btn);
+        });
+      });
       wheelState.inited = true;
       loadWheelEditor();
     } else {
