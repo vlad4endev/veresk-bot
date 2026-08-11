@@ -88,6 +88,7 @@
     { id: "clients", label: "Клиенты" },
     { id: "chats", label: "Чаты" },
     { id: "bots", label: "Боты" },
+    { id: "wheel", label: "Фортуна" },
     { id: "settings", label: "Настройки" },
     { id: "aichat", label: "ИИ чат" },
     { id: "access", label: "Доступ (сотрудники)" },
@@ -97,6 +98,7 @@
     clients: true,
     chats: true,
     bots: false,
+    wheel: false,
     settings: false,
     aichat: false,
     access: false,
@@ -121,7 +123,7 @@
   function canAccess(section) {
     const perms = (authMe && authMe.permissions) || {};
     if (authMe && (authMe.source === "env" || authMe.role === "admin")) return true;
-    if (section === "compose" || section === "detail" || section === "personal" || section === "wheel") {
+    if (section === "compose" || section === "detail" || section === "personal") {
       return !!perms.home;
     }
     if (section === "client") return !!perms.clients;
@@ -130,7 +132,7 @@
   }
 
   function firstAllowedTab() {
-    const order = ["home", "clients", "chats", "bots", "aichat", "settings"];
+    const order = ["home", "clients", "chats", "bots", "wheel", "aichat", "settings"];
     return order.find((t) => canAccess(t)) || "home";
   }
 
@@ -173,13 +175,13 @@
   function go(tab) {
     if (tab === "accounts") tab = "settings";
     const gateTab =
-      ({ compose: "home", detail: "home", personal: "home", client: "clients", wheel: "home" })[tab] || tab;
+      ({ compose: "home", detail: "home", personal: "home", client: "clients" })[tab] || tab;
     if (!canAccess(gateTab === "settings" ? "settings" : gateTab) && !canAccess(tab)) {
       tab = firstAllowedTab();
     }
     panels.forEach((p) => p.classList.toggle("active", p.id === tab));
     const navKey =
-      ({ compose: "home", detail: "home", personal: "home", client: "clients", wheel: "home" })[tab] ||
+      ({ compose: "home", detail: "home", personal: "home", client: "clients" })[tab] ||
       tab;
     navItems.forEach((n) => n.classList.toggle("active", n.dataset.nav === navKey));
     document.body.classList.toggle("hide-bnav", HIDE_BNAV_TABS.has(tab));
@@ -189,6 +191,9 @@
       if (tab === "clients") {
         mtopHi.textContent = "Клиенты";
         mtopSub.textContent = "База из Posiflora";
+      } else if (tab === "wheel") {
+        mtopHi.textContent = "Фортуна";
+        mtopSub.textContent = "Настройки колеса";
       } else if (tab === "home") {
         mtopHi.textContent = "Здравствуйте";
         mtopSub.textContent = "Что отправим клиентам сегодня?";

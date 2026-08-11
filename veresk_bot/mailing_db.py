@@ -1541,6 +1541,7 @@ ADMIN_PERMISSION_DEFS: tuple[tuple[str, str], ...] = (
     ("clients", "Клиенты"),
     ("chats", "Чаты"),
     ("bots", "Боты"),
+    ("wheel", "Фортуна"),
     ("settings", "Настройки"),
     ("aichat", "ИИ чат"),
     ("access", "Доступ (сотрудники)"),

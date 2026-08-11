@@ -14,7 +14,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,500;9..144,600;9..144,700&family=Manrope:wght@400;500;600;700&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="css/admin.css?v=51">
+<link rel="stylesheet" href="css/admin.css?v=52">
 <link rel="stylesheet" href="css/wheel.css?v=1">
 <!-- Критичный CSS до paint: иначе логин мелькнёт, пока качается admin.css -->
 <style>
@@ -99,6 +99,7 @@
       <button class="nav-item" data-nav="clients" onclick="go('clients')"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="9" cy="8" r="3"/><path d="M3 20c0-3 3-5 6-5s6 2 6 5"/><path d="M16 6a3 3 0 010 6"/><path d="M18 20c0-2-.6-3.5-2-4.5"/></svg>Клиенты</button>
       <button class="nav-item" data-nav="chats" onclick="go('chats')"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M21 11.5a8.4 8.4 0 01-.9 3.8 8.5 8.5 0 01-7.6 4.7 8.4 8.4 0 01-3.8-.9L3 21l1.9-5.7a8.4 8.4 0 01-.9-3.8 8.5 8.5 0 014.7-7.6 8.4 8.4 0 013.8-.9h.5a8.5 8.5 0 018 8v.5z"/></svg>Чаты</button>
       <button class="nav-item" data-nav="bots" onclick="go('bots')"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3" y="11" width="18" height="10" rx="2"/><circle cx="8.5" cy="16" r="1"/><circle cx="15.5" cy="16" r="1"/><path d="M12 11V7"/><path d="M8 7h8"/></svg>Боты</button>
+      <button class="nav-item" data-nav="wheel" onclick="go('wheel')"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="2"/><path d="M12 3v3M12 18v3M3 12h3M18 12h3M5.6 5.6l2.1 2.1M16.3 16.3l2.1 2.1M18.4 5.6l-2.1 2.1M7.7 16.3l-2.1 2.1"/></svg>Фортуна</button>
       <button class="nav-item" data-nav="settings" onclick="go('settings')"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="3"/><path d="M12 1v2M12 21v2M4.22 4.22l1.42 1.42M18.36 18.36l1.42 1.42M1 12h2M21 12h2M4.22 19.78l1.42-1.42M18.36 5.64l1.42-1.42"/></svg>Настройки</button>
       <button class="nav-item" data-nav="aichat" onclick="go('aichat')"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M21 15a2 2 0 01-2 2H7l-4 4V5a2 2 0 012-2h14a2 2 0 012 2z"/></svg>ИИ чат</button>
     </nav>
@@ -1147,12 +1148,12 @@
       </div>
     </section>
 
-    <!-- WHEEL (создание колеса фортуны — пока без пункта в меню) -->
+    <!-- WHEEL -->
     <section class="panel" id="wheel">
       <button type="button" class="back" id="wheelExit"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M15 18l-6-6 6-6"/></svg>Назад</button>
       <div class="wheel-head">
         <div>
-          <div class="page-title page-title-tight">Колесо фортуны</div>
+          <div class="page-title page-title-tight">Настройки фортуны</div>
           <p class="page-desc">Редактируйте призы слева — справа живое превью как в Mini App бота.</p>
         </div>
         <div class="wheel-head-actions">
@@ -1273,6 +1274,6 @@
 <script>window.__VERESK_BUILD__="auth-boot-v39";</script>
 <script src="js/api.js?v=35"></script>
 <script src="js/wheel-widget.js?v=1"></script>
-<script src="js/app.js?v=51"></script>
+<script src="js/app.js?v=52"></script>
 </body>
 </html>
