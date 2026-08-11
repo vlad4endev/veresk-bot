@@ -315,8 +315,4 @@
       return mountScreen(null, true);
     },
   };
-
-  document.getElementById("wheel-back")?.addEventListener("click", () => {
-    if (typeof window.goTo === "function") window.goTo("home");
-  });
 })();

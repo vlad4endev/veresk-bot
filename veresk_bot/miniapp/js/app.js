@@ -34,6 +34,15 @@ if (tg) {
   try {
     tg.BackButton.onClick(() => {
       const current = getCurrentScreen();
+      if (current === "wheel") {
+        // Колесо — отдельный экран после анкеты, без возврата на главную Mini App
+        try {
+          tg.close();
+        } catch (_) {
+          /* ignore */
+        }
+        return;
+      }
       if (current === "order" && window.VereskOrder?.getStep?.() > 1) {
         window.VereskOrder.prevStep();
         return;
@@ -69,8 +78,8 @@ function goTo(screenName) {
   document.getElementById(`screen-${screenName}`).classList.add("active");
 
   if (tg?.BackButton) {
-    if (screenName !== "home") tg.BackButton.show();
-    else tg.BackButton.hide();
+    if (screenName === "home" || screenName === "wheel") tg.BackButton.hide();
+    else tg.BackButton.show();
   }
 
   if (screenName === "status" && window.VereskStatus) {

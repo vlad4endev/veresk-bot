@@ -1214,9 +1214,15 @@ body:has(.tg-guard:not(.hidden)) #app {
     #FFFFFF;
 }
 
-#screen-wheel .screen-header {
+#screen-wheel .screen-header--solo {
+  justify-content: center;
+  text-align: center;
   background: rgba(255, 255, 255, 0.92);
   border-bottom: 1px solid rgba(64, 44, 96, 0.1);
+}
+
+#screen-wheel .screen-header--solo > div {
+  width: 100%;
 }
 
 #screen-wheel .header-title {
