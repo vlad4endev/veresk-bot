@@ -4,6 +4,7 @@ services:
     restart: unless-stopped
     env_file: .env
     environment:
+      TZ: Europe/Moscow
       DATABASE_PATH: /app/data/veresk.db
       SESSIONS_DIR: /app/data/sessions
     expose:
@@ -36,6 +37,7 @@ services:
     restart: unless-stopped
     env_file: .env
     environment:
+      TZ: Europe/Moscow
       DATABASE_PATH: /app/data/veresk.db
     volumes:
       - ./logs:/app/logs
