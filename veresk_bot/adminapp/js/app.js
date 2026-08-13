@@ -2485,7 +2485,7 @@
     if (authMe && (authMe.source === "env" || authMe.role === "admin")) {
       return settingsTab || "accounts";
     }
-    const order = ["accounts", "bots", "integrations", "users", "logs", "automail"];
+    const order = ["accounts", "bots", "integrations", "users", "logs", "automail", "backup"];
     // bots settings tab is under settings - needs settings perm; users needs access
     const allowed = order.filter((pane) => {
       if (pane === "users") return !!perms.access;
@@ -2514,6 +2514,7 @@
     if (settingsTab === "integrations") loadIntegrationsPane();
     if (settingsTab === "bots") loadBotsPane();
     if (settingsTab === "automail") loadAutoMailPane();
+    if (settingsTab === "backup") loadBackupPane();
   }
 
   async function loadSettings() {
@@ -2532,6 +2533,7 @@
     if (settingsTab === "logs") renderLogsPane();
     if (settingsTab === "integrations") loadIntegrationsPane();
     if (settingsTab === "automail") loadAutoMailPane();
+    if (settingsTab === "backup") loadBackupPane();
   }
 
   $$(".settings-tab").forEach((btn) => {
@@ -2758,6 +2760,379 @@
       );
     } finally {
       if (btn) btn.disabled = false;
+    }
+  });
+
+  // ── Backup (settings → Копии) ───────────────────────────────────────────
+
+  const backupState = {
+    items: [],
+    live: null,
+    pendingFile: null,
+    restore: null,
+  };
+
+  function backupErr(err) {
+    return (
+      (err && err.data && (err.data.detail || err.data.message || err.data.error)) ||
+      (err && err.message) ||
+      "ошибка"
+    );
+  }
+
+  function setBackupStatus(text, isError) {
+    const el = $("#backupCreateStatus");
+    if (!el) return;
+    el.textContent = text || "";
+    el.className = "form-foot" + (text && isError ? " err" : "");
+    if (text && !isError) el.style.color = "var(--ok)";
+    else el.style.color = "";
+  }
+
+  function renderBackupParts(live) {
+    const box = $("#backupParts");
+    if (!box) return;
+    const parts = (live && live.parts) || [];
+    if (!parts.length) {
+      box.innerHTML = "";
+      return;
+    }
+    box.innerHTML = parts
+      .map((p) => {
+        const on = p.present ? " on" : "";
+        const size = p.present ? esc(p.size_label || "") : "";
+        return `<div class="bak-part${on}">
+          <div class="bak-part-t">${esc(p.title)}</div>
+          <div class="bak-part-s">${esc(p.detail)}${p.present && size ? " · " + size : p.present ? "" : " · нет на диске"}</div>
+        </div>`;
+      })
+      .join("");
+  }
+
+  function backupContentTags(item) {
+    const c = (item && item.contents) || {};
+    const tags = [];
+    if (c.database) tags.push("База");
+    if (c.sessions) tags.push("Сессии");
+    if (c.media) tags.push("Фото");
+    if (c.settings) tags.push("Настройки");
+    if (c.env) tags.push("Ключи");
+    return tags
+      .map((t) => `<span class="bak-tag">${esc(t)}</span>`)
+      .join("");
+  }
+
+  function renderBackupList(items) {
+    const box = $("#backupList");
+    if (!box) return;
+    if (!items.length) {
+      box.innerHTML =
+        '<div class="bak-empty">Пока нет копий. Нажмите «Создать копию» — файл появится здесь, его можно скачать.</div>';
+      return;
+    }
+    box.innerHTML = items
+      .map((it) => {
+        const st = it.stats || {};
+        const meta = [
+          it.size_label,
+          st.customers ? st.customers + " кл." : "",
+          st.campaigns ? st.campaigns + " расс." : "",
+        ]
+          .filter(Boolean)
+          .join(" · ");
+        const kind =
+          it.kind === "safety"
+            ? `<span class="bak-tag">${esc(it.kind_label || "Страховка")}</span>`
+            : "";
+        return `<article class="bak-card${it.kind === "safety" ? " is-safety" : ""}" data-bak="${esc(it.id)}">
+          <div class="bak-card-main">
+            <h5 class="bak-card-title">${esc(it.label || it.created_label)}</h5>
+            <p class="bak-card-meta">${esc(meta)}${it.note ? " · " + esc(it.note) : ""}</p>
+            <div class="bak-card-tags">${kind}${backupContentTags(it)}</div>
+          </div>
+          <div class="bak-card-actions">
+            <button type="button" class="btn" data-bak-dl="${esc(it.id)}">Скачать</button>
+            <button type="button" class="btn" data-bak-restore="${esc(it.id)}">Восстановить</button>
+            <button type="button" class="btn danger" data-bak-del="${esc(it.id)}" title="Удалить с сервера">Удалить</button>
+          </div>
+        </article>`;
+      })
+      .join("");
+  }
+
+  async function loadBackupPane() {
+    const list = $("#backupList");
+    if (list && !backupState.items.length) {
+      list.innerHTML = '<div class="loading">Загрузка…</div>';
+    }
+    try {
+      const data = await AdminAPI.backups();
+      backupState.live = data.live || null;
+      backupState.items = data.items || [];
+      const live = backupState.live;
+      const hint = $("#backupLiveHint");
+      if (hint && live) {
+        const st = live.stats || {};
+        hint.textContent =
+          (st.customers || 0) +
+          " клиентов · " +
+          (live.size_label || "") +
+          " — это попадёт в новую копию";
+      }
+      const hero = $("#backupHeroStatus");
+      if (hero) {
+        const n = backupState.items.length;
+        hero.innerHTML = n
+          ? `<span class="status-pill ok"><span class="d"></span>${n} на сервере</span>`
+          : `<span class="status-pill"><span class="d"></span>копий пока нет</span>`;
+      }
+      renderBackupParts(live);
+      renderBackupList(backupState.items);
+    } catch (err) {
+      if (list) {
+        list.innerHTML =
+          '<div class="bak-empty">Не удалось загрузить список: ' +
+          esc(backupErr(err)) +
+          "</div>";
+      }
+    }
+  }
+
+  function downloadBackup(id) {
+    const url = AdminAPI.backupFileUrl(id);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = "";
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+  }
+
+  function closeBackupRestoreModal() {
+    const modal = $("#backupRestoreModal");
+    if (modal) modal.hidden = true;
+    backupState.restore = null;
+    const ack = $("#backupRestoreAck");
+    if (ack) ack.checked = false;
+    const btn = $("#backupRestoreConfirm");
+    if (btn) btn.disabled = true;
+    const st = $("#backupRestoreStatus");
+    if (st) {
+      st.textContent = "";
+      st.className = "form-status";
+    }
+  }
+
+  function openBackupRestoreModal(payload) {
+    backupState.restore = payload;
+    const title = $("#backupRestoreTitle");
+    const text = $("#backupRestoreText");
+    if (title) {
+      title.textContent = payload.file
+        ? "Вернуть магазин из файла?"
+        : "Вернуть магазин из копии?";
+    }
+    if (text) {
+      const name = payload.label || payload.filename || "этой копии";
+      text.textContent =
+        "Текущие клиенты, рассылки и сессии заменятся данными из «" +
+        name +
+        "». Перед этим сохраним страховочную копию на сервере.";
+    }
+    const ack = $("#backupRestoreAck");
+    if (ack) ack.checked = false;
+    const btn = $("#backupRestoreConfirm");
+    if (btn) {
+      btn.disabled = true;
+      btn.textContent = "Восстановить";
+    }
+    const modal = $("#backupRestoreModal");
+    if (modal) modal.hidden = false;
+  }
+
+  function setPendingBackupFile(file) {
+    backupState.pendingFile = file || null;
+    const hint = $("#backupDropHint");
+    const actions = $("#backupUploadActions");
+    if (!file) {
+      if (hint) hint.textContent = "Файл вида veresk-kopiya-….zip";
+      if (actions) actions.hidden = true;
+      return;
+    }
+    if (hint) hint.textContent = file.name + " · " + Math.max(1, Math.round(file.size / 1024)) + " КБ";
+    if (actions) actions.hidden = false;
+  }
+
+  $("#btnBackupCreate")?.addEventListener("click", async () => {
+    const btn = $("#btnBackupCreate");
+    if (btn) {
+      btn.disabled = true;
+      btn.textContent = "Создаём…";
+    }
+    setBackupStatus("Собираем базу, сессии и настройки…");
+    try {
+      const res = await AdminAPI.backupCreate();
+      const item = res.backup;
+      setBackupStatus("Готово — копия на сервере. Скачайте её на компьютер.");
+      await loadBackupPane();
+      if (item && item.id) downloadBackup(item.id);
+    } catch (err) {
+      setBackupStatus(backupErr(err), true);
+    } finally {
+      if (btn) {
+        btn.disabled = false;
+        btn.innerHTML =
+          '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 5v14M5 12h14"/></svg> Создать копию';
+      }
+    }
+  });
+
+  $("#backupList")?.addEventListener("click", async (ev) => {
+    const dl = ev.target.closest("[data-bak-dl]");
+    if (dl) {
+      downloadBackup(dl.getAttribute("data-bak-dl"));
+      return;
+    }
+    const restore = ev.target.closest("[data-bak-restore]");
+    if (restore) {
+      const id = restore.getAttribute("data-bak-restore");
+      const item = backupState.items.find((x) => x.id === id);
+      openBackupRestoreModal({
+        id,
+        label: item ? item.label : id,
+      });
+      return;
+    }
+    const del = ev.target.closest("[data-bak-del]");
+    if (!del) return;
+    const id = del.getAttribute("data-bak-del");
+    const item = backupState.items.find((x) => x.id === id);
+    if (!confirm("Удалить копию «" + (item && item.label ? item.label : id) + "» с сервера? Файл на компьютере останется, если уже скачали.")) {
+      return;
+    }
+    try {
+      await AdminAPI.backupDelete(id);
+      await loadBackupPane();
+    } catch (err) {
+      alert("Не удалось удалить: " + backupErr(err));
+    }
+  });
+
+  $("#backupFileInput")?.addEventListener("change", (ev) => {
+    const file = ev.target.files && ev.target.files[0];
+    setPendingBackupFile(file || null);
+  });
+
+  const drop = $("#backupDrop");
+  if (drop) {
+    ["dragenter", "dragover"].forEach((name) => {
+      drop.addEventListener(name, (ev) => {
+        ev.preventDefault();
+        drop.classList.add("is-over");
+      });
+    });
+    ["dragleave", "drop"].forEach((name) => {
+      drop.addEventListener(name, (ev) => {
+        ev.preventDefault();
+        drop.classList.remove("is-over");
+      });
+    });
+    drop.addEventListener("drop", (ev) => {
+      const file = ev.dataTransfer && ev.dataTransfer.files && ev.dataTransfer.files[0];
+      const input = $("#backupFileInput");
+      if (file && input) {
+        try {
+          const dt = new DataTransfer();
+          dt.items.add(file);
+          input.files = dt.files;
+        } catch (_) {
+          /* Safari may block DataTransfer assignment */
+        }
+      }
+      setPendingBackupFile(file || null);
+    });
+  }
+
+  $("#btnBackupImport")?.addEventListener("click", async () => {
+    const file = backupState.pendingFile;
+    if (!file) return;
+    const btn = $("#btnBackupImport");
+    if (btn) btn.disabled = true;
+    try {
+      const fd = new FormData();
+      fd.append("file", file, file.name);
+      await AdminAPI.backupUpload(fd);
+      setPendingBackupFile(null);
+      const input = $("#backupFileInput");
+      if (input) input.value = "";
+      setBackupStatus("Файл добавлен в список копий.");
+      await loadBackupPane();
+    } catch (err) {
+      alert("Не удалось загрузить: " + backupErr(err));
+    } finally {
+      if (btn) btn.disabled = false;
+    }
+  });
+
+  $("#btnBackupRestoreFile")?.addEventListener("click", () => {
+    const file = backupState.pendingFile;
+    if (!file) return;
+    openBackupRestoreModal({ file, filename: file.name });
+  });
+
+  $("#backupRestoreAck")?.addEventListener("change", () => {
+    const btn = $("#backupRestoreConfirm");
+    const ack = $("#backupRestoreAck");
+    if (btn) btn.disabled = !(ack && ack.checked);
+  });
+
+  $$("[data-backup-close]").forEach((el) => {
+    el.addEventListener("click", () => closeBackupRestoreModal());
+  });
+
+  $("#backupRestoreConfirm")?.addEventListener("click", async () => {
+    const payload = backupState.restore;
+    if (!payload) return;
+    const ack = $("#backupRestoreAck");
+    if (!ack || !ack.checked) return;
+    const btn = $("#backupRestoreConfirm");
+    const st = $("#backupRestoreStatus");
+    if (btn) {
+      btn.disabled = true;
+      btn.textContent = "Восстанавливаем…";
+    }
+    if (st) {
+      st.textContent = "Пишем страховочную копию, затем возвращаем данные…";
+      st.className = "form-status";
+    }
+    try {
+      let res;
+      if (payload.file) {
+        const fd = new FormData();
+        fd.append("file", payload.file, payload.file.name || "veresk-kopiya.zip");
+        res = await AdminAPI.backupRestoreFile(fd);
+      } else {
+        res = await AdminAPI.backupRestore(payload.id);
+      }
+      closeBackupRestoreModal();
+      setPendingBackupFile(null);
+      const input = $("#backupFileInput");
+      if (input) input.value = "";
+      const extra = res && res.restart_recommended
+        ? " Если менялись ключи .env — перезапустите контейнеры."
+        : "";
+      setBackupStatus("Магазин восстановлен." + extra);
+      await loadBackupPane();
+      alert("Магазин восстановлен из копии." + extra + " Обновите страницу, если что-то выглядит старым.");
+    } catch (err) {
+      if (st) {
+        st.textContent = backupErr(err);
+        st.className = "form-status err";
+      }
+      if (btn) {
+        btn.disabled = false;
+        btn.textContent = "Восстановить";
+      }
     }
   });
 

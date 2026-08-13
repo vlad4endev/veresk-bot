@@ -269,7 +269,7 @@ async def handle_health(_request: web.Request) -> web.Response:
 
 
 def create_api_app(redis, bot=None) -> web.Application:
-    app = web.Application()
+    app = web.Application(client_max_size=200 * 1024 * 1024)
     app["redis"] = redis
     app["bot"] = bot
 

@@ -81,7 +81,7 @@ async def main() -> None:
     start_mailing_dispatcher()
     logger.info("Диспетчер рассылок (Telegram userbot / MAX) запущен")
 
-    app = web.Application()
+    app = web.Application(client_max_size=200 * 1024 * 1024)
     app["redis"] = None
     app["bot"] = None
     setup_admin_routes(app)

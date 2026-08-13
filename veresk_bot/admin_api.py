@@ -5884,6 +5884,228 @@ async def handle_wheel_my_play(request: web.Request) -> web.Response:
             "play": _serialize_fortune_play(play, hide_prize=sealed),
         }
     )
+
+
+async def _require_settings(request: web.Request) -> web.Response | None:
+    return await _require_perm(request, "settings")
+
+
+def _backup_fail(exc: Exception) -> web.Response:
+    from backup import BackupError
+
+    if isinstance(exc, BackupError):
+        status = 404 if exc.code == "not_found" else 400
+        if exc.code == "file_too_large":
+            status = 413
+        return _json({"error": exc.code, "detail": exc.message}, status=status)
+    logger.exception("Ошибка резервной копии")
+    return _json({"error": "backup_failed", "detail": "Не удалось выполнить операцию"}, status=500)
+
+
+async def _save_backup_upload(request: web.Request):
+    from pathlib import Path
+    import tempfile
+
+    from backup import MAX_UPLOAD_BYTES, BackupError, backups_dir, format_bytes
+
+    if not (request.content_type or "").startswith("multipart/"):
+        raise BackupError("multipart_required", "Нужен файл копии")
+    reader = await request.multipart()
+    dest: Path | None = None
+    filename = "veresk-kopiya.zip"
+    size = 0
+    try:
+        while True:
+            part = await reader.next()
+            if part is None:
+                break
+            if part.name != "file":
+                await part.read(decode=False)
+                continue
+            filename = Path(part.filename or filename).name or filename
+            fd, tmp_name = tempfile.mkstemp(
+                prefix="veresk-up-", suffix=".zip", dir=str(backups_dir())
+            )
+            dest = Path(tmp_name)
+            with open(fd, "wb") as out:
+                while True:
+                    chunk = await part.read_chunk(64 * 1024)
+                    if not chunk:
+                        break
+                    size += len(chunk)
+                    if size > MAX_UPLOAD_BYTES:
+                        raise BackupError(
+                            "file_too_large",
+                            f"Файл больше {format_bytes(MAX_UPLOAD_BYTES)}",
+                        )
+                    out.write(chunk)
+        if dest is None or size == 0:
+            raise BackupError("file_required", "Выберите файл копии")
+        return dest, filename
+    except Exception:
+        if dest is not None:
+            dest.unlink(missing_ok=True)
+        raise
+
+
+async def _reinit_after_restore() -> None:
+    from channel_subscriptions import init_channel_subscriptions
+    from client_db import init_db
+    from mailing_db import init_mailing_db
+    from bot_metrics import init_bot_metrics
+
+    await init_mailing_db()
+    await init_bot_metrics()
+    await init_channel_subscriptions()
+    await init_db()
+    try:
+        from max_bot.storage import init_max_db
+
+        await init_max_db()
+    except Exception:
+        logger.debug("init_max_db после restore пропущен", exc_info=True)
+
+
+async def handle_backup_list(request: web.Request) -> web.Response:
+    err = await _require_settings(request)
+    if err:
+        return err
+    from backup import list_backups, live_info
+
+    return _json({"live": live_info(), "items": list_backups()})
+
+
+async def handle_backup_create(request: web.Request) -> web.Response:
+    err = await _require_settings(request)
+    if err:
+        return err
+    from backup import BackupError, create_backup
+
+    try:
+        item = await asyncio.to_thread(create_backup, kind="manual")
+    except BackupError as exc:
+        return _backup_fail(exc)
+    except Exception as exc:
+        return _backup_fail(exc)
+    return _json({"ok": True, "backup": item})
+
+
+async def handle_backup_get(request: web.Request) -> web.Response:
+    err = await _require_settings(request)
+    if err:
+        return err
+    from backup import BackupError, get_backup
+
+    try:
+        item = get_backup(str(request.match_info.get("id") or ""))
+    except BackupError as exc:
+        return _backup_fail(exc)
+    if not item:
+        return _json({"error": "not_found", "detail": "Такой копии нет"}, status=404)
+    return _json({"backup": item})
+
+
+async def handle_backup_file(request: web.Request) -> web.Response:
+    err = await _require_settings(request)
+    if err:
+        return err
+    from backup import BackupError, get_backup, resolve_backup_file
+    from urllib.parse import quote
+
+    ident = str(request.match_info.get("id") or "")
+    try:
+        path = resolve_backup_file(ident)
+        item = get_backup(ident)
+    except BackupError as exc:
+        return _backup_fail(exc)
+    if not path or not item:
+        return _json({"error": "not_found", "detail": "Такой копии нет"}, status=404)
+    filename = item.get("filename") or f"veresk-kopiya-{ident}.zip"
+    resp = web.FileResponse(path)
+    resp.content_type = "application/zip"
+    quoted = quote(filename)
+    resp.headers["Content-Disposition"] = (
+        f"attachment; filename=\"{filename}\"; filename*=UTF-8''{quoted}"
+    )
+    for key, value in _cors().items():
+        resp.headers[key] = value
+    return resp
+
+
+async def handle_backup_delete(request: web.Request) -> web.Response:
+    err = await _require_settings(request)
+    if err:
+        return err
+    from backup import BackupError, delete_backup
+
+    try:
+        delete_backup(str(request.match_info.get("id") or ""))
+    except BackupError as exc:
+        return _backup_fail(exc)
+    return _json({"ok": True})
+
+
+async def handle_backup_restore(request: web.Request) -> web.Response:
+    err = await _require_settings(request)
+    if err:
+        return err
+    from backup import BackupError, restore_backup
+
+    ident = str(request.match_info.get("id") or "")
+    try:
+        result = await asyncio.to_thread(restore_backup, ident)
+        await _reinit_after_restore()
+    except BackupError as exc:
+        return _backup_fail(exc)
+    except Exception as exc:
+        return _backup_fail(exc)
+    return _json({"ok": True, **result})
+
+
+async def handle_backup_upload(request: web.Request) -> web.Response:
+    err = await _require_settings(request)
+    if err:
+        return err
+    from backup import BackupError, import_uploaded_zip
+
+    dest = None
+    try:
+        dest, filename = await _save_backup_upload(request)
+        item = await asyncio.to_thread(import_uploaded_zip, dest, original_name=filename)
+    except BackupError as exc:
+        return _backup_fail(exc)
+    except Exception as exc:
+        return _backup_fail(exc)
+    finally:
+        if dest is not None:
+            dest.unlink(missing_ok=True)
+    return _json({"ok": True, "backup": item})
+
+
+async def handle_backup_restore_upload(request: web.Request) -> web.Response:
+    err = await _require_settings(request)
+    if err:
+        return err
+    from backup import BackupError, create_backup, restore_from_zip
+
+    dest = None
+    try:
+        dest, _filename = await _save_backup_upload(request)
+        safety = await asyncio.to_thread(
+            create_backup, kind="safety", note="Перед загрузкой копии"
+        )
+        result = await asyncio.to_thread(restore_from_zip, dest)
+        await _reinit_after_restore()
+    except BackupError as exc:
+        return _backup_fail(exc)
+    except Exception as exc:
+        return _backup_fail(exc)
+    finally:
+        if dest is not None:
+            dest.unlink(missing_ok=True)
+    return _json({"ok": True, "safety": safety, **result})
+
+
 def setup_admin_routes(app: web.Application) -> None:
     routes = [
         ("/api/admin/login", handle_login, "POST"),
@@ -5906,6 +6128,14 @@ def setup_admin_routes(app: web.Application) -> None:
         ("/api/admin/channel-subscribers/settings", handle_channel_subscribers_settings, "POST"),
         ("/api/admin/auto-mail/settings", handle_auto_mail_settings, "GET"),
         ("/api/admin/auto-mail/settings", handle_auto_mail_settings, "POST"),
+        ("/api/admin/backup", handle_backup_list, "GET"),
+        ("/api/admin/backup", handle_backup_create, "POST"),
+        ("/api/admin/backup/upload", handle_backup_upload, "POST"),
+        ("/api/admin/backup/restore-file", handle_backup_restore_upload, "POST"),
+        ("/api/admin/backup/{id}/file", handle_backup_file, "GET"),
+        ("/api/admin/backup/{id}/restore", handle_backup_restore, "POST"),
+        ("/api/admin/backup/{id}", handle_backup_get, "GET"),
+        ("/api/admin/backup/{id}", handle_backup_delete, "DELETE"),
         ("/api/admin/channel-subscribers/sync", handle_channel_subscribers_sync, "POST"),
         ("/api/admin/channel-subscribers/discover", handle_channel_subscribers_discover, "POST"),
         ("/api/admin/channel-subscribers/ensure", handle_channel_subscribers_ensure, "POST"),

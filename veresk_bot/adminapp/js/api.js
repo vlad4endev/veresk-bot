@@ -500,5 +500,25 @@ const AdminAPI = (() => {
       };
       return es;
     },
+    backups: () => request("/api/admin/backup"),
+    backupCreate: () => request("/api/admin/backup", { method: "POST" }),
+    backupDelete: (id) =>
+      request("/api/admin/backup/" + encodeURIComponent(id), { method: "DELETE" }),
+    backupRestore: (id) =>
+      request("/api/admin/backup/" + encodeURIComponent(id) + "/restore", {
+        method: "POST",
+      }),
+    backupUpload: (formData) => requestForm("/api/admin/backup/upload", formData),
+    backupRestoreFile: (formData) =>
+      requestForm("/api/admin/backup/restore-file", formData),
+    backupFileUrl: (id) => {
+      const q = new URLSearchParams({ token: getToken() });
+      return (
+        "/api/admin/backup/" +
+        encodeURIComponent(id) +
+        "/file?" +
+        q.toString()
+      );
+    },
   };
 })();

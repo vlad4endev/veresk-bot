@@ -94,3 +94,11 @@ def delete_keys(*keys: str) -> None:
         tmp.replace(_SETTINGS_PATH)
         _cache = data
         _cache_mtime = _file_mtime()
+
+
+def invalidate_cache() -> None:
+    """Сбросить кэш — после восстановления файла с диска."""
+    global _cache, _cache_mtime
+    with _lock:
+        _cache = None
+        _cache_mtime = None
