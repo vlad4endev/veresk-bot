@@ -1521,7 +1521,7 @@
                 <button type="button" class="ai-editor-close" id="aiClose" aria-label="Закрыть">×</button>
               </div>
               <div class="ai-chips" id="aiChips">
-                <button type="button" class="ai-chip" data-chip="promo" data-prompt="Скидка 15% на весенние букеты, тёплое предложение только для них">Скидка</button>
+                <button type="button" class="ai-chip" data-chip="promo" data-prompt="Скидка {скидка} на весенние букеты, тёплое предложение только для них">Скидка</button>
                 <button type="button" class="ai-chip" data-chip="holiday" data-prompt="Напомнить о предстоящем празднике и предложить заказать букет заранее">К празднику</button>
                 <button type="button" class="ai-chip" data-chip="new" data-prompt="Анонс новых букетов в салоне, пригласить посмотреть">Новинки</button>
                 <button type="button" class="ai-chip" data-chip="winback" data-prompt="Мягко вернуть клиентов, которые давно не заказывали, без давления">Вернуть</button>
@@ -1542,7 +1542,7 @@
             </div>
             <textarea class="textarea" id="msg">Здравствуйте, {имя}!
 
-Только для вас — весенние букеты со скидкой 15%.
+Только для вас — весенние букеты со скидкой {скидка}.
 
 Заказать: veresk.flowers</textarea>
             <p class="msg-error" id="msgError" hidden>Напишите текст сообщения</p>
@@ -1551,6 +1551,7 @@
               <button type="button" class="ins" data-insert="{скидка}">+ Скидка</button>
               <button type="button" class="ins" data-insert="veresk.flowers">+ Ссылка</button>
             </div>
+            <p class="msg-discount-hint" id="msgDiscountHint" hidden></p>
             <div class="media-attach" id="mediaAttach">
               <input type="file" id="mediaFile" accept="image/jpeg,image/png,image/webp,image/gif,.jpg,.jpeg,.png,.webp,.gif" hidden>
               <button type="button" class="btn media-attach-btn" id="mediaPick">
@@ -1708,16 +1709,16 @@
 
             <div class="promos-grid">
               <label class="field">
-                <span>Тип</span>
+                <span>Тип / сегмент</span>
                 <select id="promoType">
-                  <option value="discount">Скидка</option>
-                  <option value="gift">Подарок</option>
-                  <option value="seasonal">Сезонная</option>
-                  <option value="welcome">Приветственная</option>
-                  <option value="reactivation">Возврат клиентов</option>
+                  <option value="all">Все клиенты</option>
+                  <option value="regular">Постоянные</option>
+                  <option value="new">Новые</option>
+                  <option value="inactive">Давно не заказывали</option>
+                  <option value="channel_subscribers">Подписчики канала</option>
+                  <option value="channel_subscribers_new">Новые подписчики</option>
                   <option value="birthday">День рождения</option>
                   <option value="anniversary">Годовщина</option>
-                  <option value="other">Другое</option>
                 </select>
               </label>
               <label class="field">
@@ -1729,13 +1730,13 @@
                   <option value="archived">В архиве</option>
                 </select>
               </label>
-              <label class="field">
+              <label class="field" hidden>
                 <span>Сегмент</span>
                 <select id="promoSegment">
-                  <option value="all">Все</option>
+                  <option value="all">Все клиенты</option>
                   <option value="regular">Постоянные</option>
                   <option value="new">Новые</option>
-                  <option value="inactive">Неактивные</option>
+                  <option value="inactive">Давно не заказывали</option>
                   <option value="channel_subscribers">Подписчики канала</option>
                   <option value="channel_subscribers_new">Новые подписчики</option>
                 </select>

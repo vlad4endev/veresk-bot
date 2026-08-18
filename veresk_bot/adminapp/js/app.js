@@ -73,6 +73,9 @@
       channels: ["tg"],
       willSend: null,
       keepMessage: false,
+      lockMessage: false,
+      autoTemplate: "",
+      discount: null, // { text, message_template, promo_type, promo_title, source }
       media: null, // { media_path, media_filename, media_mime, media_kind, localUrl }
     },
     tgPhone: "",
@@ -1396,16 +1399,16 @@
       const ranked = [...items].sort((a, b) => {
         const score = (p) =>
           (p.is_live ? 4 : 0) +
-          (p.promo_type === "welcome" ? 2 : 0) +
+          (isWelcomePromoType(p.promo_type) ? 2 : 0) +
           (p.use_in_auto_mail !== false ? 1 : 0);
         return score(b) - score(a);
       });
       sel.innerHTML =
-        `<option value="">Авто · живая «Приветственная»</option>` +
+        `<option value="">Авто · живая акция для новых подписчиков</option>` +
         ranked
           .map((p) => {
             const live = p.is_live ? "live" : p.status || "draft";
-            const type = p.promo_type === "welcome" ? "приветствие" : p.promo_type || "";
+            const type = PROMO_TYPE_LABELS[canonicalPromoType(p.promo_type, p.segment)] || "";
             const title = p.title || "Без названия";
             return `<option value="${esc(String(p.id))}">${esc(
               `${p.emoji || "🎁"} ${title}`
@@ -1452,9 +1455,9 @@
     } else {
       promo =
         _subsWelcomePromosCache.find(
-          (p) => p.is_live && p.promo_type === "welcome" && p.use_in_auto_mail !== false
+          (p) => p.is_live && isWelcomePromoType(p.promo_type) && p.use_in_auto_mail !== false
         ) ||
-        _subsWelcomePromosCache.find((p) => p.is_live && p.promo_type === "welcome") ||
+        _subsWelcomePromosCache.find((p) => p.is_live && isWelcomePromoType(p.promo_type)) ||
         _subsWelcomePromosCache.find((p) => p.is_live && p.use_in_auto_mail !== false) ||
         _subsWelcomePromosCache.find((p) => p.is_live) ||
         null;
@@ -1464,7 +1467,7 @@
       alert(
         promo
           ? "У акции нет текста шаблона — заполните «Текст сообщения» в разделе Акции."
-          : "Нет подходящей акции. Создайте акцию типа «Приветственная» в разделе Акции."
+          : "Нет подходящей акции. Создайте акцию типа «Новые» или «Новые подписчики» в разделе Акции."
       );
       return;
     }
@@ -2592,7 +2595,11 @@
     for (const p of _autoMailPromosCache) {
       const id = String(p.id);
       const emoji = p.emoji ? `${esc(p.emoji)} ` : "";
-      const type = p.promo_type ? ` · ${esc(p.promo_type)}` : "";
+      const typeLabel =
+        (typeof PROMO_TYPE_LABELS !== "undefined" && PROMO_TYPE_LABELS[p.promo_type]) ||
+        p.promo_type ||
+        "";
+      const type = typeLabel ? ` · ${esc(typeLabel)}` : "";
       const live = p.is_live ? "" : " (не live)";
       options.push(
         `<option value="${esc(id)}">${emoji}${esc(p.title || "Акция")}${type}${live}</option>`
@@ -5603,7 +5610,7 @@
   // ── wizard ──────────────────────────────────────────────────────────────
 
   const DEFAULT_MSG =
-    "Здравствуйте, {имя}!\n\nТолько для вас — весенние букеты со скидкой 15%.\n\nЗаказать: veresk.flowers";
+    "Здравствуйте, {имя}!\n\nТолько для вас — весенние букеты со скидкой {скидка}.\n\nЗаказать: veresk.flowers";
 
   const SEG_LABELS = {
     regular: "Постоянные",
@@ -5617,25 +5624,25 @@
 
   const AI_CHIP_PROMPTS = {
     regular: {
-      promo: "Тёплое предложение со скидкой 15% для постоянных клиентов, благодарность за доверие",
+      promo: "Тёплое предложение со скидкой {скидка} для постоянных клиентов, благодарность за доверие",
       holiday: "Напомнить постоянным клиентам о празднике и предложить заказать букет заранее",
       new: "Анонс новинок для постоянных клиентов, пригласить посмотреть в салоне",
       winback: "Мягко напомнить постоянным клиентам о себе без давления",
     },
     all: {
-      promo: "Скидка 15% на весенние букеты, тёплое предложение для клиентов",
+      promo: "Скидка {скидка} на весенние букеты, тёплое предложение для клиентов",
       holiday: "Напомнить о предстоящем празднике и предложить заказать букет заранее",
       new: "Анонс новых букетов в салоне, пригласить посмотреть",
       winback: "Короткое дружелюбное приглашение заглянуть за букетом",
     },
     new: {
-      promo: "Приветствие новым клиентам со скидкой 15% на первый/следующий букет",
+      promo: "Приветствие новым клиентам со скидкой {скидка} на первый букет — скидка из приветственной акции, не выдумывай процент",
       holiday: "Познакомить новых клиентов с салоном к празднику, мягко предложить букет",
       new: "Показать новинки новым клиентам, пригласить в салон",
       winback: "Тёплое продолжение знакомства с новыми клиентами без давления",
     },
     inactive: {
-      promo: "Мягко вернуть клиентов со скидкой 15%, без давления и упрёков",
+      promo: "Мягко вернуть клиентов со скидкой {скидка} из акции возврата, без давления и упрёков",
       holiday: "Напомнить о празднике клиентам, которые давно не заказывали",
       new: "Показать, что в салоне появились новые букеты — пригласить вернуться",
       winback: "Мягко вернуть клиентов, которые давно не заказывали, без давления",
@@ -5878,7 +5885,9 @@
   }
 
   function adaptAiChipsForSegment() {
-    const seg = currentSegment() === "selected" ? "all" : currentSegment();
+    let seg = currentSegment();
+    if (seg === "selected") seg = "all";
+    if (seg === "channel_subscribers_new") seg = "new";
     const map = AI_CHIP_PROMPTS[seg] || AI_CHIP_PROMPTS.all;
     $$("#aiChips .ai-chip").forEach((chip) => {
       const key = chip.dataset.chip;
@@ -5973,6 +5982,7 @@
       const data = await AdminAPI.mailingPreview(params);
       const will = data.will_send || 0;
       state.wizard.willSend = will;
+      applyWizardOffer(data.discount);
       const tgN = (data.reachable && data.reachable.tg) || 0;
       const maxN = (data.reachable && data.reachable.max) || 0;
       if ($("#matchWill")) $("#matchWill").textContent = fmtNum(will) + " доставок";
@@ -6186,6 +6196,7 @@
     // повтор рассылки: оставляем текст/аудиторию, которые уже выставили снаружи
     if (state.wizard.keepMessage) {
       state.wizard.keepMessage = false;
+      state.wizard.lockMessage = true;
       state.wizard.when = "now";
       $$("#s2 .choice").forEach((c) =>
         c.classList.toggle("on", c.dataset.when === "now")
@@ -6208,6 +6219,9 @@
     state.wizard.selectedCustomers = [];
     state.wizard.when = "now";
     state.wizard.willSend = null;
+    state.wizard.discount = null;
+    state.wizard.lockMessage = false;
+    state.wizard.autoTemplate = "";
     state.wizard.channels = ["tg"];
     clearComposeMedia();
     $$(".aud-mode-btn").forEach((b) => {
@@ -6280,6 +6294,7 @@
       $$("#s0 .choice").forEach((x) => x.classList.remove("on"));
       c.classList.add("on");
       state.wizard.segment = c.dataset.seg;
+      adaptAiChipsForSegment();
       refreshMatchPreview();
     })
   );
@@ -6338,10 +6353,92 @@
     syncWizardCta();
   }
 
+  const WIZ_PROMO_KIND_HINT = {
+    all: "акции для всех клиентов",
+    regular: "акции для постоянных",
+    new: "акции для новых",
+    inactive: "акции для тех, кто давно не заказывал",
+    channel_subscribers: "акции для подписчиков канала",
+    channel_subscribers_new: "акции для новых подписчиков",
+    birthday: "акции ко дню рождения",
+    anniversary: "акции к годовщине",
+    welcome: "акции для новых",
+    reactivation: "акции для тех, кто давно не заказывал",
+    discount: "акции для всех клиентов",
+    gift: "акции для всех клиентов",
+    seasonal: "акции для всех клиентов",
+    other: "акции",
+  };
+
+  function wizardDiscountText() {
+    const d = state.wizard.discount;
+    if (d && d.text) return d.text;
+    return window.__vereskActiveDiscount || "15%";
+  }
+
+  function normalizeComposeText(s) {
+    return String(s || "").replace(/\r\n/g, "\n").trim();
+  }
+
+  function messageIsAutoOrDefault() {
+    const cur = normalizeComposeText(msgTa?.value);
+    if (!cur) return true;
+    if (cur === normalizeComposeText(DEFAULT_MSG)) return true;
+    const auto = normalizeComposeText(state.wizard.autoTemplate);
+    return !!(auto && cur === auto);
+  }
+
+  function applyWizardOffer(info) {
+    if (!info || typeof info !== "object") return;
+    state.wizard.discount = {
+      text: info.text || "",
+      message_template: info.message_template || "",
+      promo_type: info.promo_type || "",
+      promo_title: info.promo_title || "",
+      source: info.source || "",
+    };
+    if (info.text) window.__vereskActiveDiscount = info.text;
+    const tpl = String(info.message_template || "").trim();
+    if (!state.wizard.lockMessage && msgTa && messageIsAutoOrDefault()) {
+      if (tpl) {
+        msgTa.value = tpl;
+        state.wizard.autoTemplate = tpl;
+      } else if (state.wizard.autoTemplate) {
+        msgTa.value = DEFAULT_MSG;
+        state.wizard.autoTemplate = "";
+      }
+    }
+    updateDiscountHint();
+    updatePreview();
+  }
+
+  function updateDiscountHint() {
+    const el = $("#msgDiscountHint");
+    if (!el) return;
+    const d = state.wizard.discount;
+    const text = wizardDiscountText();
+    const kind = d && d.promo_type ? WIZ_PROMO_KIND_HINT[d.promo_type] : "";
+    const title = d && d.promo_title ? ` «${d.promo_title}»` : "";
+    const hasTpl = !!(d && String(d.message_template || "").trim());
+    if (kind) {
+      el.textContent = hasTpl
+        ? `Текст и {скидка} = ${text} из ${kind}${title}`
+        : `{скидка} = ${text} из ${kind}${title}`;
+      el.hidden = false;
+      return;
+    }
+    if (text) {
+      el.textContent = `{скидка} = ${text}`;
+      el.hidden = false;
+      return;
+    }
+    el.hidden = true;
+  }
+
   function updatePreview() {
     if (!msgPreviewEl || !msgTa) return;
     const raw = msgTa.value;
-    const disc = window.__vereskActiveDiscount || "15%";
+    const disc = wizardDiscountText();
     if (!raw.trim()) {
       msgPreviewEl.innerHTML = `<span class="pv-empty">Текст появится здесь…</span>`;
     } else {
@@ -9540,15 +9637,50 @@
   };
 
   const PROMO_TYPE_LABELS = {
-    discount: "Скидка",
-    gift: "Подарок",
-    seasonal: "Сезонная",
-    welcome: "Приветствие",
-    reactivation: "Возврат",
+    all: "Все клиенты",
+    regular: "Постоянные",
+    new: "Новые",
+    inactive: "Давно не заказывали",
+    channel_subscribers: "Подписчики канала",
+    channel_subscribers_new: "Новые подписчики",
     birthday: "День рождения",
     anniversary: "Годовщина",
-    other: "Другое",
+    welcome: "Новые",
+    reactivation: "Давно не заказывали",
+    discount: "Все клиенты",
+    gift: "Все клиенты",
+    seasonal: "Все клиенты",
+    other: "Все клиенты",
   };
+  const PROMO_MAILING_TYPES = [
+    "all",
+    "regular",
+    "new",
+    "inactive",
+    "channel_subscribers",
+    "channel_subscribers_new",
+  ];
+  function canonicalPromoType(type, segment) {
+    const t = String(type || "").toLowerCase();
+    const seg = String(segment || "").toLowerCase();
+    if (t === "welcome") {
+      return seg === "channel_subscribers_new" ? "channel_subscribers_new" : "new";
+    }
+    if (t === "reactivation") return "inactive";
+    if (t === "discount" || t === "gift" || t === "seasonal" || t === "other") {
+      return PROMO_MAILING_TYPES.includes(seg) ? seg : "all";
+    }
+    if (PROMO_TYPE_LABELS[t]) {
+      if (PROMO_MAILING_TYPES.includes(t) || t === "birthday" || t === "anniversary") {
+        return t;
+      }
+    }
+    return "all";
+  }
+  function isWelcomePromoType(type) {
+    const t = canonicalPromoType(type);
+    return t === "new" || t === "channel_subscribers_new";
+  }
   const PROMO_STATUS_LABELS = {
     draft: "Черновик",
     active: "Активна",
@@ -9615,7 +9747,7 @@
           <span class="promos-row-emoji">${esc(p.emoji || "🎁")}</span>
           <span>
             <div class="promos-row-title">${esc(p.title || "Без названия")} ${status}</div>
-            <div class="promos-row-sub">${esc(type)} · ${esc(p.segment || "all")}</div>
+            <div class="promos-row-sub">${esc(type)}</div>
           </span>
           <span class="promos-row-disc">${esc(disc)}</span>
         </button>`;
@@ -9658,9 +9790,13 @@
     setPromoVal("promoId", isNew ? "" : data.id);
     setPromoVal("promoEmoji", data.emoji || "🎁");
     setPromoVal("promoTitle", data.title || "");
-    setPromoVal("promoType", data.promo_type || "discount");
+    const ctype = canonicalPromoType(data.promo_type || "all", data.segment);
+    setPromoVal("promoType", ctype);
     setPromoVal("promoStatus", data.status || "draft");
-    setPromoVal("promoSegment", data.segment || "all");
+    setPromoVal(
+      "promoSegment",
+      PROMO_MAILING_TYPES.includes(ctype) ? ctype : data.segment || "all"
+    );
     setPromoVal("promoPriority", data.priority != null ? data.priority : 0);
     setPromoVal(
       "promoDiscountPct",
@@ -9699,12 +9835,13 @@
     if ($("#promoChTg")?.checked) channels.push("tg");
     if ($("#promoChMax")?.checked) channels.push("max");
     const pctRaw = promoVal("promoDiscountPct").trim();
+    const promoType = canonicalPromoType(promoVal("promoType") || "all", promoVal("promoSegment"));
     return {
       title: promoVal("promoTitle").trim(),
       emoji: promoVal("promoEmoji").trim() || "🎁",
-      promo_type: promoVal("promoType") || "discount",
+      promo_type: promoType,
       status: promoVal("promoStatus") || "draft",
-      segment: promoVal("promoSegment") || "all",
+      segment: PROMO_MAILING_TYPES.includes(promoType) ? promoType : "all",
       priority: Number(promoVal("promoPriority") || 0),
       discount_pct: pctRaw === "" ? null : Number(pctRaw),
       discount_text: promoVal("promoDiscountText").trim(),
@@ -9728,7 +9865,7 @@
     fillPromoForm(
       prefill || {
         emoji: "🎁",
-        promo_type: "discount",
+        promo_type: "all",
         status: "draft",
         segment: "all",
         discount_pct: 15,
@@ -10028,7 +10165,7 @@
     }
     if (!(src.message_template || "").trim()) {
       const title = (src.title || "специальное предложение").trim();
-      const kind = src.promo_type || "discount";
+      const kind = canonicalPromoType(src.promo_type || "all", src.segment);
       if (kind === "birthday") {
         src.message_template =
           `С днём рождения, {имя}! 🎂💐\n\n` +
@@ -10039,12 +10176,12 @@
           `{имя}, поздравляем с годовщиной! 💍\n\n` +
           `Отметьте этот день красивым букетом — дарим скидку {скидка}.\n\n` +
           `Ваш Veresk 🌷`;
-      } else if (kind === "reactivation") {
+      } else if (kind === "inactive") {
         src.message_template =
           `Здравствуйте, {имя}!\n\n` +
           `Давно не виделись — соскучились по вам. Специально для вас: {скидка} на букет.\n\n` +
           `Ваш Veresk 🌷`;
-      } else if (kind === "welcome") {
+      } else if (kind === "new" || kind === "channel_subscribers_new") {
         src.message_template =
           `Здравствуйте, {имя}!\n\n` +
           `Рады знакомству! В подарок — скидка {скидка} на первый букет.\n\n` +
@@ -10060,8 +10197,10 @@
       src.description = (src.rationale || "").trim();
     }
     if (!(src.emoji || "").trim()) src.emoji = "🎁";
-    if (!src.segment) src.segment = "all";
-    if (!src.promo_type) src.promo_type = "discount";
+    src.promo_type = canonicalPromoType(src.promo_type || "all", src.segment);
+    src.segment = PROMO_MAILING_TYPES.includes(src.promo_type)
+      ? src.promo_type
+      : src.segment || "all";
     src.use_in_auto_mail = src.use_in_auto_mail !== false;
     src.use_in_mailing = src.use_in_mailing !== false;
     src.status = src.status || "draft";

@@ -11,6 +11,7 @@ from typing import Any
 
 from ai_compose import AiComposeError, _chat_completion, is_ai_configured
 from mailing_db import (
+    canonicalize_promo_type,
     count_customers,
     events_overview,
     get_stats,
@@ -19,6 +20,8 @@ from mailing_db import (
     list_live_promotions,
     list_promotions,
     promotions_overview,
+    PROMO_MAILING_TYPES,
+    PROMO_TYPES,
 )
 
 logger = logging.getLogger(__name__)
@@ -37,10 +40,10 @@ ANALYZE_SYSTEM = """Ты маркетинговый аналитик цвето�
     {
       "title": "Название акции",
       "emoji": "🌷",
-      "promo_type": "discount|gift|seasonal|welcome|reactivation|birthday|anniversary|other",
+      "promo_type": "all|regular|new|inactive|channel_subscribers|channel_subscribers_new|birthday|anniversary",
       "discount_pct": 15,
       "discount_text": "15%",
-      "segment": "all|regular|new|inactive",
+      "segment": "all|regular|new|inactive|channel_subscribers|channel_subscribers_new",
       "priority": 0,
       "use_in_auto_mail": true,
       "use_in_mailing": true,
@@ -73,7 +76,9 @@ ANALYZE_SYSTEM = """Ты маркетинговый аналитик цвето�
   priority выше обычных (5–20), message_template — тёплое поздравление с {имя} и {скидка}.
 - Если нет живой birthday/anniversary акции в promotions — предложи создать их в первую очередь.
 - Смотри sample событий: имена, days_until, auto_send on/off — опирайся на них в rationale.
-- Для «давно не заказывали» — reactivation + segment inactive.
+- Для «давно не заказывали» — promo_type=inactive (сегмент тот же).
+- Для новых клиентов — promo_type=new; для новых подписчиков канала — channel_subscribers_new.
+- promo_type и segment совпадают для рассылок: all, regular, new, inactive, channel_subscribers, channel_subscribers_new.
 - message_template: тёплый тон Veresk, 2–4 коротких абзаца, плейсхолдеры {имя}/{скидка}.
 - dates в ISO YYYY-MM-DD или null.
 - confidence от 0.4 до 0.95."""
@@ -126,6 +131,18 @@ def _default_auto_template(promo_type: str, title: str = "") -> str:
             "Отметьте этот день красивым букетом — дарим скидку {скидка}.\n\n"
             "Ваш Veresk 🌷"
         )
+    if promo_type in ("new", "channel_subscribers_new"):
+        return (
+            "Здравствуйте, {имя}!\n\n"
+            "Рады знакомству! В подарок — скидка {скидка} на первый букет.\n\n"
+            "Ваш Veresk 🌷"
+        )
+    if promo_type == "inactive":
+        return (
+            "Здравствуйте, {имя}!\n\n"
+            "Давно не виделись — соскучились по вам. Специально для вас: {скидка} на букет.\n\n"
+            "Ваш Veresk 🌷"
+        )
     label = (title or "специальное предложение").strip()
     return (
         f"Здравствуйте, {{имя}}!\n\n"
@@ -140,21 +157,15 @@ def _normalize_suggestion(raw: Any) -> dict[str, Any] | None:
     title = str(raw.get("title") or "").strip()
     if not title:
         return None
-    promo_type = str(raw.get("promo_type") or "discount").strip().lower() or "discount"
-    allowed_types = {
-        "discount",
-        "gift",
-        "seasonal",
-        "welcome",
-        "reactivation",
-        "birthday",
-        "anniversary",
-        "other",
-    }
-    if promo_type not in allowed_types:
-        promo_type = "discount"
+    promo_type = canonicalize_promo_type(
+        raw.get("promo_type") or "all", raw.get("segment")
+    )
+    if promo_type not in PROMO_TYPES:
+        promo_type = "all"
     segment = str(raw.get("segment") or "all").strip() or "all"
-    if segment not in ("all", "regular", "new", "inactive"):
+    if promo_type in PROMO_MAILING_TYPES:
+        segment = promo_type
+    elif segment not in PROMO_MAILING_TYPES:
         segment = "all"
     pct = raw.get("discount_pct")
     try:

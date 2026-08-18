@@ -112,10 +112,11 @@ async def _send_via_channel(
     media_path: str | None = None,
     media_filename: str | None = None,
     media_mime: str | None = None,
+    segment: str | None = None,
 ) -> tuple[bool, str, str | None]:
     """Возвращает (ok, status, error). status: sent | failed | deferred."""
     try:
-        discount = await get_active_discount_text()
+        discount = await get_active_discount_text(segment=segment)
     except Exception:
         discount = MAILING_DISCOUNT_TEXT or "15%"
     body = _personalize(text, name, discount=discount)
@@ -250,6 +251,7 @@ async def process_campaign_batch() -> int:
             media_path=media_abs,
             media_filename=row.get("campaign_media_filename"),
             media_mime=row.get("campaign_media_mime"),
+            segment=row.get("campaign_segment"),
         )
         if not ok and _is_defer(status, error):
             # Дневной лимит / нет аккаунта — не сжигаем очередь, подождём
@@ -301,6 +303,7 @@ async def process_personal_batch() -> int:
             text=text,
             tg_user_id=tg_uid,
             max_user_id=max_uid,
+            segment=row.get("customer_segment"),
         )
         if not ok and _is_defer(status, error):
             logger.info(

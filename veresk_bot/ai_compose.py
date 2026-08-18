@@ -921,6 +921,40 @@ async def generate_mailing_text(
         client_name=(client_name or "").strip(),
         occasion=(occasion or "").strip(),
     )
+    if seg != "personal":
+        try:
+            from mailing_db import get_active_discount
+
+            disc = await get_active_discount(segment=seg)
+        except Exception:
+            disc = None
+        if disc:
+            extra = ""
+            if disc.get("text"):
+                extra = f"Актуальная скидка для этой аудитории: {disc['text']}."
+            kind = str(disc.get("promo_type") or "")
+            if kind in ("welcome", "new", "channel_subscribers_new") or disc.get("source") in (
+                "welcome",
+                "new",
+                "channel_subscribers_new",
+            ):
+                extra += (
+                    " Это акция для новых клиентов — "
+                    "не подставляй другую скидку."
+                )
+            elif kind in ("reactivation", "inactive"):
+                extra += " Это акция для клиентов, которые давно не заказывали."
+            tpl = str(disc.get("message_template") or "").strip()
+            if tpl:
+                extra += (
+                    " Шаблон сообщения из этой акции (можно опереться, сохрани {имя} и {скидка}):\n"
+                    + tpl
+                )
+            extra += (
+                " Если упоминаешь скидку, используй плейсхолдер {скидка}, "
+                "не пиши процент цифрами."
+            )
+            user_content += "\n" + extra
     system = get_system_prompt("personal" if seg == "personal" else "mailing")
     return await _chat_completion(
         [

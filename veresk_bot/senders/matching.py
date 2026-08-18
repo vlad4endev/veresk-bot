@@ -272,6 +272,7 @@ async def preview_mailing_match(
     from mailing_db import (
         customers_by_ids,
         customers_for_segment,
+        get_active_discount,
         list_send_accounts,
         pick_ready_account,
     )
@@ -315,6 +316,17 @@ async def preview_mailing_match(
         }
         for c in customers
     ]
+    try:
+        discount = await get_active_discount(segment=audience)
+    except Exception:
+        discount = {
+            "text": "15%",
+            "message_template": "",
+            "promo_id": None,
+            "promo_title": "",
+            "promo_type": "",
+            "source": "fallback",
+        }
     return {
         "segment": audience,
         "segment_total": match["segment_total"],
@@ -340,4 +352,5 @@ async def preview_mailing_match(
         "skipped_samples": match["skipped_samples"],
         "will_send": match["reachable"]["total"],
         "selected": selected if customer_ids else None,
+        "discount": discount,
     }

@@ -1317,6 +1317,7 @@
   .inserts{display:flex;gap:7px;margin-top:10px;flex-wrap:wrap;}
   .ins{font-size:13px;padding:6px 12px;border-radius:20px;border:1.5px dashed var(--line);background:var(--surface);color:var(--ink-2);}
   .ins:hover{border-color:var(--accent);color:var(--accent);}
+  .msg-discount-hint{margin:8px 0 0;font-size:12px;color:var(--ink-3);line-height:1.4;}
   .pv-var{font-weight:650;color:var(--plum);background:var(--accent-soft);padding:0 3px;border-radius:4px;}
   .pv-empty{color:var(--ink-3);font-style:italic;}
   .bubble:has(.pv-empty){min-height:52px;}

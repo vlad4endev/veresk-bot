@@ -5181,7 +5181,7 @@ async def handle_promotions_analyze_apply(request: web.Request) -> web.Response:
 
     def _default_message(s: dict[str, Any]) -> str:
         title = str(s.get("title") or "специальное предложение").strip()
-        kind = str(s.get("promo_type") or "discount").strip().lower()
+        kind = str(s.get("promo_type") or "all").strip().lower()
         if kind == "birthday":
             return (
                 "С днём рождения, {имя}! 🎂💐\n\n"
@@ -5194,14 +5194,14 @@ async def handle_promotions_analyze_apply(request: web.Request) -> web.Response:
                 "Отметьте этот день красивым букетом — дарим скидку {скидка}.\n\n"
                 "Ваш Veresk 🌷"
             )
-        if kind == "reactivation":
+        if kind in ("inactive", "reactivation"):
             return (
                 "Здравствуйте, {имя}!\n\n"
                 "Давно не виделись — соскучились по вам. "
                 "Специально для вас: {скидка} на букет.\n\n"
                 "Ваш Veresk 🌷"
             )
-        if kind == "welcome":
+        if kind in ("new", "welcome", "channel_subscribers_new"):
             return (
                 "Здравствуйте, {имя}!\n\n"
                 "Рады знакомству! В подарок — скидка {скидка} на первый букет.\n\n"
@@ -5240,7 +5240,7 @@ async def handle_promotions_analyze_apply(request: web.Request) -> web.Response:
     payload = {
         "title": suggestion.get("title"),
         "emoji": suggestion.get("emoji") or "🎁",
-        "promo_type": suggestion.get("promo_type") or "discount",
+        "promo_type": suggestion.get("promo_type") or "all",
         "discount_pct": discount_pct,
         "discount_text": discount_text,
         "description": description,

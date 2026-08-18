@@ -1416,6 +1416,7 @@ async def fetch_pending_recipients(limit: int = 20) -> list[dict[str, Any]]:
                 SELECT r.*, c.name AS customer_name, c.phone AS customer_phone,
                        c.tg_user_id, c.max_user_id,
                        camp.message AS campaign_message, camp.id AS camp_id,
+                       camp.segment AS campaign_segment,
                        camp.media_path AS campaign_media_path,
                        camp.media_kind AS campaign_media_kind,
                        camp.media_filename AS campaign_media_filename,
@@ -1554,7 +1555,7 @@ async def fetch_pending_personal(limit: int = 10) -> list[dict[str, Any]]:
             rows = db.execute(
                 """
                 SELECT p.*, c.name AS customer_name, c.phone AS customer_phone,
-                       c.tg_user_id, c.max_user_id
+                       c.tg_user_id, c.max_user_id, c.segment AS customer_segment
                 FROM personal_messages p
                 JOIN customers c ON c.id = p.customer_id
                 WHERE p.status = 'pending'
@@ -2769,18 +2770,7 @@ async def list_fortune_plays(*, limit: int = 100, offset: int = 0) -> dict[str, 
 
 # ── promotions (акции / скидки) ─────────────────────────────────────────────
 
-PROMO_TYPES = (
-    "discount",
-    "gift",
-    "seasonal",
-    "welcome",
-    "reactivation",
-    "birthday",
-    "anniversary",
-    "other",
-)
-PROMO_STATUSES = ("draft", "active", "paused", "archived")
-PROMO_SEGMENTS = (
+PROMO_MAILING_TYPES = (
     "all",
     "regular",
     "new",
@@ -2788,6 +2778,49 @@ PROMO_SEGMENTS = (
     "channel_subscribers",
     "channel_subscribers_new",
 )
+PROMO_EVENT_TYPES = ("birthday", "anniversary")
+PROMO_TYPES = PROMO_MAILING_TYPES + PROMO_EVENT_TYPES
+PROMO_STATUSES = ("draft", "active", "paused", "archived")
+PROMO_SEGMENTS = PROMO_MAILING_TYPES
+# Старые названия типов → сегмент рассылки.
+PROMO_TYPE_ALIASES = {
+    "welcome": "new",
+    "reactivation": "inactive",
+    "discount": "all",
+    "gift": "all",
+    "seasonal": "all",
+    "other": "all",
+}
+
+
+def canonicalize_promo_type(
+    ptype: str | None, segment: str | None = None
+) -> str:
+    """Тип акции = сегмент рассылки (плюс ДР/годовщина). Старые имена приводим."""
+    raw = (ptype or "").strip().lower() or ""
+    seg = (segment or "").strip().lower() or None
+    if raw == "welcome":
+        if seg == "channel_subscribers_new":
+            return "channel_subscribers_new"
+        return "new"
+    if raw == "reactivation":
+        return "inactive"
+    if raw in ("discount", "gift", "seasonal", "other"):
+        if seg in PROMO_MAILING_TYPES:
+            return seg
+        return "all"
+    if raw in PROMO_TYPES:
+        return raw
+    if raw in PROMO_TYPE_ALIASES:
+        return PROMO_TYPE_ALIASES[raw]
+    return "all"
+
+
+def mailing_preferred_promo_type(segment: str | None) -> str | None:
+    seg = (segment or "").strip().lower()
+    if seg in PROMO_MAILING_TYPES:
+        return seg
+    return None
 
 
 def _promo_tags_to_storage(raw: Any) -> str:
@@ -2866,6 +2899,9 @@ def _serialize_promo(row: dict[str, Any] | sqlite3.Row) -> dict[str, Any]:
             d["discount_pct"] = None
     disc = _format_discount_text(d.get("discount_pct"), d.get("discount_text"))
     d["discount_display"] = disc
+    d["promo_type"] = canonicalize_promo_type(d.get("promo_type"), d.get("segment"))
+    if d["promo_type"] in PROMO_MAILING_TYPES:
+        d["segment"] = d["promo_type"]
     d["is_live"] = _promo_is_live(d)
     return d
 
@@ -2906,7 +2942,9 @@ def _normalize_promo_payload(data: dict[str, Any], *, partial: bool = False) -> 
         out["emoji"] = emoji[:16]
 
     if "promo_type" in data or not partial:
-        ptype = str(data.get("promo_type") or "discount").strip().lower() or "discount"
+        ptype = canonicalize_promo_type(
+            data.get("promo_type") or "all", data.get("segment")
+        )
         if ptype not in PROMO_TYPES:
             raise ValueError(f"Неизвестный тип акции: {ptype}")
         out["promo_type"] = ptype
@@ -2933,11 +2971,17 @@ def _normalize_promo_payload(data: dict[str, Any], *, partial: bool = False) -> 
     if "message_template" in data or not partial:
         out["message_template"] = str(data.get("message_template") or "").strip()[:4000]
 
-    if "segment" in data or not partial:
-        segment = str(data.get("segment") or "all").strip() or "all"
-        if segment not in PROMO_SEGMENTS:
-            raise ValueError(f"Неизвестный сегмент: {segment}")
-        out["segment"] = segment
+    if "segment" in data or "promo_type" in data or not partial:
+        ptype = out.get("promo_type") or canonicalize_promo_type(
+            data.get("promo_type"), data.get("segment")
+        )
+        if ptype in PROMO_MAILING_TYPES:
+            out["segment"] = ptype
+        else:
+            segment = str(data.get("segment") or "all").strip() or "all"
+            if segment not in PROMO_SEGMENTS:
+                raise ValueError(f"Неизвестный сегмент: {segment}")
+            out["segment"] = segment
 
     if "channels" in data or not partial:
         channels_raw = data.get("channels")
@@ -3034,9 +3078,6 @@ async def list_promotions(
             elif st in PROMO_STATUSES:
                 clauses.append("status = ?")
                 params.append(st)
-        if pt and pt in PROMO_TYPES:
-            clauses.append("promo_type = ?")
-            params.append(pt)
         if q:
             like = f"%{q}%"
             clauses.append(
@@ -3072,6 +3113,9 @@ async def list_promotions(
                 ).fetchall()
             }
         items = [_serialize_promo(r) for r in rows]
+        if pt:
+            want = canonicalize_promo_type(pt)
+            items = [x for x in items if x.get("promo_type") == want]
         live_n = sum(1 for x in items if x.get("is_live"))
         return {
             "total": int(total),
@@ -3244,9 +3288,6 @@ async def list_live_promotions(
             clauses.append("use_in_mailing = 1")
         if for_auto_mail:
             clauses.append("use_in_auto_mail = 1")
-        if pt and pt in PROMO_TYPES:
-            clauses.append("promo_type = ?")
-            params.append(pt)
         where = " AND ".join(clauses)
         with _connect() as db:
             rows = db.execute(
@@ -3258,6 +3299,9 @@ async def list_live_promotions(
                 params,
             ).fetchall()
         items = [_serialize_promo(r) for r in rows]
+        if pt:
+            want = canonicalize_promo_type(pt)
+            items = [x for x in items if x.get("promo_type") == want]
         if segment and segment != "all":
             exact = [x for x in items if x.get("segment") == segment]
             general = [x for x in items if x.get("segment") == "all"]
@@ -3267,26 +3311,116 @@ async def list_live_promotions(
     return await _run_db(_list)
 
 
+def _promo_discount_text(promo: dict[str, Any] | None) -> str:
+    if not promo:
+        return ""
+    disc = (promo.get("discount_display") or promo.get("discount_text") or "").strip()
+    if disc:
+        return disc
+    return _format_discount_text(promo.get("discount_pct")) or ""
+
+
+def _pick_best_promo(promos: list[dict[str, Any]]) -> dict[str, Any] | None:
+    """Сначала акция с шаблоном, среди них — со скидкой, иначе первая по приоритету."""
+    if not promos:
+        return None
+    with_tpl = [
+        p for p in promos if str(p.get("message_template") or "").strip()
+    ]
+    pool = with_tpl or promos
+    with_disc = [p for p in pool if _promo_discount_text(p)]
+    return (with_disc or pool)[0]
+
+
+async def pick_mailing_promo(
+    *,
+    segment: str | None = None,
+    promo_type: str | None = None,
+) -> tuple[dict[str, Any] | None, str]:
+    """Подобрать живую акцию под сегмент рассылки (тип → скидка и шаблон)."""
+    seg = (segment or "").strip() or None
+    if not seg or seg in ("all", "selected"):
+        seg_lookup = None
+    else:
+        seg_lookup = seg
+
+    preferred = (promo_type or "").strip().lower() or None
+    if preferred:
+        preferred = canonicalize_promo_type(preferred, seg)
+        if preferred not in PROMO_TYPES:
+            preferred = None
+    if not preferred:
+        preferred = mailing_preferred_promo_type(seg)
+
+    if preferred:
+        typed = await list_live_promotions(
+            for_mailing=True, promo_type=preferred, segment=seg_lookup
+        )
+        picked = _pick_best_promo(typed)
+        if picked:
+            return picked, preferred
+        typed_any = await list_live_promotions(
+            promo_type=preferred, segment=seg_lookup
+        )
+        picked = _pick_best_promo(typed_any)
+        if picked:
+            return picked, preferred
+
+    mailing = await list_live_promotions(for_mailing=True, segment=seg_lookup)
+    picked = _pick_best_promo(mailing)
+    if picked:
+        return picked, "mailing"
+    return None, "fallback"
+
+
+async def get_active_discount(
+    *,
+    segment: str | None = None,
+    fallback: str | None = None,
+    promo_type: str | None = None,
+) -> dict[str, Any]:
+    """Скидка и шаблон сообщения: живая акция нужного типа или fallback."""
+    from config import MAILING_DISCOUNT_TEXT
+
+    picked, source = await pick_mailing_promo(
+        segment=segment, promo_type=promo_type
+    )
+    text = _promo_discount_text(picked)
+    if not text:
+        if fallback is not None:
+            text = fallback
+        else:
+            text = (MAILING_DISCOUNT_TEXT or "15%").strip() or "15%"
+        if not picked:
+            source = "fallback"
+
+    template = ""
+    if picked:
+        template = str(picked.get("message_template") or "").strip()
+
+    return {
+        "text": text,
+        "message_template": template,
+        "promo_id": picked.get("id") if picked else None,
+        "promo_title": str(picked.get("title") or "") if picked else "",
+        "promo_type": str(picked.get("promo_type") or "") if picked else "",
+        "source": source,
+    }
+
+
 async def get_active_discount_text(
     *,
     segment: str | None = None,
     fallback: str | None = None,
+    promo_type: str | None = None,
 ) -> str:
     """Текст для плейсхолдера {скидка}: живая акция или fallback из env."""
-    from config import MAILING_DISCOUNT_TEXT
-
-    promos = await list_live_promotions(for_mailing=True, segment=segment)
-    for p in promos:
-        disc = (p.get("discount_display") or p.get("discount_text") or "").strip()
-        if disc:
-            return disc
-        if p.get("discount_pct") is not None:
-            formatted = _format_discount_text(p.get("discount_pct"))
-            if formatted:
-                return formatted
-    if fallback is not None:
-        return fallback
-    return (MAILING_DISCOUNT_TEXT or "15%").strip() or "15%"
+    info = await get_active_discount(
+        segment=segment,
+        fallback=fallback,
+        promo_type=promo_type,
+    )
+    return str(info.get("text") or "")
 
 
 async def pick_auto_mail_promo(kind: str | None = None) -> dict[str, Any] | None:
@@ -3297,12 +3431,14 @@ async def pick_auto_mail_promo(kind: str | None = None) -> dict[str, Any] | None
         "birthday": "birthday",
         "anniv": "anniversary",
         "anniversary": "anniversary",
-        "welcome": "welcome",
-        "channel_welcome": "welcome",
     }
-    preferred_type = type_map.get(kind_l)
+    preferred_types: list[str] = []
+    if kind_l in ("welcome", "channel_welcome"):
+        preferred_types = ["channel_subscribers_new", "new"]
+    elif type_map.get(kind_l):
+        preferred_types = [type_map[kind_l]]
 
-    if preferred_type:
+    for preferred_type in preferred_types:
         typed = await list_live_promotions(
             for_auto_mail=True, promo_type=preferred_type
         )
@@ -3330,7 +3466,7 @@ async def pick_auto_mail_promo(kind: str | None = None) -> dict[str, Any] | None
                 return p
 
     for p in all_live:
-        if p.get("promo_type") in ("discount", "seasonal", "gift", "welcome", "other"):
+        if p.get("promo_type") in PROMO_MAILING_TYPES:
             return p
     return all_live[0]
 
@@ -3538,7 +3674,7 @@ async def list_auto_mail_promo_options() -> list[dict[str, Any]]:
                 "id": pid,
                 "title": p.get("title") or f"Акция #{pid}",
                 "emoji": p.get("emoji") or "",
-                "promo_type": p.get("promo_type") or "other",
+                "promo_type": p.get("promo_type") or "all",
                 "is_live": bool(p.get("is_live")),
                 "use_in_auto_mail": bool(p.get("use_in_auto_mail")),
                 "discount_display": p.get("discount_display")
