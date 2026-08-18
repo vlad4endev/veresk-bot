@@ -14,7 +14,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,500;9..144,600;9..144,700&family=Manrope:wght@400;500;600;700&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="css/admin.css?v=79">
+<link rel="stylesheet" href="css/admin.css?v=80">
 <link rel="stylesheet" href="css/login.css?v=2">
 <link rel="stylesheet" href="css/wheel.css?v=11">
 <link rel="stylesheet" href="css/promos.css?v=2">
@@ -619,6 +619,7 @@
                   Получите на <a href="https://my.telegram.org" target="_blank" rel="noopener">my.telegram.org</a>
                   → API development tools.
                 </p>
+                <form class="pw-form" autocomplete="off" onsubmit="return false;">
                 <div class="form-grid-2">
                   <div>
                     <label for="tgApiId">API ID</label>
@@ -632,6 +633,7 @@
                 <div class="form-actions">
                   <button type="button" class="btn primary" id="tgApiSave">Сохранить ключи</button>
                 </div>
+                </form>
               </div>
             </details>
 
@@ -675,11 +677,13 @@
                     <div class="tg-qr-box" id="tgQrBox" aria-label="QR для входа в Telegram"></div>
                     <p class="form-foot" id="tgQrStatus">Ожидаем сканирование…</p>
                     <div id="tgQr2faWrap" class="hidden">
+                      <form class="pw-form" autocomplete="off" onsubmit="return false;">
                       <label for="tgQr2fa">Пароль 2FA</label>
                       <input id="tgQr2fa" type="password" placeholder="Пароль облака Telegram" autocomplete="current-password">
                       <div class="form-actions">
                         <button type="button" class="btn primary" id="tgQrConfirm2fa">Подтвердить 2FA</button>
                       </div>
+                      </form>
                     </div>
                     <div class="form-actions">
                       <button type="button" class="btn" id="tgQrRefresh">Обновить QR</button>
@@ -698,8 +702,10 @@
                       <label for="tgCode">Код из чата «Telegram»</label>
                       <input id="tgCode" type="text" inputmode="numeric" placeholder="код из приложения Telegram" autocomplete="one-time-code">
                       <div id="tg2faWrap" class="hidden">
+                        <form class="pw-form" autocomplete="off" onsubmit="return false;">
                         <label for="tg2fa">Пароль 2FA</label>
                         <input id="tg2fa" type="password" placeholder="Пароль облака Telegram" autocomplete="current-password">
+                        </form>
                       </div>
                       <div class="form-actions">
                         <button type="button" class="btn primary" id="tgConfirm">Подтвердить</button>
@@ -770,9 +776,11 @@
                     <label for="maxCode">Код из SMS / MAX</label>
                     <input id="maxCode" type="text" inputmode="numeric" placeholder="12345" autocomplete="one-time-code">
                     <div id="max2faWrap" class="hidden">
+                      <form class="pw-form" autocomplete="off" onsubmit="return false;">
                       <label for="max2fa">Пароль 2FA MAX</label>
                       <input id="max2fa" type="password" placeholder="Облачный пароль аккаунта (не SMS)" autocomplete="current-password">
                       <p class="form-foot" style="margin-top:6px">Это пароль двухфакторной защиты в MAX, не код из SMS.</p>
+                      </form>
                     </div>
                     <div class="form-actions">
                       <button type="button" class="btn primary" id="maxConfirm">Подтвердить</button>
@@ -801,12 +809,14 @@
                 </div>
                 <div id="maxTokenStatus" class="form-status form-status-inline"></div>
               </div>
+              <form class="pw-form" autocomplete="off" onsubmit="return false;">
               <label for="maxBotToken">Токен</label>
               <input id="maxBotToken" type="password" autocomplete="off" spellcheck="false" placeholder="Вставьте токен от @MasterBot">
               <div class="form-actions">
                 <button type="button" class="btn primary" id="maxTokenSave">Сохранить и проверить</button>
                 <button type="button" class="btn" id="maxTokenClear">Убрать из панели</button>
               </div>
+              </form>
               <p class="form-foot">После сохранения сервис <code>max_bot</code> подхватит токен сам (или из <code>.env</code>). «Убрать» вернёт значение из <code>.env</code>.</p>
             </div>
 
@@ -824,9 +834,11 @@
                 <button type="button" class="btn" id="maxWebhookSuggest" title="Подставить рекомендуемый URL">Подставить</button>
               </div>
               <p class="form-hint" id="maxWebhookHint"></p>
+              <form class="pw-form" autocomplete="off" onsubmit="return false;">
               <label for="maxWebhookSecret">Секрет (рекомендуется)</label>
               <input id="maxWebhookSecret" type="password" autocomplete="off" spellcheck="false" placeholder="5–256 символов: A–Z a–z 0–9 _ -">
               <p class="form-hint">Max будет слать его в заголовке <code>X-Max-Bot-Api-Secret</code>. Оставьте пустым, чтобы не менять уже сохранённый.</p>
+              </form>
               <div class="form-actions">
                 <button type="button" class="btn primary" id="maxWebhookSave">Сохранить и подписать</button>
                 <button type="button" class="btn" id="maxWebhookClear">Отключить webhook</button>
@@ -2069,6 +2081,6 @@
 <script src="js/api.js?v=44"></script>
 <script src="js/login-ui.js?v=1"></script>
 <script src="js/wheel-widget.js?v=13"></script>
-<script src="js/app.js?v=89"></script>
+<script src="js/app.js?v=90"></script>
 </body>
 </html>

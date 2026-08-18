@@ -4354,7 +4354,7 @@
           ${aiStatus}
         </div>
 
-        <div class="svc-ai-form" id="aiSettingsForm">
+        <form class="svc-ai-form pw-form" id="aiSettingsForm" autocomplete="off" onsubmit="return false;">
           <div class="svc-field">
             <label>Провайдер</label>
             <div class="ai-prov-row" id="aiProviderRow">${providerChips}</div>
@@ -4452,7 +4452,7 @@
               <button type="button" class="btn" id="aiPromptsReset">Сбросить все</button>
             </div>
           </div>
-        </div>
+        </form>
       </div>`;
 
     const promptDrafts = {
