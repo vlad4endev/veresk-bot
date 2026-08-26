@@ -1814,12 +1814,18 @@ async def handle_accounts_list(request: web.Request) -> web.Response:
     err = await _require_admin(request)
     if err:
         return err
-    # Подхватить qr-сессии, где скан прошёл, а карточка в UI не создалась
+    # Подхватить qr-сессии, где скан прошёл, а карточка в UI не создалась.
+    # Жёсткий бюджет: иначе незавершённые qr_*.session вешают всю вкладку «Аккаунты».
     try:
-        for recovered in await recover_authorized_qr_sessions():
+        recovered_list = await asyncio.wait_for(
+            recover_authorized_qr_sessions(), timeout=25
+        )
+        for recovered in recovered_list:
             await _register_telegram_account(
                 recovered, str(recovered.get("phone") or "")
             )
+    except asyncio.TimeoutError:
+        logger.warning("QR session recovery timed out on accounts list — showing DB rows")
     except Exception:
         logger.exception("QR session recovery on accounts list failed")
     rows = await list_send_accounts()
