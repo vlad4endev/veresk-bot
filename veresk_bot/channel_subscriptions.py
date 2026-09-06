@@ -22,6 +22,9 @@ logger = logging.getLogger(__name__)
 T = TypeVar("T")
 
 NEW_SUBSCRIBER_DAYS = 3
+NEW_SUBSCRIBER_PERIODS = (1, 3, 7, 14, 30)
+NEW_SUBSCRIBER_DAYS_MIN = 1
+NEW_SUBSCRIBER_DAYS_MAX = 366
 STATUS_MEMBER = "member"
 STATUS_LEFT = "left"
 _ACTIVE = frozenset({"member", "administrator", "creator", "restricted"})
@@ -100,11 +103,28 @@ def _dt_to_iso(dt: datetime | None) -> str | None:
     return dt.isoformat(timespec="seconds")
 
 
+def clamp_new_days(days: int | None) -> int:
+    try:
+        n = int(days if days is not None else NEW_SUBSCRIBER_DAYS)
+    except (TypeError, ValueError):
+        n = NEW_SUBSCRIBER_DAYS
+    return max(NEW_SUBSCRIBER_DAYS_MIN, min(NEW_SUBSCRIBER_DAYS_MAX, n))
+
+
+def new_cutoff_dt(days: int | None = None) -> datetime:
+    """Нижняя граница «новых»: скользящее окно now − N суток, как KPI на главной."""
+    return datetime.now() - timedelta(days=clamp_new_days(days))
+
+
+def new_since_iso(days: int | None = None) -> str:
+    return new_cutoff_dt(days).isoformat(timespec="seconds")
+
+
 def is_new_subscriber(joined_at: str | None, *, days: int = NEW_SUBSCRIBER_DAYS) -> bool:
     dt = _parse_dt(joined_at)
     if not dt:
         return False
-    return dt >= datetime.now() - timedelta(days=days)
+    return dt >= new_cutoff_dt(days)
 
 
 def get_channel_config() -> dict[str, Any]:
@@ -132,6 +152,7 @@ def get_channel_config() -> dict[str, Any]:
         "channel_title": title,
         "configured": bool(channel_id or username),
         "new_days": NEW_SUBSCRIBER_DAYS,
+        "new_periods": list(NEW_SUBSCRIBER_PERIODS),
         "welcome": get_welcome_config(),
     }
 
@@ -444,10 +465,13 @@ def _row_public(
     *,
     customer: dict[str, Any] | None = None,
     has_survey: bool = False,
+    new_days: int = NEW_SUBSCRIBER_DAYS,
 ) -> dict[str, Any]:
     d = dict(row)
     joined_at = d.get("joined_at")
-    is_new = d.get("status") == STATUS_MEMBER and is_new_subscriber(joined_at)
+    is_new = d.get("status") == STATUS_MEMBER and is_new_subscriber(
+        joined_at, days=new_days
+    )
     first_name = d.get("first_name") or ""
     last_name = d.get("last_name") or ""
     username = d.get("username") or ""
@@ -662,19 +686,20 @@ async def list_subscribers(
     search: str | None = None,
     only_new: bool = False,
     list_filter: str | None = None,
+    new_days: int | None = None,
     page: int = 1,
     page_size: int = 100,
-) -> tuple[list[dict[str, Any]], int, dict[str, int]]:
+) -> tuple[list[dict[str, Any]], int, dict[str, Any]]:
     page = max(1, page)
     page_size = max(1, min(page_size, 500))
     offset = (page - 1) * page_size
     q = (search or "").strip()
-    new_since = (datetime.now() - timedelta(days=NEW_SUBSCRIBER_DAYS)).isoformat(
-        timespec="seconds"
-    )
+    days = clamp_new_days(new_days)
+    new_since = new_since_iso(days)
+    period_cutoffs = {p: new_since_iso(p) for p in NEW_SUBSCRIBER_PERIODS}
     filt = _normalize_list_filter(status=status, only_new=only_new, list_filter=list_filter)
 
-    def _list() -> tuple[list[dict[str, Any]], int, dict[str, int]]:
+    def _list() -> tuple[list[dict[str, Any]], int, dict[str, Any]]:
         with _connect() as db:
             _ensure_channel_subscriptions_schema(db)
             # profiles может ещё не быть, если бот не инициализировал client_db
@@ -782,6 +807,13 @@ async def list_subscribers(
                 "s.status = ? AND s.joined_at IS NOT NULL AND s.joined_at >= ?",
                 (STATUS_MEMBER, new_since),
             )
+            new_by_days = {
+                str(p): _count(
+                    "s.status = ? AND s.joined_at IS NOT NULL AND s.joined_at >= ?",
+                    (STATUS_MEMBER, period_cutoffs[p]),
+                )
+                for p in NEW_SUBSCRIBER_PERIODS
+            }
             left_n = _count("s.status = ?", (STATUS_LEFT,))
             survey_n = _count("s.status = ? AND p.tg_id IS NOT NULL", (STATUS_MEMBER,))
             no_survey_n = _count("s.status = ? AND p.tg_id IS NULL", (STATUS_MEMBER,))
@@ -802,12 +834,15 @@ async def list_subscribers(
                         r,
                         customer=cust,
                         has_survey=bool(r["_has_survey"]),
+                        new_days=days,
                     )
                 )
 
             stats = {
                 "members": members,
                 "new": new_n,
+                "new_days": days,
+                "new_by_days": new_by_days,
                 "left": left_n,
                 "survey": survey_n,
                 "no_survey": no_survey_n,
@@ -820,11 +855,11 @@ async def list_subscribers(
     return await _run_db(_list)
 
 
-async def list_member_tg_ids(*, only_new: bool = False) -> list[int]:
+async def list_member_tg_ids(
+    *, only_new: bool = False, new_days: int | None = None
+) -> list[int]:
     """tg_user_id активных подписчиков (опционально только новые)."""
-    new_since = (datetime.now() - timedelta(days=NEW_SUBSCRIBER_DAYS)).isoformat(
-        timespec="seconds"
-    )
+    new_since = new_since_iso(new_days)
 
     def _ids() -> list[int]:
         with _connect() as db:
@@ -850,6 +885,25 @@ async def list_member_tg_ids(*, only_new: bool = False) -> list[int]:
         return [int(r["tg_user_id"]) for r in rows]
 
     return await _run_db(_ids)
+
+
+async def count_new_channel_members(days: int | None = None) -> int:
+    """Сколько активных подписчиков вступили за скользящее окно N суток."""
+    new_since = new_since_iso(days)
+
+    def _count() -> int:
+        with _connect() as db:
+            _ensure_channel_subscriptions_schema(db)
+            row = db.execute(
+                """
+                SELECT COUNT(*) AS c FROM channel_subscriptions
+                WHERE status = ? AND joined_at IS NOT NULL AND joined_at >= ?
+                """,
+                (STATUS_MEMBER, new_since),
+            ).fetchone()
+            return int(row["c"] if row else 0)
+
+    return await _run_db(_count)
 
 
 async def get_subscription(tg_user_id: int) -> dict[str, Any] | None:
@@ -939,9 +993,11 @@ async def ensure_customers_for_subscribers(tg_user_ids: list[int]) -> list[dict[
     return out
 
 
-async def customers_for_channel_subscribers(*, only_new: bool = False) -> list[dict[str, Any]]:
+async def customers_for_channel_subscribers(
+    *, only_new: bool = False, new_days: int | None = None
+) -> list[dict[str, Any]]:
     """CRM-клиенты для сегмента рассылки «Подписчики канала»."""
-    ids = await list_member_tg_ids(only_new=only_new)
+    ids = await list_member_tg_ids(only_new=only_new, new_days=new_days)
     return await ensure_customers_for_subscribers(ids)
 
 

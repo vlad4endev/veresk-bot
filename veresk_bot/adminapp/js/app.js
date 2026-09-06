@@ -77,6 +77,9 @@
       autoTemplate: "",
       discount: null, // { text, message_template, promo_type, promo_title, source }
       media: null, // { media_path, media_filename, media_mime, media_kind, localUrl }
+      newClientDays: 30,
+      newSubDays: 3,
+      segmentCounts: null,
     },
     tgPhone: "",
     maxPhone: "",
@@ -84,7 +87,8 @@
   };
 
   const panels = $$(".panel");
-  const navItems = $$(".nav-item, .bnav-item[data-nav]");
+  const navItems = $$(".nav-item, .bnav-item[data-nav], .more-item[data-nav]");
+  const MORE_TABS = new Set(["promos", "wheel", "aichat", "bots", "settings"]);
 
   const PERM_CATALOG_FALLBACK = [
     { id: "home", label: "Главная" },
@@ -148,7 +152,7 @@
         perms[k] = true;
       });
     }
-    $$(".nav-item[data-nav], .bnav-item[data-nav]").forEach((el) => {
+    $$(".nav-item[data-nav], .bnav-item[data-nav], .more-item[data-nav]").forEach((el) => {
       const key = el.dataset.nav;
       el.hidden = key ? !perms[key] && !(key === "settings" && (perms.settings || perms.access)) : false;
       if (key === "settings") el.hidden = !(perms.settings || perms.access);
@@ -156,6 +160,10 @@
     $$(".bnav-item.bnav-create, .create-btn").forEach((el) => {
       el.hidden = !perms.home;
     });
+    const moreBtn = $("#bnavMore");
+    if (moreBtn) {
+      moreBtn.hidden = !$$(".more-item[data-nav]").some((el) => !el.hidden);
+    }
     const mtopSettings = $("#mtopSettings");
     if (mtopSettings) mtopSettings.hidden = !(perms.settings || perms.access);
     const settingsBotsLink = $("#settingsBotsLink");
@@ -167,16 +175,26 @@
     });
   }
 
-  const HIDE_BNAV_TABS = new Set([
-    "compose",
-    "detail",
-    "personal",
-    "client",
-    "settings",
-    "bots",
-    "wheel",
-    "promos",
-  ]);
+  const HIDE_BNAV_TABS = new Set(["compose", "detail", "personal", "client"]);
+
+  function isMoreOpen() {
+    return document.body.classList.contains("more-open");
+  }
+
+  function openMoreSheet(open) {
+    const sheet = $("#moreSheet");
+    const btn = $("#bnavMore");
+    if (!sheet) return;
+    const next = open === undefined ? !isMoreOpen() : !!open;
+    document.body.classList.toggle("more-open", next);
+    sheet.hidden = !next;
+    btn?.setAttribute("aria-expanded", next ? "true" : "false");
+  }
+
+  function toggleMoreSheet() {
+    openMoreSheet(!isMoreOpen());
+  }
+  window.toggleMoreSheet = toggleMoreSheet;
 
   function go(tab) {
     if (tab === "accounts") tab = "settings";
@@ -190,23 +208,14 @@
       ({ compose: "home", detail: "home", personal: "home", client: "clients" })[tab] ||
       tab;
     navItems.forEach((n) => n.classList.toggle("active", n.dataset.nav === navKey));
+    $("#bnavMore")?.classList.toggle("active", MORE_TABS.has(tab) || MORE_TABS.has(navKey));
     document.body.classList.toggle("hide-bnav", HIDE_BNAV_TABS.has(tab));
+    openMoreSheet(false);
     const mtopHi = $(".mtop-hi");
     const mtopSub = $(".mtop-sub");
     if (mtopHi && mtopSub) {
-      if (tab === "clients") {
-        mtopHi.textContent = "Клиенты";
-        mtopSub.textContent = "База из Posiflora";
-      } else if (tab === "wheel") {
-        mtopHi.textContent = "Фортуна";
-        mtopSub.textContent = "Настройки колеса";
-      } else if (tab === "promos") {
-        mtopHi.textContent = "Акции";
-        mtopSub.textContent = "Скидки и предложения";
-      } else if (tab === "home") {
-        mtopHi.textContent = "Здравствуйте";
-        mtopSub.textContent = "Что отправим клиентам сегодня?";
-      }
+      mtopHi.textContent = "Здравствуйте";
+      mtopSub.textContent = "Что отправим клиентам сегодня?";
     }
     if (tab !== "chats") {
       document.body.classList.remove("tg-thread-open");
@@ -293,6 +302,9 @@
       if ($("#sideUserName")) $("#sideUserName").textContent = name;
       if ($("#sideUserRole")) $("#sideUserRole").textContent = role;
       if ($("#sideUserAv")) $("#sideUserAv").textContent = initials(name);
+      if ($("#moreUserName")) $("#moreUserName").textContent = name;
+      if ($("#moreUserRole")) $("#moreUserRole").textContent = role;
+      if ($("#moreUserAv")) $("#moreUserAv").textContent = initials(name);
     } catch (_) {
       /* ignore */
     }
@@ -329,6 +341,7 @@
   }
 
   function showLogin() {
+    openMoreSheet(false);
     stopAdminKeepalive();
     clearAuthPending();
     $("#appShell").classList.add("hidden");
@@ -351,6 +364,14 @@
 
   $("#btnLogout")?.addEventListener("click", () => {
     void doLogout();
+  });
+  $("#btnLogoutMore")?.addEventListener("click", () => {
+    openMoreSheet(false);
+    void doLogout();
+  });
+  $("#moreSheetBackdrop")?.addEventListener("click", () => openMoreSheet(false));
+  document.addEventListener("keydown", (e) => {
+    if (e.key === "Escape" && isMoreOpen()) openMoreSheet(false);
   });
 
   async function tryAuth() {
@@ -543,6 +564,11 @@
       }
       const neu = Number(subs?.stats?.new) || 0;
       if (subsNewEl) subsNewEl.textContent = fmtNum(neu);
+      const kpiLabel = $("#statSubsNewLabel");
+      if (kpiLabel) {
+        const d = Number(subs?.new_days) || Number(subs?.stats?.new_days) || 3;
+        kpiLabel.textContent = d <= 1 ? "новых за 1 день" : `новых за ${d} дн.`;
+      }
       if (subsKpi) subsKpi.classList.toggle("has-new", neu > 0);
       syncEventsFilters();
       renderEvents(events);
@@ -1081,8 +1107,24 @@
   let clientsSearchTimer = null;
   let clientsView = "base"; // base | subscribers
   let subsFilter = "member"; // member|new|left|survey|no_survey|all
+  let subsNewDays = 3;
   let subsSearch = "";
   let subsSearchTimer = null;
+
+  function subsDaysPhrase(days) {
+    const n = Number(days) || 3;
+    if (n <= 1) return "1 день";
+    const n10 = n % 10;
+    const n100 = n % 100;
+    if (n10 === 1 && n100 !== 11) return `${n} день`;
+    if (n10 >= 2 && n10 <= 4 && (n100 < 12 || n100 > 14)) return `${n} дня`;
+    return `${n} дней`;
+  }
+
+  function subsNewPeriodHint(days) {
+    const n = Number(days) || 3;
+    return n <= 1 ? "за последний день" : `за последние ${subsDaysPhrase(n)}`;
+  }
 
   function applyClientsViewUi() {
     $$(".clients-tab").forEach((tab) => {
@@ -1104,11 +1146,12 @@
     if (desc) {
       desc.textContent =
         clientsView === "subscribers"
-          ? "Подписчики Telegram-канала. Новые — за последние 3 дня."
+          ? `Подписчики Telegram-канала. Новые — ${subsNewPeriodHint(subsNewDays)}.`
           : "База из Posiflora. Сегменты считаются автоматически.";
     }
     if ($("#btnSync")) $("#btnSync").hidden = clientsView !== "base";
     if ($("#btnSubsSync")) $("#btnSubsSync").hidden = clientsView !== "subscribers";
+    syncSubsPeriodUi();
   }
 
   function setClientsView(view) {
@@ -1121,6 +1164,17 @@
   function syncSubsFilterButtons() {
     $$("#subsSeg button").forEach((b) => {
       b.classList.toggle("on", (b.dataset.subsFilter || "member") === subsFilter);
+    });
+    syncSubsPeriodUi();
+  }
+
+  function syncSubsPeriodUi() {
+    const row = $("#subsPeriod");
+    if (row) row.hidden = subsFilter !== "new";
+    $$("#subsPeriod .subs-period-btn").forEach((b) => {
+      const on = Number(b.dataset.days) === Number(subsNewDays);
+      b.classList.toggle("on", on);
+      b.setAttribute("aria-selected", on ? "true" : "false");
     });
   }
 
@@ -1614,6 +1668,13 @@
       el.textContent = n ? String(n) : "";
       el.hidden = !n;
     });
+    const byDays = st.new_by_days || {};
+    $$("#subsPeriod [data-new-days]").forEach((el) => {
+      const key = String(el.dataset.newDays || "");
+      const n = Number(byDays[key] ?? byDays[Number(key)] ?? 0);
+      el.textContent = n ? String(n) : "";
+      el.hidden = !n;
+    });
   }
 
   function syncSubsBulkUi() {
@@ -1636,6 +1697,7 @@
     const filtered = show.filter((t) => {
       if (subsFilter === "member" && t.id === "member") return false;
       if (subsFilter === "left" && t.id === "left") return false;
+      if (subsFilter === "new" && t.id === "new") return false;
       if (t.id === "no_survey" && s.has_survey) return false;
       return true;
     });
@@ -1699,12 +1761,21 @@
     if (!box) return;
     box.innerHTML = '<tr><td colspan="4" class="loading">Загрузка…</td></tr>';
     try {
-      const params = { page_size: 200, filter: subsFilter || "member" };
+      const params = {
+        page_size: 200,
+        filter: subsFilter || "member",
+        new_days: String(subsNewDays || 3),
+      };
       if (subsSearch) params.search = subsSearch;
       const data = await AdminAPI.channelSubscribers(params);
+      if (data.new_days) {
+        const n = Number(data.new_days);
+        if (Number.isFinite(n) && n > 0) subsNewDays = n;
+      }
       applySubsChannelForm(data.channel);
       updateSubsNewBadge(data.stats?.new || 0);
       updateSubsFilterCounts(data.stats);
+      applyClientsViewUi();
       syncSubsBulkUi();
 
       if (!opts.skipDiscover && !data.channel?.configured && !subsAutoDiscoverDone) {
@@ -1729,13 +1800,17 @@
         const emptyMsg = subsSearch
           ? "Никого не нашли по запросу"
           : data.channel?.configured
-            ? "В этом фильтре пока пусто — смените фильтр или выгрузите подписчиков"
+            ? subsFilter === "new"
+              ? `Нет новых подписчиков ${subsNewPeriodHint(subsNewDays)} — смените период или выгрузите список`
+              : "В этом фильтре пока пусто — смените фильтр или выгрузите подписчиков"
             : "Канал не определён — нажмите «Определить автоматически»";
         box.innerHTML = `<tr><td colspan="4"><div class="empty-state"><div class="t">${emptyMsg}</div></div></td></tr>`;
         const members = data.stats?.members || 0;
         const neu = data.stats?.new || 0;
         $("#subsHint").textContent = data.channel?.configured
-          ? `${fmtNum(members)} подп. · ${fmtNum(neu)} нов. · ${fmtNum(data.stats?.survey || 0)} с анкетой`
+          ? subsFilter === "new"
+            ? `0 · ${subsNewPeriodHint(data.new_days || subsNewDays)}`
+            : `${fmtNum(members)} подп. · ${fmtNum(neu)} нов. ${subsNewPeriodHint(data.new_days || subsNewDays)} · ${fmtNum(data.stats?.survey || 0)} с анкетой`
           : "Канал не настроен";
         syncSubsBulkUi();
         return;
@@ -1800,10 +1875,15 @@
       const total = data.total;
       const neu = data.stats?.new || 0;
       const survey = data.stats?.survey || 0;
+      const period = subsNewPeriodHint(data.new_days || subsNewDays);
       $("#subsHint").textContent =
-        shown === total
-          ? `${fmtNum(total)} · новых: ${fmtNum(neu)} · анкета: ${fmtNum(survey)}`
-          : `Показано ${fmtNum(shown)} из ${fmtNum(total)} · новых: ${fmtNum(neu)}`;
+        subsFilter === "new"
+          ? shown === total
+            ? `${fmtNum(total)} ${period}`
+            : `Показано ${fmtNum(shown)} из ${fmtNum(total)} ${period}`
+          : shown === total
+            ? `${fmtNum(total)} · новых ${period}: ${fmtNum(neu)} · анкета: ${fmtNum(survey)}`
+            : `Показано ${fmtNum(shown)} из ${fmtNum(total)} · новых ${period}: ${fmtNum(neu)}`;
       syncSubsBulkUi();
     } catch (err) {
       if (err.status === 401) return showLogin();
@@ -1815,6 +1895,18 @@
     btn.addEventListener("click", () => {
       subsFilter = btn.dataset.subsFilter || "member";
       syncSubsFilterButtons();
+      loadSubscribers({ skipDiscover: true });
+    });
+  });
+
+  $$("#subsPeriod .subs-period-btn").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      const days = Number(btn.dataset.days);
+      if (!Number.isFinite(days) || days < 1) return;
+      subsNewDays = days;
+      subsFilter = "new";
+      syncSubsFilterButtons();
+      applyClientsViewUi();
       loadSubscribers({ skipDiscover: true });
     });
   });
@@ -5619,8 +5711,102 @@
     inactive: "Давно не заказывали",
     selected: "Выбранные клиенты",
     channel_subscribers: "Подписчики канала",
-    channel_subscribers_new: "Новые подписчики канала",
+    channel_subscribers_new: "Новые подписчики",
   };
+
+  const MAIL_NEW_PERIOD_LABELS = {
+    3: "3 дня",
+    7: "7 дней",
+    14: "2 недели",
+    30: "месяц",
+    90: "3 месяца",
+  };
+
+  function mailPeriodLabel(days) {
+    const n = Number(days);
+    return MAIL_NEW_PERIOD_LABELS[n] || n + " дн.";
+  }
+
+  function isPeriodAudience(seg) {
+    return seg === "new" || seg === "channel_subscribers_new";
+  }
+
+  function currentNewDays() {
+    const seg = currentSegment();
+    if (seg === "new") return Number(state.wizard.newClientDays) || 30;
+    if (seg === "channel_subscribers_new")
+      return Number(state.wizard.newSubDays) || 3;
+    return null;
+  }
+
+  function periodCountMap(seg, counts) {
+    if (!counts) return null;
+    if (seg === "new") return counts.new_by_days || null;
+    if (seg === "channel_subscribers_new")
+      return counts.channel_subscribers_new_by_days || null;
+    return null;
+  }
+
+  function applySegmentCounts(s) {
+    if (!s) return;
+    $$("#s0 .choice").forEach((c) => {
+      const key = c.dataset.seg;
+      let n = s[key] ?? 0;
+      if (key === "new" && s.new_by_days) {
+        n = s.new_by_days[String(state.wizard.newClientDays || 30)] ?? n;
+      }
+      if (key === "channel_subscribers_new" && s.channel_subscribers_new_by_days) {
+        n =
+          s.channel_subscribers_new_by_days[String(state.wizard.newSubDays || 3)] ??
+          n;
+      }
+      c.dataset.count = String(n);
+      const cc = c.querySelector(".cc");
+      if (cc) cc.textContent = fmtNum(n) + " человек";
+    });
+    const map = periodCountMap(currentSegment(), s);
+    $$("#audNewPeriod [data-aud-days]").forEach((el) => {
+      const n = map ? map[String(el.dataset.audDays)] : null;
+      el.textContent = n != null ? fmtNum(n) : "";
+    });
+  }
+
+  function syncAudPeriodUi() {
+    const wrap = $("#audNewPeriod");
+    const hint = $("#audNewPeriodHint");
+    const seg = currentSegment();
+    const show =
+      currentAudienceMode() === "segment" && isPeriodAudience(seg);
+    if (wrap) wrap.hidden = !show;
+    if (hint) hint.hidden = !show;
+    const days = currentNewDays();
+    $$("#audNewPeriod .subs-period-btn").forEach((b) => {
+      const on = Number(b.dataset.days) === Number(days);
+      b.classList.toggle("on", on);
+      b.setAttribute("aria-selected", on ? "true" : "false");
+    });
+    const newTitle = $('#s0 .choice[data-seg="new"] .ct');
+    const subTitle = $('#s0 .choice[data-seg="channel_subscribers_new"] .ct');
+    if (newTitle) {
+      newTitle.textContent =
+        seg === "new"
+          ? "Новые · " + mailPeriodLabel(state.wizard.newClientDays)
+          : "Новые";
+    }
+    if (subTitle) {
+      subTitle.textContent =
+        seg === "channel_subscribers_new"
+          ? "Новые подписчики · " + mailPeriodLabel(state.wizard.newSubDays)
+          : "Новые подписчики";
+    }
+    if (hint && show) {
+      hint.textContent =
+        seg === "new"
+          ? "В рассылку попадут клиенты, появившиеся в базе за этот период."
+          : "В рассылку попадут подписчики канала, вступившие за этот период.";
+    }
+    applySegmentCounts(state.wizard.segmentCounts);
+  }
 
   const AI_CHIP_PROMPTS = {
     regular: {
@@ -5675,6 +5861,12 @@
     if (seg === "selected") {
       const n = (state.wizard.selectedCustomers || []).length;
       return n ? `Выбранные · ${fmtNum(n)}` : "Выбранные клиенты";
+    }
+    if (seg === "new") {
+      return "Новые · " + mailPeriodLabel(state.wizard.newClientDays);
+    }
+    if (seg === "channel_subscribers_new") {
+      return "Новые подписчики · " + mailPeriodLabel(state.wizard.newSubDays);
     }
     return SEG_LABELS[seg] || "Клиенты";
   }
@@ -5759,6 +5951,7 @@
       state.wizard.segment =
         $("#s0 .choice.on")?.dataset.seg || "regular";
     }
+    syncAudPeriodUi();
     refreshMatchPreview();
   }
 
@@ -5978,6 +6171,8 @@
       };
       if (mode === "pick") {
         params.customer_ids = selectedCustomerIds().join(",");
+      } else if (isPeriodAudience(segment)) {
+        params.new_days = String(currentNewDays());
       }
       const data = await AdminAPI.mailingPreview(params);
       const will = data.will_send || 0;
@@ -6070,13 +6265,8 @@
   async function refreshSegmentCounts() {
     try {
       const s = await AdminAPI.segments();
-      $$("#s0 .choice").forEach((c) => {
-        const key = c.dataset.seg;
-        const n = s[key] ?? 0;
-        c.dataset.count = String(n);
-        const cc = c.querySelector(".cc");
-        if (cc) cc.textContent = fmtNum(n) + " человек";
-      });
+      state.wizard.segmentCounts = s;
+      syncAudPeriodUi();
       await refreshMatchPreview();
     } catch (_) {}
   }
@@ -6223,6 +6413,8 @@
     state.wizard.lockMessage = false;
     state.wizard.autoTemplate = "";
     state.wizard.channels = ["tg"];
+    state.wizard.newClientDays = 30;
+    state.wizard.newSubDays = 3;
     clearComposeMedia();
     $$(".aud-mode-btn").forEach((b) => {
       const on = b.dataset.aud === "segment";
@@ -6252,6 +6444,7 @@
     if (msgTa) msgTa.value = DEFAULT_MSG;
     updatePreview();
     updateAudienceContext();
+    syncAudPeriodUi();
   }
 
   $$(".aud-mode-btn").forEach((btn) =>
@@ -6295,6 +6488,20 @@
       c.classList.add("on");
       state.wizard.segment = c.dataset.seg;
       adaptAiChipsForSegment();
+      syncAudPeriodUi();
+      refreshMatchPreview();
+    })
+  );
+
+  $$("#audNewPeriod .subs-period-btn").forEach((btn) =>
+    btn.addEventListener("click", () => {
+      const days = Number(btn.dataset.days);
+      if (!days) return;
+      const seg = currentSegment();
+      if (seg === "new") state.wizard.newClientDays = days;
+      else if (seg === "channel_subscribers_new") state.wizard.newSubDays = days;
+      else return;
+      syncAudPeriodUi();
       refreshMatchPreview();
     })
   );
@@ -6691,6 +6898,9 @@
         media_filename: media?.media_filename || undefined,
         media_mime: media?.media_mime || undefined,
       };
+      if (isPeriodAudience(segment)) {
+        body.new_days = currentNewDays();
+      }
       if (currentAudienceMode() === "pick") {
         body.customer_ids = selectedCustomerIds();
         body.segment = "selected";

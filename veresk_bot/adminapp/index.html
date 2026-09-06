@@ -14,10 +14,10 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,500;9..144,600;9..144,700&family=Manrope:wght@400;500;600;700&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="css/admin.css?v=80">
+<link rel="stylesheet" href="css/admin.css?v=83">
 <link rel="stylesheet" href="css/login.css?v=2">
 <link rel="stylesheet" href="css/wheel.css?v=11">
-<link rel="stylesheet" href="css/promos.css?v=2">
+<link rel="stylesheet" href="css/promos.css?v=3">
 <!-- Критичный CSS до paint: иначе логин мелькнёт, пока качается admin.css -->
 <style>
   #authBoot{display:none;position:fixed;inset:0;z-index:50;flex-direction:column;align-items:center;justify-content:center;gap:18px}
@@ -221,7 +221,7 @@
           </div>
           <button type="button" class="kpi kpi-btn" id="kpiSubsNew" title="Открыть новых подписчиков канала">
             <div class="kpi-ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M4 19.5A2.5 2.5 0 016.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 014 19.5v-15A2.5 2.5 0 016.5 2z"/><path d="M12 8v6M9 11h6"/></svg></div>
-            <div><div class="n" id="statSubsNew">—</div><div class="l">новых подписчиков канала</div></div>
+            <div><div class="n" id="statSubsNew">—</div><div class="l" id="statSubsNewLabel">новых за 3 дня</div></div>
           </button>
         </div>
         <div class="widget events-widget">
@@ -429,6 +429,13 @@
                 </div>
                 <p class="hint" id="subsHint"></p>
               </div>
+            </div>
+            <div class="subs-period" id="subsPeriod" hidden role="tablist" aria-label="Период новых подписчиков">
+              <button type="button" class="subs-period-btn" data-days="1" role="tab" aria-selected="false">1 день <span class="seg-n" data-new-days="1"></span></button>
+              <button type="button" class="subs-period-btn on" data-days="3" role="tab" aria-selected="true">3 дня <span class="seg-n" data-new-days="3"></span></button>
+              <button type="button" class="subs-period-btn" data-days="7" role="tab" aria-selected="false">7 дней <span class="seg-n" data-new-days="7"></span></button>
+              <button type="button" class="subs-period-btn" data-days="14" role="tab" aria-selected="false">14 дней <span class="seg-n" data-new-days="14"></span></button>
+              <button type="button" class="subs-period-btn" data-days="30" role="tab" aria-selected="false">30 дней <span class="seg-n" data-new-days="30"></span></button>
             </div>
 
             <div class="subs-bulk" id="subsBulk" hidden>
@@ -1472,6 +1479,14 @@
               <span class="rc"><svg viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="3"><path d="M20 6 9 17l-5-5"/></svg></span>
             </button>
           </div>
+          <div class="subs-period aud-period" id="audNewPeriod" hidden role="tablist" aria-label="Период новых">
+            <button type="button" class="subs-period-btn" data-days="3" role="tab" aria-selected="false">3 дня <span class="seg-n" data-aud-days="3"></span></button>
+            <button type="button" class="subs-period-btn" data-days="7" role="tab" aria-selected="false">7 дней <span class="seg-n" data-aud-days="7"></span></button>
+            <button type="button" class="subs-period-btn" data-days="14" role="tab" aria-selected="false">2 недели <span class="seg-n" data-aud-days="14"></span></button>
+            <button type="button" class="subs-period-btn on" data-days="30" role="tab" aria-selected="true">месяц <span class="seg-n" data-aud-days="30"></span></button>
+            <button type="button" class="subs-period-btn" data-days="90" role="tab" aria-selected="false">3 месяца <span class="seg-n" data-aud-days="90"></span></button>
+          </div>
+          <p class="hint aud-period-hint" id="audNewPeriodHint" hidden></p>
         </div>
         <div id="audPickBlock" class="aud-pick" hidden>
           <div class="aud-pick-head">
@@ -1993,9 +2008,9 @@
   </main>
 
   <nav class="bnav mob" aria-label="Основная навигация">
-    <button type="button" class="bnav-item" data-nav="clients" onclick="go('clients')">
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="9" cy="8" r="3"/><path d="M3 20c0-3 3-5 6-5s6 2 6 5"/><path d="M16 6a3 3 0 010 6"/><path d="M18 20c0-2-.6-3.5-2-4.5"/></svg>
-      <span>Клиенты</span>
+    <button type="button" class="bnav-item active" data-nav="home" onclick="go('home')">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="m3 11 18-8-8 18-2-8z"/></svg>
+      <span>Главная</span>
     </button>
     <button type="button" class="bnav-item" data-nav="chats" onclick="go('chats')">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M21 11.5a8.4 8.4 0 01-.9 3.8 8.5 8.5 0 01-7.6 4.7 8.4 8.4 0 01-3.8-.9L3 21l1.9-5.7a8.4 8.4 0 01-.9-3.8 8.5 8.5 0 014.7-7.6 8.4 8.4 0 013.8-.9h.5a8.5 8.5 0 018 8v.5z"/></svg>
@@ -2005,15 +2020,54 @@
       <span class="bnav-plus"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4"><path d="M12 5v14M5 12h14"/></svg></span>
       <span>Создать</span>
     </button>
-    <button type="button" class="bnav-item active" data-nav="home" onclick="go('home')">
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="m3 11 18-8-8 18-2-8z"/></svg>
-      <span>Главная</span>
+    <button type="button" class="bnav-item" data-nav="clients" onclick="go('clients')">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="9" cy="8" r="3"/><path d="M3 20c0-3 3-5 6-5s6 2 6 5"/><path d="M16 6a3 3 0 010 6"/><path d="M18 20c0-2-.6-3.5-2-4.5"/></svg>
+      <span>Клиенты</span>
     </button>
-    <button type="button" class="bnav-item" data-nav="aichat" onclick="go('aichat')">
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M21 15a2 2 0 01-2 2H7l-4 4V5a2 2 0 012-2h14a2 2 0 012 2z"/></svg>
-      <span>ИИ</span>
+    <button type="button" class="bnav-item bnav-more" id="bnavMore" aria-haspopup="dialog" aria-expanded="false" aria-controls="moreSheet" onclick="toggleMoreSheet()">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3.5" y="3.5" width="7" height="7" rx="1.8"/><rect x="13.5" y="3.5" width="7" height="7" rx="1.8"/><rect x="3.5" y="13.5" width="7" height="7" rx="1.8"/><rect x="13.5" y="13.5" width="7" height="7" rx="1.8"/></svg>
+      <span>Ещё</span>
     </button>
   </nav>
+
+  <div class="more-sheet mob" id="moreSheet" hidden>
+    <button type="button" class="more-sheet-backdrop" id="moreSheetBackdrop" aria-label="Закрыть меню разделов"></button>
+    <div class="more-sheet-panel" role="dialog" aria-modal="true" aria-labelledby="moreSheetTitle">
+      <div class="more-sheet-handle" aria-hidden="true"></div>
+      <h2 id="moreSheetTitle">Разделы</h2>
+      <p class="more-sheet-sub">Всё, что не поместилось в панель</p>
+      <div class="more-grid">
+        <button type="button" class="more-item" data-nav="promos" onclick="go('promos')">
+          <span class="more-ico" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M20.6 12.6 12.6 20.6a2 2 0 01-2.8 0L3.4 14.2a2 2 0 010-2.8L11.4 3.4a2 2 0 012.8 0l7.4 7.4a2 2 0 010 2.8z"/><circle cx="8.5" cy="8.5" r="1.2" fill="currentColor" stroke="none"/></svg></span>
+          <span class="more-item-text"><span class="more-item-t">Акции</span><span class="more-item-s">Скидки и предложения</span></span>
+        </button>
+        <button type="button" class="more-item" data-nav="wheel" onclick="go('wheel')">
+          <span class="more-ico" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="2"/><path d="M12 3v3M12 18v3M3 12h3M18 12h3M5.6 5.6l2.1 2.1M16.3 16.3l2.1 2.1M18.4 5.6l-2.1 2.1M7.7 16.3l-2.1 2.1"/></svg></span>
+          <span class="more-item-text"><span class="more-item-t">Фортуна</span><span class="more-item-s">Колесо призов</span></span>
+        </button>
+        <button type="button" class="more-item" data-nav="aichat" onclick="go('aichat')">
+          <span class="more-ico" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M21 15a2 2 0 01-2 2H7l-4 4V5a2 2 0 012-2h14a2 2 0 012 2z"/></svg></span>
+          <span class="more-item-text"><span class="more-item-t">ИИ чат</span><span class="more-item-s">Тексты и подсказки</span></span>
+        </button>
+        <button type="button" class="more-item" data-nav="bots" onclick="go('bots')">
+          <span class="more-ico" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3" y="11" width="18" height="10" rx="2"/><circle cx="8.5" cy="16" r="1"/><circle cx="15.5" cy="16" r="1"/><path d="M12 11V7"/><path d="M8 7h8"/></svg></span>
+          <span class="more-item-text"><span class="more-item-t">Боты</span><span class="more-item-s">Telegram и MAX</span></span>
+        </button>
+        <button type="button" class="more-item" data-nav="settings" onclick="go('settings')">
+          <span class="more-ico" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="3"/><path d="M12 1v2M12 21v2M4.22 4.22l1.42 1.42M18.36 18.36l1.42 1.42M1 12h2M21 12h2M4.22 19.78l1.42-1.42M18.36 5.64l1.42-1.42"/></svg></span>
+          <span class="more-item-text"><span class="more-item-t">Настройки</span><span class="more-item-s">Каналы и доступ</span></span>
+        </button>
+      </div>
+      <div class="more-foot">
+        <div class="avatar" id="moreUserAv">V</div>
+        <div class="more-foot-meta">
+          <div class="nm" id="moreUserName">Админ</div>
+          <div class="rl" id="moreUserRole">Veresk</div>
+        </div>
+        <button type="button" class="more-logout" id="btnLogoutMore">Выйти</button>
+      </div>
+    </div>
+  </div>
 
   <!-- Outside .panel: display:none on inactive panels would hide fixed modals -->
   <div class="tg-modal" id="backupRestoreModal" hidden>
@@ -2082,6 +2136,6 @@
 <script src="js/api.js?v=44"></script>
 <script src="js/login-ui.js?v=1"></script>
 <script src="js/wheel-widget.js?v=13"></script>
-<script src="js/app.js?v=90"></script>
+<script src="js/app.js?v=93"></script>
 </body>
 </html>

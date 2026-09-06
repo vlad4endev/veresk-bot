@@ -267,6 +267,7 @@ async def preview_mailing_match(
     segment: str,
     channels: str | list[str],
     customer_ids: list[int] | None = None,
+    new_days: int | None = None,
 ) -> dict[str, Any]:
     """Превью: сколько клиентов сегмента (или выбранных id) реально получат сообщение."""
     from mailing_db import (
@@ -282,7 +283,7 @@ async def preview_mailing_match(
         customers = await customers_by_ids(customer_ids)
         audience = "selected"
     else:
-        customers = await customers_for_segment(segment or "all")
+        customers = await customers_for_segment(segment or "all", new_days=new_days)
         audience = segment or "all"
     accounts = await list_send_accounts()
     tg_ready = await pick_ready_account("tg_userbot")

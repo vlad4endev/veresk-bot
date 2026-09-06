@@ -323,6 +323,55 @@ async def init_mailing_db() -> None:
 # Не должны попадать в «Базу клиентов», пока нет анкеты с телефоном.
 _MESSENGER_STUB_SQL = "(posiflora_id LIKE 'tg:%' OR posiflora_id LIKE 'max:%')"
 
+# Скользящие окна для рассылки «новые клиенты» / «новые подписчики».
+MAIL_NEW_PERIODS = (3, 7, 14, 30, 90)
+MAIL_NEW_DAYS_MIN = 1
+MAIL_NEW_DAYS_MAX = 366
+MAIL_NEW_CLIENT_DEFAULT_DAYS = 30
+MAIL_NEW_SUBSCRIBER_DEFAULT_DAYS = 3
+
+
+def clamp_mail_new_days(
+    days: int | None,
+    *,
+    default: int = MAIL_NEW_CLIENT_DEFAULT_DAYS,
+) -> int:
+    try:
+        n = int(days if days is not None else default)
+    except (TypeError, ValueError):
+        n = default
+    return max(MAIL_NEW_DAYS_MIN, min(MAIL_NEW_DAYS_MAX, n))
+
+
+def mail_new_since_iso(
+    days: int | None,
+    *,
+    default: int = MAIL_NEW_CLIENT_DEFAULT_DAYS,
+) -> str:
+    n = clamp_mail_new_days(days, default=default)
+    return (datetime.now() - timedelta(days=n)).isoformat(timespec="seconds")
+
+
+def resolve_mail_new_days(segment: str, raw: Any) -> int | None:
+    """Для сегментов «новые» вернуть число дней, иначе None."""
+    if segment not in ("new", "channel_subscribers_new"):
+        return None
+    default = (
+        MAIL_NEW_CLIENT_DEFAULT_DAYS
+        if segment == "new"
+        else MAIL_NEW_SUBSCRIBER_DEFAULT_DAYS
+    )
+    return clamp_mail_new_days(raw, default=default)
+
+
+def _new_clients_period_sql() -> str:
+    """Клиенты CRM, появившиеся в Posiflora за период (не stub-карточки)."""
+    return (
+        f"NOT {_MESSENGER_STUB_SQL} "
+        "AND created_in_pf_at IS NOT NULL AND TRIM(created_in_pf_at) != '' "
+        "AND REPLACE(created_in_pf_at, ' ', 'T') >= ?"
+    )
+
 
 def is_messenger_stub_posiflora_id(posiflora_id: str | None) -> bool:
     raw = str(posiflora_id or "").strip().lower()
@@ -666,7 +715,24 @@ async def list_customers(
     return await _run_db(_list)
 
 
-async def count_customers(segment: str | None = None) -> int:
+async def count_customers(
+    segment: str | None = None, *, new_days: int | None = None
+) -> int:
+    if segment == "new":
+        since = mail_new_since_iso(
+            new_days, default=MAIL_NEW_CLIENT_DEFAULT_DAYS
+        )
+
+        def _count_new() -> int:
+            with _connect() as db:
+                row = db.execute(
+                    f"SELECT COUNT(*) AS c FROM customers WHERE {_new_clients_period_sql()}",
+                    (since,),
+                ).fetchone()
+            return int(row["c"])
+
+        return await _run_db(_count_new)
+
     def _count() -> int:
         with _connect() as db:
             if segment and segment != "all":
@@ -2314,13 +2380,31 @@ async def get_stats() -> dict[str, Any]:
     return await _run_db(_stats)
 
 
-async def customers_for_segment(segment: str) -> list[dict[str, Any]]:
+async def customers_for_segment(
+    segment: str, *, new_days: int | None = None
+) -> list[dict[str, Any]]:
     if segment in ("channel_subscribers", "channel_subscribers_new"):
         from channel_subscriptions import customers_for_channel_subscribers
 
         return await customers_for_channel_subscribers(
-            only_new=(segment == "channel_subscribers_new")
+            only_new=(segment == "channel_subscribers_new"),
+            new_days=new_days if segment == "channel_subscribers_new" else None,
         )
+
+    if segment == "new":
+        since = mail_new_since_iso(
+            new_days, default=MAIL_NEW_CLIENT_DEFAULT_DAYS
+        )
+
+        def _list_new() -> list[dict[str, Any]]:
+            with _connect() as db:
+                rows = db.execute(
+                    f"SELECT * FROM customers WHERE {_new_clients_period_sql()} ORDER BY id",
+                    (since,),
+                ).fetchall()
+            return [dict(r) for r in rows]
+
+        return await _run_db(_list_new)
 
     def _list() -> list[dict[str, Any]]:
         with _connect() as db:

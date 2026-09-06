@@ -83,6 +83,8 @@ from mailing_db import (
     verify_admin_password,
     customers_by_ids,
     customers_for_segment,
+    resolve_mail_new_days,
+    MAIL_NEW_PERIODS,
     ADMIN_SESSION_HOURS,
     ADMIN_USER_ROLES,
     normalize_phone_db,
@@ -240,7 +242,7 @@ def _segment_label(seg: str) -> str:
         "inactive": "Давно не заказывал",
         "selected": "Выбранные клиенты",
         "channel_subscribers": "Подписчики канала",
-        "channel_subscribers_new": "Новые подписчики канала",
+        "channel_subscribers_new": "Новые подписчики",
     }.get(seg, seg)
 
 
@@ -248,14 +250,25 @@ def _format_relative(iso: str | None) -> str:
     if not iso:
         return "—"
     try:
-        dt = datetime.fromisoformat(iso.replace("Z", "+00:00")).replace(tzinfo=None)
+        raw = str(iso).strip()
+        if raw.endswith("Z"):
+            raw = raw[:-1] + "+00:00"
+        dt = datetime.fromisoformat(raw)
+        if dt.tzinfo is not None:
+            dt = dt.astimezone().replace(tzinfo=None)
     except ValueError:
         return iso
     delta = datetime.now() - dt
-    days = delta.days
-    if days < 0:
+    if delta.total_seconds() < 0:
         return iso[:10]
+    days = delta.days
     if days == 0:
+        hours = int(delta.total_seconds() // 3600)
+        if hours <= 0:
+            mins = max(1, int(delta.total_seconds() // 60))
+            return f"{mins} мин. назад" if mins < 60 else "сегодня"
+        if hours < 12:
+            return f"{hours} ч. назад"
         return "сегодня"
     if days == 1:
         return "вчера"
@@ -969,6 +982,8 @@ async def handle_channel_subscribers_list(request: web.Request) -> web.Response:
         return err
     from channel_subscriptions import (
         NEW_SUBSCRIBER_DAYS,
+        NEW_SUBSCRIBER_PERIODS,
+        clamp_new_days,
         get_channel_config,
         init_channel_subscriptions,
         list_subscribers,
@@ -998,12 +1013,17 @@ async def handle_channel_subscribers_list(request: web.Request) -> web.Response:
         page_size = min(int(request.query.get("page_size", "100")), 500)
     except ValueError:
         page_size = 100
+    try:
+        new_days = clamp_new_days(int(request.query.get("new_days", str(NEW_SUBSCRIBER_DAYS))))
+    except (TypeError, ValueError):
+        new_days = NEW_SUBSCRIBER_DAYS
 
     items, total, stats = await list_subscribers(
         status=status_filter,
         search=search,
         only_new=only_new,
         list_filter=list_filter,
+        new_days=new_days,
         page=page,
         page_size=page_size,
     )
@@ -1014,6 +1034,7 @@ async def handle_channel_subscribers_list(request: web.Request) -> web.Response:
         it["left_label"] = _format_relative(it.get("left_at")) if it.get("left_at") else ""
 
     cfg = get_channel_config()
+    used_days = int(stats.get("new_days") or new_days)
     return _json(
         {
             "items": items,
@@ -1022,7 +1043,8 @@ async def handle_channel_subscribers_list(request: web.Request) -> web.Response:
             "page_size": page_size,
             "stats": stats,
             "channel": cfg,
-            "new_days": NEW_SUBSCRIBER_DAYS,
+            "new_days": used_days,
+            "new_periods": list(NEW_SUBSCRIBER_PERIODS),
             "filter": list_filter
             or ("new" if only_new else (status if status != "member" else "member")),
         }
@@ -1496,10 +1518,12 @@ async def handle_mailing_preview(request: web.Request) -> web.Response:
     segment = seg_map.get(segment, segment)
     channels = str(request.query.get("channels") or "tg")
     customer_ids = _parse_customer_ids(request.query.get("customer_ids"))
+    new_days = resolve_mail_new_days(segment, request.query.get("new_days"))
     data = await preview_mailing_match(
         segment=segment,
         channels=channels,
         customer_ids=customer_ids or None,
+        new_days=new_days,
     )
     return _json(data)
 
@@ -1594,6 +1618,7 @@ async def handle_campaign_create(request: web.Request) -> web.Response:
     customer_ids = _parse_customer_ids(body.get("customer_ids"))
     if customer_ids:
         segment = "selected"
+    new_days = resolve_mail_new_days(segment, body.get("new_days"))
     ch_list = parse_channels(body.get("channels") or "tg")
     channels = ",".join(ch_list)
     emoji = str(body.get("emoji") or "🌷")
@@ -1631,7 +1656,7 @@ async def handle_campaign_create(request: web.Request) -> web.Response:
                 status=400,
             )
     else:
-        customers = await customers_for_segment(segment)
+        customers = await customers_for_segment(segment, new_days=new_days)
     tg_ready = await pick_ready_account("tg_userbot") if "tg" in ch_list else None
     max_userbot = await pick_ready_account("max_userbot") if "max" in ch_list else None
     max_ok = (
@@ -2691,22 +2716,35 @@ async def handle_segment_counts(request: web.Request) -> web.Response:
         return err
     channel_n = 0
     channel_new_n = 0
+    new_by_days: dict[str, int] = {}
+    channel_new_by_days: dict[str, int] = {}
+    for p in MAIL_NEW_PERIODS:
+        new_by_days[str(p)] = await count_customers("new", new_days=p)
     try:
-        from channel_subscriptions import list_subscribers
+        from channel_subscriptions import count_new_channel_members, list_subscribers
 
         _, _, st = await list_subscribers(list_filter="member", page=1, page_size=1)
         channel_n = int(st.get("members") or 0)
-        channel_new_n = int(st.get("new") or 0)
+        for p in MAIL_NEW_PERIODS:
+            channel_new_by_days[str(p)] = await count_new_channel_members(p)
+        channel_new_n = int(channel_new_by_days.get("3") or st.get("new") or 0)
     except Exception:
-        pass
+        channel_n = 0
+        channel_new_n = 0
     return _json(
         {
             "all": await count_customers(),
             "regular": await count_customers("regular"),
-            "new": await count_customers("new"),
+            "new": int(
+                new_by_days["30"]
+                if "30" in new_by_days
+                else await count_customers("new")
+            ),
             "inactive": await count_customers("inactive"),
             "channel_subscribers": channel_n,
             "channel_subscribers_new": channel_new_n,
+            "new_by_days": new_by_days,
+            "channel_subscribers_new_by_days": channel_new_by_days,
         }
     )
 
