@@ -328,12 +328,42 @@
   .promos-ai-form{grid-template-columns:1fr}
   .promos-grid{grid-template-columns:1fr 1fr}
 }
+@media (max-width:720px){
+  .promos-tabs{
+    display:grid;
+    grid-template-columns:repeat(3,minmax(0,1fr));
+    gap:6px;
+  }
+  .promos-tab{
+    display:flex;
+    align-items:center;
+    justify-content:center;
+    width:100%;
+    min-height:36px;
+    text-align:center;
+    white-space:nowrap;
+    padding:6px 8px;
+  }
+}
 @media (max-width:560px){
   .promos-grid{grid-template-columns:1fr}
   .promos-kpis{grid-template-columns:1fr 1fr}
-  .promos-ai-presets{flex-wrap:nowrap;overflow-x:auto;scrollbar-width:none;padding-bottom:2px}
-  .promos-ai-presets::-webkit-scrollbar{display:none}
-  .promos-chip{flex:none;white-space:nowrap}
+  .promos-ai-presets{
+    display:grid;
+    grid-template-columns:repeat(2,minmax(0,1fr));
+    overflow:visible;
+    padding-bottom:0;
+  }
+  .promos-chip{
+    width:100%;
+    min-height:36px;
+    display:flex;
+    align-items:center;
+    justify-content:center;
+    white-space:normal;
+    text-align:center;
+    line-height:1.2;
+  }
   .promos-suggest{grid-template-columns:1fr}
   .promos-suggest-actions{flex-direction:row;flex-wrap:wrap}
   .promos-empty-editor{padding:20px 16px}
