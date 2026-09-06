@@ -538,6 +538,7 @@ async def check_max_session(
         return {
             "ok": False,
             "authorized": False,
+            "fatal": True,
             "error": "pymax_missing",
             "detail": PYMAX_MISSING_DETAIL,
         }
@@ -546,6 +547,7 @@ async def check_max_session(
         return {
             "ok": False,
             "authorized": False,
+            "fatal": True,
             "error": "Файл сессии не найден — переподключите аккаунт",
         }
 
@@ -554,22 +556,63 @@ async def check_max_session(
     digits = re.sub(r"\D", "", path.stem.replace("max_acc_", ""))
     phone_norm = phone or (f"+{digits}" if digits else "")
     if not phone_norm:
-        return {"ok": False, "authorized": False, "error": "Неизвестный телефон сессии"}
+        return {
+            "ok": False,
+            "authorized": False,
+            "fatal": True,
+            "error": "Неизвестный телефон сессии",
+        }
 
-    # Если чаты уже держат живой клиент — не открываем второй SQLite-коннект
-    try:
-        from senders.max_userbot_chat import max_session
+    def _fatal_from_err(err: str) -> bool:
+        low = (err or "").lower()
+        return any(
+            token in low
+            for token in (
+                "session_needs_reauth",
+                "session_needs_2fa",
+                "не авторизован",
+                "файл сессии не найден",
+                "переподключите",
+                "нужен повторный вход",
+            )
+        )
 
-        async with max_session(session_file, phone=phone_norm) as client:
-            return {
-                "ok": True,
-                "authorized": True,
-                "max_user_id": _user_id(client.me),
-                "label": _user_label(client.me),
-                "phone": phone_norm,
-            }
-    except Exception as pool_exc:
-        logger.debug("MAX pool check failed, one-shot: %s", pool_exc)
+    last_pool_err = ""
+    for attempt in range(2):
+        try:
+            from senders.max_userbot_chat import max_session
+
+            async with max_session(session_file, phone=phone_norm) as client:
+                return {
+                    "ok": True,
+                    "authorized": True,
+                    "fatal": False,
+                    "max_user_id": _user_id(client.me),
+                    "label": _user_label(client.me),
+                    "phone": phone_norm,
+                }
+        except Exception as pool_exc:
+            last_pool_err = str(pool_exc)
+            if _fatal_from_err(last_pool_err):
+                err = last_pool_err
+                if "session_needs_reauth" in err or "session_needs_2fa" in err:
+                    err = "Сессия не авторизована — нужен повторный вход"
+                return {
+                    "ok": False,
+                    "authorized": False,
+                    "fatal": True,
+                    "error": err,
+                }
+            if attempt == 0:
+                try:
+                    from senders.max_userbot_chat import release_session as release_max
+
+                    await release_max(session_file=session_file)
+                except Exception:
+                    pass
+                await asyncio.sleep(0.8)
+                continue
+            logger.debug("MAX pool check failed, one-shot: %s", pool_exc)
 
     result = await _run_client_once(
         phone=phone_norm,
@@ -577,22 +620,26 @@ async def check_max_session(
         work_dir=work_dir,
         sms_provider=_RejectSmsCodeProvider(),
         password_provider=_RejectPasswordProvider(),
-        timeout=20.0,
+        timeout=25.0,
     )
     if result.get("ok"):
         return {
             "ok": True,
             "authorized": True,
+            "fatal": False,
             "max_user_id": result.get("max_user_id"),
             "label": result.get("label"),
             "phone": phone_norm,
         }
-    err = str(result.get("error") or "")
+    err = str(result.get("error") or last_pool_err or "")
+    fatal = _fatal_from_err(err)
     if "session_needs_reauth" in err or "session_needs_2fa" in err:
         err = "Сессия не авторизована — нужен повторный вход"
+        fatal = True
     return {
         "ok": False,
         "authorized": False,
+        "fatal": fatal,
         "error": err or "Сессия не авторизована",
     }
 

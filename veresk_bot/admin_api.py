@@ -41,7 +41,6 @@ from mailing_db import (
     create_admin_user,
     create_campaign,
     create_personal_message,
-    create_send_account,
     delete_admin_session,
     delete_admin_user,
     delete_send_account,
@@ -78,6 +77,7 @@ from mailing_db import (
     update_admin_user,
     update_campaign,
     update_send_account,
+    upsert_send_account,
     upsert_customer,
     validate_admin_session,
     verify_admin_password,
@@ -1850,22 +1850,24 @@ async def handle_accounts_list(request: web.Request) -> web.Response:
     rows = await list_send_accounts()
     check_live = request.query.get("check") == "1"
 
-    # Параллельно проверяем живые Telethon-сессии при ?check=1
     session_checks: dict[int, dict[str, Any]] = {}
     if check_live:
-        tg_rows = [
+        from senders.session_keepalive import probe_account
+
+        live_rows = [
             a
             for a in rows
-            if a.get("kind") == "tg_userbot" and a.get("session_file")
+            if a.get("session_file")
+            and a.get("kind") in ("tg_userbot", "max_userbot")
         ]
 
         async def _check_one(acc: dict[str, Any]) -> tuple[int, dict[str, Any]]:
-            result = await check_telegram_session(str(acc.get("session_file") or ""))
+            result = await probe_account(acc)
             return int(acc["id"]), result
 
-        if tg_rows:
+        if live_rows:
             results = await asyncio.gather(
-                *[_check_one(a) for a in tg_rows], return_exceptions=True
+                *[_check_one(a) for a in live_rows], return_exceptions=True
             )
             for item in results:
                 if isinstance(item, Exception):
@@ -1873,8 +1875,10 @@ async def handle_accounts_list(request: web.Request) -> web.Response:
                     continue
                 acc_id, result = item
                 session_checks[acc_id] = result
+            rows = await list_send_accounts()
 
     items = []
+    dead_userbots: list[dict[str, Any]] = []
     for a in rows:
         entry: dict[str, Any] = {
             "id": a["id"],
@@ -1890,22 +1894,40 @@ async def handle_accounts_list(request: web.Request) -> web.Response:
             "last_checked_at": a.get("last_checked_at"),
             "last_ok_at": a.get("last_ok_at"),
             "last_error": a.get("last_error"),
+            "fail_streak": int(a.get("fail_streak") or 0),
         }
         live = session_checks.get(int(a["id"]))
         if live is not None:
-            entry["session_ok"] = bool(live.get("ok") and live.get("authorized"))
+            entry["session_ok"] = bool(live.get("ok"))
             entry["session_error"] = live.get("error")
+            entry["needs_reconnect"] = bool(live.get("needs_reconnect"))
             if live.get("username"):
                 entry["tg_username"] = live["username"]
             if live.get("label"):
                 entry["tg_name"] = live["label"]
-            if live.get("ok") and a.get("kind") == "tg_userbot":
-                # Подтянуть имя из живой сессии, если в БД только телефон
-                if live.get("label") and (
-                    not a.get("label") or a.get("label") == a.get("phone")
-                ):
-                    await update_send_account(int(a["id"]), label=live["label"])
-                    entry["label"] = live["label"]
+                if live.get("ok") and a.get("kind") in ("tg_userbot", "max_userbot"):
+                    if live.get("label") and (
+                        not a.get("label") or a.get("label") == a.get("phone")
+                    ):
+                        entry["label"] = live["label"]
+        else:
+            entry["needs_reconnect"] = a.get("status") == "unavailable" and a.get(
+                "kind"
+            ) in ("tg_userbot", "max_userbot")
+            if entry["needs_reconnect"]:
+                entry["session_ok"] = False
+        if entry.get("needs_reconnect") or a.get("status") == "unavailable":
+            if a.get("kind") in ("tg_userbot", "max_userbot"):
+                dead_userbots.append(
+                    {
+                        "id": a["id"],
+                        "kind": a["kind"],
+                        "phone": a.get("phone"),
+                        "phone_masked": entry["phone_masked"],
+                        "label": entry.get("label"),
+                        "last_error": entry.get("last_error") or entry.get("session_error"),
+                    }
+                )
         items.append(entry)
     # Заглушка MAX-бота, если токена нет в списке как max_bot-строка
     has_max_bot_row = any(a["kind"] == "max_bot" for a in rows)
@@ -1936,9 +1958,10 @@ async def handle_accounts_list(request: web.Request) -> web.Response:
             "max_configured": max_ok,
             "max_userbot_ready": has_max_userbot,
             "pymax_installed": is_pymax_installed(),
-            # Маркер деплоя: в UI/curl должно быть max-login-v31 (не старый образ)
-            "server_build": "max-login-v31",
+            # Маркер деплоя: в UI/curl должно быть session-health-v1
+            "server_build": "session-health-v1",
             "checked": check_live,
+            "dead_sessions": dead_userbots,
         }
     )
 
@@ -1946,7 +1969,7 @@ async def handle_accounts_list(request: web.Request) -> web.Response:
 async def _register_telegram_account(result: dict[str, Any], phone: str) -> dict[str, Any]:
     """Сохранить Telethon-сессию как send_account и проверить живой коннект."""
     warmup = (datetime.now() + timedelta(days=4)).date().isoformat()
-    account_id = await create_send_account(
+    account_id = await upsert_send_account(
         kind="tg_userbot",
         label=result.get("label") or phone,
         phone=result.get("phone") or phone,
@@ -2141,33 +2164,12 @@ async def handle_telegram_account_check(request: web.Request) -> web.Response:
     if kind not in ("tg_userbot", "max_userbot"):
         return _json({"error": "unsupported_account"}, status=400)
 
-    if kind == "max_userbot":
-        live = await check_max_session(
-            str(acc.get("session_file") or ""),
-            phone=str(acc.get("phone") or "") or None,
-        )
-    else:
-        live = await check_telegram_session(str(acc.get("session_file") or ""))
-    authorized = bool(live.get("ok") and live.get("authorized"))
+    from senders.session_keepalive import probe_account
+
+    result = await probe_account(acc)
+    authorized = bool(result.get("ok"))
     now = datetime.now().isoformat(timespec="seconds")
-    patch: dict[str, Any] = {
-        "last_checked_at": now,
-        "last_error": None if authorized else (live.get("error") or "unauthorized"),
-    }
-    if not authorized and acc.get("status") not in ("unavailable", "blocked"):
-        patch["status"] = "unavailable"
-    elif authorized:
-        patch["last_ok_at"] = now
-        today = datetime.now().date().isoformat()
-        wu = acc.get("warmup_until")
-        if acc.get("status") == "unavailable":
-            if wu and str(wu) > today:
-                patch["status"] = "warmup"
-            else:
-                patch["status"] = "ready"
-        if live.get("label"):
-            patch["label"] = live["label"]
-    await update_send_account(account_id, **patch)
+    fresh = await get_send_account(account_id) or acc
 
     return _json(
         {
@@ -2175,13 +2177,16 @@ async def handle_telegram_account_check(request: web.Request) -> web.Response:
             "authorized": authorized,
             "account_id": account_id,
             "kind": kind,
-            "error": live.get("error"),
-            "tg_id": live.get("tg_id"),
-            "max_user_id": live.get("max_user_id"),
-            "username": live.get("username"),
-            "label": live.get("label"),
-            "phone": live.get("phone") or acc.get("phone"),
-            "last_ok_at": now if authorized else acc.get("last_ok_at"),
+            "error": result.get("error"),
+            "needs_reconnect": bool(result.get("needs_reconnect")),
+            "tg_id": result.get("tg_id"),
+            "max_user_id": result.get("max_user_id"),
+            "username": result.get("username"),
+            "label": result.get("label") or fresh.get("label"),
+            "phone": fresh.get("phone"),
+            "status": fresh.get("status"),
+            "last_ok_at": fresh.get("last_ok_at") or (now if authorized else None),
+            "last_error": fresh.get("last_error"),
         }
     )
 
@@ -2227,7 +2232,7 @@ async def handle_telegram_account_delete(request: web.Request) -> web.Response:
 
 async def _register_max_userbot_account(result: dict[str, Any], phone: str) -> dict[str, Any]:
     warmup = (datetime.now() + timedelta(days=4)).date().isoformat()
-    account_id = await create_send_account(
+    account_id = await upsert_send_account(
         kind="max_userbot",
         label=result.get("label") or phone,
         phone=result.get("phone") or phone,

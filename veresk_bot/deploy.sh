@@ -75,6 +75,10 @@ docker compose ps
 
 if [[ "$ready" -ne 1 ]]; then
   echo "WARN: /api/health не ответил за 90с — смотрите логи ниже"
+else
+  echo "==> сессии Telegram/MAX"
+  docker compose exec -T bot python session_doctor.py doctor \
+    || echo "WARN: session_doctor вернул ненулевой код — при необходимости: ./sessions.sh heal"
 fi
 
 echo "==> проверка UI/API"

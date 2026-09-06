@@ -101,21 +101,30 @@ async def _ensure_entry(
         raise RuntimeError("Неизвестный телефон сессии MAX")
 
     key = _session_key(session_file)
+    stale: _PoolEntry | None = None
     async with _pool_guard:
         entry = _pool.get(key)
         if entry is not None:
             if account_id is not None:
                 entry.account_id = account_id
-            if entry.failed:
-                _pool.pop(key, None)
+            if entry.failed or entry.start_task.done():
+                stale = _pool.pop(key, None)
             else:
                 return entry
+
+    if stale is not None:
+        await _stop_entry(stale)
+
+    async with _pool_guard:
+        entry = _pool.get(key)
+        if entry is not None and not entry.failed and not entry.start_task.done():
+            if account_id is not None:
+                entry.account_id = account_id
+            return entry
 
         from pymax import Client, ExtraConfig, SyncOverrides
 
         path = Path(session_file)
-        # Полный sync чатов/контактов при первом открытии пула —
-        # иначе client.chats может быть почти пустым после инкрементального login.
         extra_kwargs: dict[str, Any] = {
             "reconnect": True,
             "log_level": "WARNING",
@@ -153,7 +162,7 @@ async def _ensure_entry(
 
     # Ждём login вне pool_guard
     try:
-        deadline = asyncio.get_running_loop().time() + 35.0
+        deadline = asyncio.get_running_loop().time() + 45.0
         while not entry.ready.is_set():
             if entry.start_task.done():
                 exc = None
@@ -184,6 +193,19 @@ async def _ensure_entry(
     return entry
 
 
+async def _stop_entry(entry: _PoolEntry) -> None:
+    try:
+        await entry.client.stop()
+    except Exception:
+        logger.debug("MAX chat client stop failed", exc_info=True)
+    if not entry.start_task.done():
+        entry.start_task.cancel()
+        try:
+            await entry.start_task
+        except (asyncio.CancelledError, Exception):
+            pass
+
+
 @asynccontextmanager
 async def max_session(
     session_file: str,
@@ -198,10 +220,19 @@ async def max_session(
         account_id=account_id,
         force_full_sync=force_full_sync,
     )
+    if entry.failed or entry.start_task.done():
+        await release_session(session_file=session_file)
+        entry = await _ensure_entry(
+            session_file,
+            phone=phone,
+            account_id=account_id,
+            force_full_sync=force_full_sync,
+        )
     async with entry.lock:
         if entry.failed or entry.start_task.done():
+            err = entry.error or "Соединение с MAX закрыто — переподключите номер"
             await release_session(session_file=session_file)
-            raise RuntimeError(entry.error or "Соединение с MAX закрыто — обновите чаты")
+            raise RuntimeError(err)
         yield entry.client
 
 
@@ -225,16 +256,21 @@ async def release_session(
                 entries.append(entry)
 
     for entry in entries:
-        try:
-            await entry.client.stop()
-        except Exception:
-            logger.debug("MAX chat client stop failed", exc_info=True)
-        if not entry.start_task.done():
-            entry.start_task.cancel()
-            try:
-                await entry.start_task
-            except (asyncio.CancelledError, Exception):
-                pass
+        await _stop_entry(entry)
+
+
+async def drop_dead_sessions() -> None:
+    """Убрать из пула оборванные MAX-клиенты, чтобы следующий запрос поднял новые."""
+    async with _pool_guard:
+        dead_keys = [
+            key
+            for key, entry in _pool.items()
+            if entry.failed or entry.start_task.done()
+        ]
+        entries = [_pool.pop(k) for k in dead_keys if k in _pool]
+    for entry in entries:
+        logger.info("MAX pool: drop dead session %s", entry.phone or entry.session_file)
+        await _stop_entry(entry)
 
 
 async def release_all_sessions() -> None:
@@ -242,16 +278,7 @@ async def release_all_sessions() -> None:
         entries = list(_pool.values())
         _pool.clear()
     for entry in entries:
-        try:
-            await entry.client.stop()
-        except Exception:
-            pass
-        if not entry.start_task.done():
-            entry.start_task.cancel()
-            try:
-                await entry.start_task
-            except (asyncio.CancelledError, Exception):
-                pass
+        await _stop_entry(entry)
 
 
 async def run_with_client(

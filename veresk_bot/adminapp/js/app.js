@@ -253,16 +253,22 @@
 
   let adminKeepaliveTimer = null;
   const ADMIN_KEEPALIVE_MS = 15 * 60 * 1000; // продлеваем вход каждые 15 мин
+  let sessionHealthTimer = null;
+  const SESSION_HEALTH_MS = 60 * 1000;
 
   function stopAdminKeepalive() {
     if (adminKeepaliveTimer) {
       clearInterval(adminKeepaliveTimer);
       adminKeepaliveTimer = null;
     }
+    stopSessionHealthPoll();
   }
 
   function startAdminKeepalive() {
-    stopAdminKeepalive();
+    if (adminKeepaliveTimer) {
+      clearInterval(adminKeepaliveTimer);
+      adminKeepaliveTimer = null;
+    }
     adminKeepaliveTimer = setInterval(async () => {
       if (!AdminAPI.getToken()) {
         stopAdminKeepalive();
@@ -281,6 +287,116 @@
         }
       }
     }, ADMIN_KEEPALIVE_MS);
+  }
+
+  function isDeadUserbot(a) {
+    if (!a) return false;
+    if (a.status === "blocked") return false;
+    if (a.kind && a.kind !== "tg_userbot" && a.kind !== "max_userbot") return false;
+    return (
+      a.needs_reconnect === true ||
+      a.status === "unavailable" ||
+      a.session_ok === false
+    );
+  }
+
+  function stopSessionHealthPoll() {
+    if (sessionHealthTimer) {
+      clearInterval(sessionHealthTimer);
+      sessionHealthTimer = null;
+    }
+  }
+
+  function startSessionHealthPoll() {
+    stopSessionHealthPoll();
+    refreshSessionHealth();
+    sessionHealthTimer = setInterval(() => {
+      if (!AdminAPI.getToken()) {
+        stopSessionHealthPoll();
+        return;
+      }
+      refreshSessionHealth();
+    }, SESSION_HEALTH_MS);
+  }
+
+  async function refreshSessionHealth() {
+    try {
+      const data = await AdminAPI.accounts();
+      applySessionHealth(data);
+    } catch (err) {
+      if (err && err.status === 401) return;
+    }
+  }
+
+  function applySessionHealth(data) {
+    const items = (data && data.items) || [];
+    const dead =
+      (data && data.dead_sessions) ||
+      items.filter(
+        (a) =>
+          (a.kind === "tg_userbot" || a.kind === "max_userbot") && isDeadUserbot(a)
+      );
+    const banner = $("#sessionHealthBanner");
+    if (!banner) return;
+    if (!dead.length) {
+      banner.classList.add("hidden");
+      banner.innerHTML = "";
+      return;
+    }
+    const tgDead = dead.filter((a) => a.kind === "tg_userbot");
+    const maxDead = dead.filter((a) => a.kind === "max_userbot");
+    const bits = [];
+    if (tgDead.length) {
+      bits.push(
+        "Telegram: " +
+          tgDead
+            .map((a) => a.phone_masked || a.label || "номер")
+            .slice(0, 2)
+            .join(", ")
+      );
+    }
+    if (maxDead.length) {
+      bits.push(
+        "MAX: " +
+          maxDead
+            .map((a) => a.phone_masked || a.label || "номер")
+            .slice(0, 2)
+            .join(", ")
+      );
+    }
+    const first = dead[0];
+    banner.classList.remove("hidden");
+    banner.innerHTML =
+      "<strong>Сессия окончена</strong> — " +
+      esc(bits.join(" · ")) +
+      ". Переподключите номер, иначе рассылки и чаты не пойдут." +
+      '<div class="ban-actions">' +
+      '<button type="button" class="btn btn-sm primary" id="sessionHealthReconnect">Подключить снова</button>' +
+      '<button type="button" class="btn btn-sm" id="sessionHealthCheck">Проверить сейчас</button>' +
+      "</div>";
+    $("#sessionHealthReconnect")?.addEventListener("click", () => {
+      beginUserbotReconnect(first);
+    });
+    $("#sessionHealthCheck")?.addEventListener("click", () => {
+      runTgKeepalive();
+    });
+  }
+
+  function beginUserbotReconnect(acc) {
+    if (!acc) {
+      settingsTab = "accounts";
+      go("settings");
+      return;
+    }
+    if (acc.kind === "max_userbot") {
+      settingsTab = "bots";
+      go("settings");
+      openMaxConnectForm(true, { phone: acc.phone || "", reconnect: true });
+    } else {
+      settingsTab = "accounts";
+      go("settings");
+      openConnectForm(true, { phone: acc.phone || "", reconnect: true });
+    }
   }
 
   async function refreshSideUser() {
@@ -333,6 +449,7 @@
     $("#appShell").classList.remove("hidden");
     setChrome("app");
     startAdminKeepalive();
+    startSessionHealthPoll();
     await refreshSideUser();
     ensureAiChatOwner();
     const start = firstAllowedTab();
@@ -1170,7 +1287,10 @@
 
   function syncSubsPeriodUi() {
     const row = $("#subsPeriod");
-    if (row) row.hidden = subsFilter !== "new";
+    if (row) {
+      row.hidden = false;
+      row.classList.toggle("is-idle", subsFilter !== "new");
+    }
     $$("#subsPeriod .subs-period-btn").forEach((b) => {
       const on = Number(b.dataset.days) === Number(subsNewDays);
       b.classList.toggle("on", on);
@@ -3256,6 +3376,8 @@
       const tgItems = (data.items || []).filter((a) => a.kind === "tg_userbot");
       const maxUserbotItems = (data.items || []).filter((a) => a.kind === "max_userbot");
       renderMaxUserbotList(maxUserbotItems, data);
+      renderMaxSessionBanner(maxUserbotItems, data);
+      applySessionHealth(data);
       const ready = tgItems.filter((a) => !["warmup", "unavailable", "blocked"].includes(String(a.status || ""))).length;
       const liveOk = tgItems.filter((a) => a.session_ok === true).length;
       updateTgSetupStatus(configured, tgItems.length, ready, checkLive ? liveOk : null);
@@ -3271,7 +3393,11 @@
         checkBtn.disabled = !configured || !tgItems.length;
         checkBtn.title = !tgItems.length
           ? "Нет аккаунтов для проверки"
-          : "Проверить живые сессии Telegram";
+          : "Проверить живые сессии Telegram и MAX";
+      }
+      const maxCheckBtn = $("#btnCheckMaxAll");
+      if (maxCheckBtn) {
+        maxCheckBtn.disabled = !maxUserbotItems.length;
       }
       const apiDetails = $("#tgApiForm");
       if (apiDetails && apiDetails.tagName === "DETAILS") {
@@ -3285,6 +3411,17 @@
         </div>`;
       } else {
         box.innerHTML = tgItems.map((a) => renderTgAccountCard(a)).join("");
+
+        box.querySelectorAll("[data-tg-reconnect]").forEach((btn) => {
+          btn.addEventListener("click", () => {
+            const id = btn.getAttribute("data-tg-reconnect");
+            const phone = btn.getAttribute("data-phone") || "";
+            const acc = ((accountsCache && accountsCache.items) || []).find(
+              (x) => String(x.id) === String(id)
+            ) || { kind: "tg_userbot", phone };
+            beginUserbotReconnect(acc);
+          });
+        });
 
         box.querySelectorAll("[data-tg-check]").forEach((btn) => {
           btn.addEventListener("click", async () => {
@@ -3615,6 +3752,8 @@
     const sent = a.sent_today != null ? a.sent_today : 0;
     const limit = a.daily_limit != null ? a.daily_limit : 200;
     const id = a.id != null ? String(a.id) : "";
+    const dead = isDeadUserbot(a);
+    const errText = dead ? (a.last_error || a.session_error || "") : "";
 
     return `<div class="acct" data-acct-id="${esc(id)}">
       <div class="acct-id">
@@ -3622,6 +3761,7 @@
         <div class="m">
           <div class="n">${esc(a.phone_masked || a.label || "Telegram")}</div>
           <div class="p">${esc(nameBits.join(" · ") || "Личный аккаунт")}</div>
+          ${errText ? `<span class="acct-error">${esc(errText)}</span>` : ""}
         </div>
       </div>
       <div class="acct-info">
@@ -3633,6 +3773,7 @@
         </div>
       </div>
       <div class="acct-actions">
+        ${dead && a.phone ? `<button type="button" class="btn btn-sm primary" data-tg-reconnect="${esc(id)}" data-phone="${esc(a.phone)}">Переподключить</button>` : ""}
         <button type="button" class="btn btn-sm" data-tg-check="${esc(id)}" ${!id ? "disabled" : ""}>Проверить</button>
         <button type="button" class="btn btn-sm danger" data-tg-del="${esc(id)}" ${!id ? "disabled" : ""}>Отключить</button>
       </div>
@@ -3647,12 +3788,7 @@
       banner.innerHTML = "";
       return;
     }
-    const dead = tgItems.filter(
-      (a) =>
-        a.status === "unavailable" ||
-        a.session_ok === false ||
-        (a.last_error && a.session_ok !== true && a.status === "unavailable")
-    );
+    const dead = tgItems.filter((a) => isDeadUserbot(a));
     if (!dead.length) {
       banner.classList.add("hidden");
       banner.innerHTML = "";
@@ -3662,18 +3798,19 @@
       .map((a) => a.phone_masked || a.label || "номер")
       .slice(0, 3)
       .join(", ");
+    const first = dead[0];
     banner.classList.remove("hidden");
     banner.innerHTML =
-      "<strong>Нужно переподключить Telegram</strong> — сессия прервалась (" +
+      "<strong>Сессия Telegram окончена</strong> — " +
       esc(names) +
       (dead.length > 3 ? "…" : "") +
-      "). Нажмите «Подключить» с тем же номером или «Проверить», если это сбой сети." +
+      ". Войдите по QR тем же аккаунтом или нажмите «Проверить», если это сбой сети." +
       '<div class="ban-actions">' +
       '<button type="button" class="btn btn-sm primary" id="tgBannerReconnect">Подключить снова</button>' +
       '<button type="button" class="btn btn-sm" id="tgBannerCheck">Проверить сейчас</button>' +
       "</div>";
     $("#tgBannerReconnect")?.addEventListener("click", () => {
-      openConnectForm(true);
+      beginUserbotReconnect(first);
     });
     $("#tgBannerCheck")?.addEventListener("click", () => {
       runTgKeepalive();
@@ -3690,15 +3827,19 @@
       const res = await AdminAPI.tgKeepalive();
       if (res.skipped) {
         alert("Сначала сохраните API-ключи Telegram");
-      } else if (res.bad_count > 0) {
+      } else if (res.reconnect_count > 0) {
         alert(
           "Проверено " +
             res.checked +
             ": " +
             res.ok_count +
             " ок, " +
-            res.bad_count +
-            " нужно переподключить"
+            res.reconnect_count +
+            " сессий окончено — переподключите"
+        );
+      } else if (res.bad_count > 0) {
+        alert(
+          "Сеть моргнула, повторный коннект не прошёл сразу. Статус сессии пока не сброшен — нажмите «Проверить» ещё раз через минуту."
         );
       }
       await loadAccounts({ check: true });
@@ -5078,17 +5219,38 @@
     setConnectStep(1);
   }
 
-  function openConnectForm(show) {
+  function setReconnectHint(el, text) {
+    if (!el) return;
+    if (text) {
+      el.hidden = false;
+      el.textContent = text;
+    } else {
+      el.hidden = true;
+      el.textContent = "";
+    }
+  }
+
+  function openConnectForm(show, opts = {}) {
     const form = $("#acctForm");
     if (!form) return;
     if (!show && state.tgQrLoginId) {
       AdminAPI.tgQrCancel(state.tgQrLoginId).catch(() => {});
     }
     form.classList.toggle("hidden", !show);
+    resetConnectForm();
     if (show) {
-      resetConnectForm();
+      const phone = String(opts.phone || "").trim();
+      if (phone && $("#tgPhone")) $("#tgPhone").value = phone;
+      const hint = opts.reconnect
+        ? "Сессия этого номера окончена. Войдите по QR тем же аккаунтом Telegram — карточка обновится сама."
+        : "";
+      setReconnectHint($("#tgReconnectHint"), hint);
+      if (phone) {
+        const fallback = $("#tgPhoneFallback");
+        if (fallback) fallback.open = true;
+      }
     } else {
-      resetConnectForm();
+      setReconnectHint($("#tgReconnectHint"), "");
     }
   }
 
@@ -5121,15 +5283,21 @@
     setMaxConnectStep(1);
   }
 
-  function openMaxConnectForm(show) {
+  function openMaxConnectForm(show, opts = {}) {
     const form = $("#maxAcctForm");
     if (!form) return;
     form.classList.toggle("hidden", !show);
+    resetMaxConnectForm();
     if (show) {
-      resetMaxConnectForm();
+      const phone = String(opts.phone || "").trim();
+      if (phone && $("#maxPhone")) $("#maxPhone").value = phone;
+      const hint = opts.reconnect
+        ? "Сессия MAX окончена. Старый вход будет сброшен — получите новый SMS-код на этот номер."
+        : "";
+      setReconnectHint($("#maxReconnectHint"), hint);
       $("#maxPhone")?.focus();
     } else {
-      resetMaxConnectForm();
+      setReconnectHint($("#maxReconnectHint"), "");
     }
   }
 
@@ -5209,30 +5377,88 @@
       statusLabel = a.status === "blocked" ? "Заблокирован" : "Нет сессии";
       statusColor = "var(--ink-3)";
     }
+    let connectLabel = "";
+    let connectColor = "";
+    if (a.session_ok === true) {
+      connectLabel = "Коннект ок";
+      connectColor = "var(--ok)";
+    } else if (a.session_ok === false || isDeadUserbot(a)) {
+      connectLabel = "Нет коннекта";
+      connectColor = "#c0492f";
+    }
+    const aliveHint = a.last_ok_at
+      ? "ок " + fmtRelTime(a.last_ok_at)
+      : a.last_checked_at
+        ? "проверка " + fmtRelTime(a.last_checked_at)
+        : "";
     const sent = a.sent_today != null ? a.sent_today : 0;
     const limit = a.daily_limit != null ? a.daily_limit : 150;
     const id = a.id != null ? String(a.id) : "";
     const nameBits = [];
     if (a.label && a.label !== a.phone && a.label !== a.phone_masked) nameBits.push(a.label);
+    const dead = isDeadUserbot(a);
+    const errText = dead ? (a.last_error || a.session_error || "") : "";
     return `<div class="acct" data-acct-id="${esc(id)}">
       <div class="acct-id">
         <div class="ico max" aria-hidden="true">MX</div>
         <div class="m">
           <div class="n">${esc(a.phone_masked || a.label || "MAX")}</div>
           <div class="p">${esc(nameBits.join(" · ") || "Личный аккаунт")}</div>
+          ${errText ? `<span class="acct-error">${esc(errText)}</span>` : ""}
         </div>
       </div>
       <div class="acct-info">
         <div class="acct-quota"><strong>${esc(String(sent))}</strong> из ${esc(String(limit))} сегодня</div>
         <div class="acct-tags">
+          ${connectLabel ? `<span class="tagi" style="color:${connectColor}"><span class="d" style="background:${connectColor}"></span>${esc(connectLabel)}</span>` : ""}
           <span class="tagi" style="color:${statusColor}"><span class="d" style="background:${statusColor}"></span>${esc(statusLabel)}</span>
+          ${aliveHint ? `<span class="acct-alive">${esc(aliveHint)}</span>` : ""}
         </div>
       </div>
       <div class="acct-actions">
+        ${dead && a.phone ? `<button type="button" class="btn btn-sm primary" data-max-reconnect="${esc(id)}" data-phone="${esc(a.phone)}">Переподключить</button>` : ""}
         <button type="button" class="btn btn-sm" data-max-check="${esc(id)}" ${!id ? "disabled" : ""}>Проверить</button>
         <button type="button" class="btn btn-sm danger" data-max-del="${esc(id)}" ${!id ? "disabled" : ""}>Отключить</button>
       </div>
     </div>`;
+  }
+
+  function renderMaxSessionBanner(items, data) {
+    const banner = $("#maxSessionBanner");
+    if (!banner) return;
+    const pymaxOk = data?.pymax_installed !== false;
+    if (!pymaxOk || !items.length) {
+      banner.classList.add("hidden");
+      banner.innerHTML = "";
+      return;
+    }
+    const dead = items.filter((a) => isDeadUserbot(a));
+    if (!dead.length) {
+      banner.classList.add("hidden");
+      banner.innerHTML = "";
+      return;
+    }
+    const names = dead
+      .map((a) => a.phone_masked || a.label || "номер")
+      .slice(0, 3)
+      .join(", ");
+    const first = dead[0];
+    banner.classList.remove("hidden");
+    banner.innerHTML =
+      "<strong>Сессия MAX окончена</strong> — " +
+      esc(names) +
+      (dead.length > 3 ? "…" : "") +
+      ". Нажмите «Подключить снова»: придёт новый SMS-код." +
+      '<div class="ban-actions">' +
+      '<button type="button" class="btn btn-sm primary" id="maxBannerReconnect">Подключить снова</button>' +
+      '<button type="button" class="btn btn-sm" id="maxBannerCheck">Проверить сейчас</button>' +
+      "</div>";
+    $("#maxBannerReconnect")?.addEventListener("click", () => {
+      beginUserbotReconnect(first);
+    });
+    $("#maxBannerCheck")?.addEventListener("click", () => {
+      runTgKeepalive();
+    });
   }
 
   function renderMaxUserbotList(items, data) {
@@ -5251,6 +5477,16 @@
       return;
     }
     box.innerHTML = items.map((a) => renderMaxAccountCard(a)).join("");
+    box.querySelectorAll("[data-max-reconnect]").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        const id = btn.getAttribute("data-max-reconnect");
+        const phone = btn.getAttribute("data-phone") || "";
+        const acc = ((accountsCache && accountsCache.items) || []).find(
+          (x) => String(x.id) === String(id)
+        ) || { kind: "max_userbot", phone };
+        beginUserbotReconnect(acc);
+      });
+    });
     box.querySelectorAll("[data-max-check]").forEach((btn) => {
       btn.addEventListener("click", async () => {
         const id = btn.getAttribute("data-max-check");
@@ -5603,6 +5839,9 @@
 
   $("#btnConnectMax")?.addEventListener("click", () => {
     openMaxConnectForm($("#maxAcctForm")?.classList.contains("hidden"));
+  });
+  $("#btnCheckMaxAll")?.addEventListener("click", () => {
+    runTgKeepalive();
   });
   $("#maxConnectCancel")?.addEventListener("click", () => openMaxConnectForm(false));
   $("#maxConnectDoneClose")?.addEventListener("click", () => {

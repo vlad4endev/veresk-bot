@@ -82,6 +82,24 @@ def is_telethon_configured() -> bool:
     return bool(api_id and api_hash)
 
 
+def make_telegram_client(session_base: str) -> Any:
+    """Telethon-клиент с авто-reconnect, чтобы сессия не умирала на сетевом сбое."""
+    from telethon import TelegramClient
+
+    api_id, api_hash = get_api_credentials()
+    return TelegramClient(
+        session_base,
+        api_id,
+        api_hash,
+        connection_retries=5,
+        retry_delay=1,
+        auto_reconnect=True,
+        request_retries=3,
+        timeout=20,
+        flood_sleep_threshold=60,
+    )
+
+
 async def start_telegram_login(phone: str) -> dict[str, Any]:
     """Шаг 1: отправить код на номер. Возвращает {ok, phone} или {ok:false, error}."""
     if not is_telethon_configured():
@@ -90,11 +108,10 @@ async def start_telegram_login(phone: str) -> dict[str, Any]:
             "error": "TELEGRAM_API_ID / TELEGRAM_API_HASH не заданы — укажите их в настройках",
         }
     try:
-        from telethon import TelegramClient
+        import telethon  # noqa: F401
     except ImportError:
         return _telethon_missing_error()
 
-    api_id, api_hash = get_api_credentials()
     phone_norm = _normalize_phone(phone)
     digits_only = re.sub(r"\D", "", phone_norm)
     session_name = sessions_path() / f"acc_{digits_only}"
@@ -107,7 +124,7 @@ async def start_telegram_login(phone: str) -> dict[str, Any]:
         except Exception:
             pass
 
-    client = TelegramClient(str(session_name), api_id, api_hash)
+    client = make_telegram_client(str(session_name))
     await client.connect()
     if await client.is_user_authorized():
         me = await client.get_me()
@@ -498,14 +515,13 @@ async def start_telegram_qr_login() -> dict[str, Any]:
             "error": "TELEGRAM_API_ID / TELEGRAM_API_HASH не заданы — укажите их в настройках",
         }
     try:
-        from telethon import TelegramClient
+        import telethon  # noqa: F401
     except ImportError:
         return _telethon_missing_error()
 
-    api_id, api_hash = get_api_credentials()
     login_id = uuid.uuid4().hex[:16]
     session_base = str(sessions_path() / f"qr_{login_id}")
-    client = TelegramClient(session_base, api_id, api_hash)
+    client = make_telegram_client(session_base)
     try:
         await client.connect()
         if await client.is_user_authorized():
@@ -715,7 +731,6 @@ async def recover_authorized_qr_sessions() -> list[dict[str, Any]]:
     except Exception:
         logger.debug("list_send_accounts for QR recover failed", exc_info=True)
 
-    api_id, api_hash = get_api_credentials()
     recovered: list[dict[str, Any]] = []
     paths = list(sessions_path().glob("qr_*.session")) + list(
         sessions_path().glob("acc_*.session")
@@ -727,7 +742,7 @@ async def recover_authorized_qr_sessions() -> list[dict[str, Any]]:
         base = session_file[:-8] if session_file.endswith(".session") else session_file
         if f"{base}.session" in known or base in known:
             continue
-        client = TelegramClient(base, api_id, api_hash)
+        client = make_telegram_client(base)
         try:
             await client.connect()
             if not await client.is_user_authorized():
@@ -750,16 +765,39 @@ async def recover_authorized_qr_sessions() -> list[dict[str, Any]]:
     return recovered
 
 
+def _telegram_auth_error(exc: BaseException) -> str | None:
+    name = type(exc).__name__.lower()
+    msg = str(exc).lower()
+    if any(
+        token in name or token in msg
+        for token in (
+            "authkeyunregistered",
+            "authkeyduplicated",
+            "sessionrevoked",
+            "sessionexpired",
+            "userdeactivated",
+        )
+    ):
+        return "Сессия не авторизована — переподключите аккаунт"
+    return None
+
+
 async def check_telegram_session(session_file: str) -> dict[str, Any]:
     """Проверить, что .session живая и авторизована (полный коннект)."""
     if not is_telethon_configured():
         return {
             "ok": False,
             "authorized": False,
+            "fatal": True,
             "error": "TELEGRAM_API_ID / TELEGRAM_API_HASH не заданы",
         }
     if not session_file:
-        return {"ok": False, "authorized": False, "error": "session_file пустой"}
+        return {
+            "ok": False,
+            "authorized": False,
+            "fatal": True,
+            "error": "session_file пустой",
+        }
 
     session_path = Path(session_file)
     base = str(session_path)
@@ -770,6 +808,7 @@ async def check_telegram_session(session_file: str) -> dict[str, Any]:
         return {
             "ok": False,
             "authorized": False,
+            "fatal": True,
             "error": "Файл сессии не найден — переподключите аккаунт",
         }
 
@@ -780,7 +819,7 @@ async def check_telegram_session(session_file: str) -> dict[str, Any]:
     else:
         try:
             async with telegram_session(session_file) as client:
-                me = await client.get_me()
+                me = await asyncio.wait_for(client.get_me(), timeout=20)
                 username = getattr(me, "username", None) if me else None
                 first = getattr(me, "first_name", None) if me else None
                 last = getattr(me, "last_name", None) if me else None
@@ -788,24 +827,43 @@ async def check_telegram_session(session_file: str) -> dict[str, Any]:
                 return {
                     "ok": True,
                     "authorized": True,
+                    "fatal": False,
                     "tg_id": getattr(me, "id", None) if me else None,
                     "username": username,
                     "label": label,
                     "phone": getattr(me, "phone", None) if me else None,
                 }
         except asyncio.TimeoutError:
-            return {"ok": False, "authorized": False, "error": "Таймаут подключения к Telegram"}
+            return {
+                "ok": False,
+                "authorized": False,
+                "fatal": False,
+                "error": "Таймаут подключения к Telegram",
+            }
         except Exception as exc:
-            logger.exception("check_telegram_session failed")
-            return {"ok": False, "authorized": False, "error": str(exc)}
+            auth_err = _telegram_auth_error(exc)
+            if auth_err or "не авторизована" in str(exc).lower():
+                return {
+                    "ok": False,
+                    "authorized": False,
+                    "fatal": True,
+                    "error": auth_err or str(exc),
+                }
+            logger.warning("check_telegram_session pool failed: %s", exc)
+            return {"ok": False, "authorized": False, "fatal": False, "error": str(exc)}
 
     try:
-        from telethon import TelegramClient
+        from telethon import TelegramClient  # noqa: F401
     except ImportError:
-        return {"ok": False, "authorized": False, "error": "telethon_missing", "detail": TELETHON_MISSING_DETAIL}
+        return {
+            "ok": False,
+            "authorized": False,
+            "fatal": True,
+            "error": "telethon_missing",
+            "detail": TELETHON_MISSING_DETAIL,
+        }
 
-    api_id, api_hash = get_api_credentials()
-    client = TelegramClient(base, api_id, api_hash)
+    client = make_telegram_client(base)
     try:
         await asyncio.wait_for(client.connect(), timeout=20)
         authorized = await client.is_user_authorized()
@@ -813,9 +871,10 @@ async def check_telegram_session(session_file: str) -> dict[str, Any]:
             return {
                 "ok": False,
                 "authorized": False,
+                "fatal": True,
                 "error": "Сессия не авторизована — переподключите аккаунт",
             }
-        me = await client.get_me()
+        me = await asyncio.wait_for(client.get_me(), timeout=20)
         username = getattr(me, "username", None) if me else None
         first = getattr(me, "first_name", None) if me else None
         last = getattr(me, "last_name", None) if me else None
@@ -823,16 +882,28 @@ async def check_telegram_session(session_file: str) -> dict[str, Any]:
         return {
             "ok": True,
             "authorized": True,
+            "fatal": False,
             "tg_id": getattr(me, "id", None) if me else None,
             "username": username,
             "label": label,
             "phone": getattr(me, "phone", None) if me else None,
         }
     except asyncio.TimeoutError:
-        return {"ok": False, "authorized": False, "error": "Таймаут подключения к Telegram"}
+        return {
+            "ok": False,
+            "authorized": False,
+            "fatal": False,
+            "error": "Таймаут подключения к Telegram",
+        }
     except Exception as exc:
-        logger.exception("check_telegram_session failed")
-        return {"ok": False, "authorized": False, "error": str(exc)}
+        auth_err = _telegram_auth_error(exc)
+        logger.warning("check_telegram_session failed: %s", exc)
+        return {
+            "ok": False,
+            "authorized": False,
+            "fatal": bool(auth_err),
+            "error": auth_err or str(exc),
+        }
     finally:
         try:
             await client.disconnect()

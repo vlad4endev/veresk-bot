@@ -133,7 +133,8 @@ CREATE TABLE IF NOT EXISTS send_accounts (
     created_at TEXT NOT NULL,
     last_checked_at TEXT,
     last_ok_at TEXT,
-    last_error TEXT
+    last_error TEXT,
+    fail_streak INTEGER NOT NULL DEFAULT 0
 );
 
 CREATE TABLE IF NOT EXISTS admin_sessions (
@@ -279,6 +280,7 @@ async def init_mailing_db() -> None:
                 ("last_checked_at", "TEXT"),
                 ("last_ok_at", "TEXT"),
                 ("last_error", "TEXT"),
+                ("fail_streak", "INTEGER DEFAULT 0"),
             ):
                 _ensure_column(db, "send_accounts", col, typedef)
             for col, typedef in (
@@ -1813,6 +1815,78 @@ async def bump_account_sent(account_id: int) -> None:
     await _run_db(_bump)
 
 
+async def find_send_account_by_kind_phone(
+    kind: str, phone: str
+) -> dict[str, Any] | None:
+    """Найти аккаунт по kind + национальным 10 цифрам телефона."""
+    want = _phone_digits(phone)
+    if not want:
+        return None
+
+    def _find() -> dict[str, Any] | None:
+        with _connect() as db:
+            rows = db.execute(
+                "SELECT * FROM send_accounts WHERE kind = ?",
+                (kind,),
+            ).fetchall()
+        for row in rows:
+            data = dict(row)
+            if _phone_digits(str(data.get("phone") or "")) == want:
+                return data
+        return None
+
+    return await _run_db(_find)
+
+
+async def upsert_send_account(
+    *,
+    kind: str,
+    label: str,
+    phone: str = "",
+    session_file: str = "",
+    daily_limit: int = 200,
+    status: str = "ready",
+    warmup_until: str | None = None,
+) -> int:
+    """Обновить существующий номер (тот же kind+телефон) или создать новый.
+
+    Повторное подключение не плодит дубликаты и не сбрасывает прогрев,
+    если он уже закончился.
+    """
+    existing = await find_send_account_by_kind_phone(kind, phone)
+    if existing:
+        today = datetime.now().date().isoformat()
+        wu = existing.get("warmup_until")
+        if existing.get("status") == "blocked":
+            new_status = "blocked"
+        elif wu and str(wu) > today:
+            new_status = "warmup"
+        else:
+            new_status = status if status in ("ready", "warmup") else "ready"
+        patch: dict[str, Any] = {
+            "label": label or existing.get("label") or phone,
+            "phone": phone or existing.get("phone") or "",
+            "session_file": session_file or existing.get("session_file") or "",
+            "status": new_status,
+            "last_error": None,
+            "fail_streak": 0,
+            "last_ok_at": _now(),
+        }
+        if daily_limit:
+            patch["daily_limit"] = daily_limit
+        await update_send_account(int(existing["id"]), **patch)
+        return int(existing["id"])
+    return await create_send_account(
+        kind=kind,
+        label=label,
+        phone=phone,
+        session_file=session_file,
+        daily_limit=daily_limit,
+        status=status,
+        warmup_until=warmup_until,
+    )
+
+
 async def update_send_account(account_id: int, **fields: Any) -> bool:
     allowed = {
         "label",
@@ -1826,6 +1900,7 @@ async def update_send_account(account_id: int, **fields: Any) -> bool:
         "last_checked_at",
         "last_ok_at",
         "last_error",
+        "fail_streak",
     }
     updates = {k: v for k, v in fields.items() if k in allowed}
     if not updates:

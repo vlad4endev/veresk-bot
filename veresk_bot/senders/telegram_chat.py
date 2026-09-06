@@ -17,8 +17,8 @@ from typing import Any, AsyncIterator
 
 from senders.telegram_userbot import (
     _normalize_phone,
-    get_api_credentials,
     is_telethon_configured,
+    make_telegram_client,
 )
 
 logger = logging.getLogger(__name__)
@@ -77,34 +77,59 @@ async def _ensure_entry(session_file: str, account_id: int | None = None) -> _Po
     if not session_file:
         raise RuntimeError("session_file пустой")
 
+    last_exc: BaseException | None = None
+    for attempt in range(2):
+        try:
+            return await _ensure_entry_once(session_file, account_id)
+        except RuntimeError:
+            await release_session(session_file=session_file)
+            raise
+        except Exception as exc:
+            last_exc = exc
+            logger.warning(
+                "Telegram pool connect failed (attempt %s): %s",
+                attempt + 1,
+                exc,
+            )
+            await release_session(session_file=session_file)
+            if attempt == 0:
+                await asyncio.sleep(0.6)
+    if last_exc:
+        raise last_exc
+    raise RuntimeError("Сессия Telegram недоступна")
+
+
+async def _ensure_entry_once(
+    session_file: str, account_id: int | None = None
+) -> _PoolEntry:
     key = _session_key(session_file)
     async with _pool_guard:
         entry = _pool.get(key)
         if entry is not None:
             if account_id is not None:
                 entry.account_id = account_id
-            return entry
-
-        from telethon import TelegramClient
-
-        api_id, api_hash = get_api_credentials()
-        client = TelegramClient(_session_base(session_file), api_id, api_hash)
-        entry = _PoolEntry(client, account_id, session_file)
-        _pool[key] = entry
+            # fall through to connect check
+        else:
+            client = make_telegram_client(_session_base(session_file))
+            entry = _PoolEntry(client, account_id, session_file)
+            _pool[key] = entry
 
     async with entry.lock:
-        if not entry.client.is_connected():
-            await asyncio.wait_for(entry.client.connect(), timeout=25)
-        if not await entry.client.is_user_authorized():
-            await release_session(session_file=session_file)
-            raise RuntimeError("Сессия не авторизована — переподключите аккаунт")
-        if entry.me_id is None:
-            try:
-                me = await entry.client.get_me()
-                entry.me_id = int(me.id) if me else None
-            except Exception:
-                logger.debug("warmup get_me failed", exc_info=True)
+        await _ensure_connected(entry)
     return entry
+
+
+async def _ensure_connected(entry: _PoolEntry) -> None:
+    if not entry.client.is_connected():
+        await asyncio.wait_for(entry.client.connect(), timeout=25)
+    if not await entry.client.is_user_authorized():
+        raise RuntimeError("Сессия не авторизована — переподключите аккаунт")
+    if entry.me_id is None:
+        try:
+            me = await asyncio.wait_for(entry.client.get_me(), timeout=15)
+            entry.me_id = int(me.id) if me else None
+        except Exception:
+            logger.debug("warmup get_me failed", exc_info=True)
 
 
 def _invalidate_dialogs_cache(session_file: str) -> None:
@@ -122,10 +147,7 @@ async def telegram_session(
     """Взять клиент под локом (для отправки / чтения / проверки)."""
     entry = await _ensure_entry(session_file, account_id)
     async with entry.lock:
-        if not entry.client.is_connected():
-            await asyncio.wait_for(entry.client.connect(), timeout=25)
-        if not await entry.client.is_user_authorized():
-            raise RuntimeError("Сессия не авторизована — переподключите аккаунт")
+        await _ensure_connected(entry)
         yield entry.client
 
 
@@ -174,6 +196,29 @@ def _avatar_to_mem(key: str, data: bytes, mime: str) -> None:
         oldest = min(_avatar_mem.items(), key=lambda kv: kv[1][0])[0]
         _avatar_mem.pop(oldest, None)
     _avatar_mem[key] = (time.time(), data, mime)
+
+
+async def ping_pooled_sessions() -> None:
+    """Короткий ping живых клиентов — держит TCP/NAT и ловит отозванные ключи."""
+    async with _pool_guard:
+        entries = list(_pool.values())
+    for entry in entries:
+        try:
+            async with entry.lock:
+                await _ensure_connected(entry)
+                await asyncio.wait_for(entry.client.get_me(), timeout=15)
+        except RuntimeError:
+            await release_session(session_file=entry.session_file)
+            logger.warning(
+                "Telegram pool ping: сессия отозвана %s",
+                entry.session_file,
+            )
+        except Exception as exc:
+            logger.warning(
+                "Telegram pool ping failed for %s: %s",
+                entry.session_file,
+                exc,
+            )
 
 
 async def release_session(
