@@ -690,8 +690,17 @@ async def cancel_telegram_qr_login(login_id: str | None = None) -> None:
             remove_session_file(session_base + ".session")
 
 
+# Бюджет на один файл при recovery — иначе GET /accounts зависает на мёртвых qr_*.
+_RECOVER_CONNECT_TIMEOUT = 8.0
+_RECOVER_TOTAL_BUDGET = 20.0
+
+
 async def recover_authorized_qr_sessions() -> list[dict[str, Any]]:
-    """Подхватить qr_/acc_ сессии, уже авторизованные, но не зарегистрированные в UI."""
+    """Подхватить qr_/acc_ сессии, уже авторизованные, но не зарегистрированные в UI.
+
+    Каждый connect ограничен таймаутом; общий бюджет — чтобы список аккаунтов
+    в админке не зависал на незавершённых QR-файлах.
+    """
     if not is_telethon_configured():
         return []
     try:
@@ -720,7 +729,15 @@ async def recover_authorized_qr_sessions() -> list[dict[str, Any]]:
     paths = list(sessions_path().glob("qr_*.session")) + list(
         sessions_path().glob("acc_*.session")
     )
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + _RECOVER_TOTAL_BUDGET
     for path in sorted(set(paths)):
+        if loop.time() >= deadline:
+            logger.warning(
+                "QR session recovery budget exhausted (%ss) — remaining files skipped",
+                _RECOVER_TOTAL_BUDGET,
+            )
+            break
         session_file = str(path)
         if session_file in known:
             continue
@@ -729,8 +746,12 @@ async def recover_authorized_qr_sessions() -> list[dict[str, Any]]:
             continue
         client = TelegramClient(base, api_id, api_hash)
         try:
-            await client.connect()
-            if not await client.is_user_authorized():
+            await asyncio.wait_for(
+                client.connect(), timeout=_RECOVER_CONNECT_TIMEOUT
+            )
+            if not await asyncio.wait_for(
+                client.is_user_authorized(), timeout=_RECOVER_CONNECT_TIMEOUT
+            ):
                 await client.disconnect()
                 # Битый незавершённый qr_ можно оставить — cancel почистит
                 continue
@@ -741,6 +762,16 @@ async def recover_authorized_qr_sessions() -> list[dict[str, Any]]:
                     "Recovered authorized Telegram session → %s",
                     result.get("session_file"),
                 )
+        except asyncio.TimeoutError:
+            logger.warning(
+                "Telegram session recover timed out for %s (>%ss)",
+                path.name,
+                _RECOVER_CONNECT_TIMEOUT,
+            )
+            try:
+                await client.disconnect()
+            except Exception:
+                pass
         except Exception:
             logger.exception("Failed recovering Telegram session %s", path)
             try:
