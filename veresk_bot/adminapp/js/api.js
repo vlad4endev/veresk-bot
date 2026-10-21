@@ -212,6 +212,17 @@ const AdminAPI = (() => {
         method: "POST",
         body: JSON.stringify({ api_id, api_hash }),
       }),
+    tgProxySettings: () => request("/api/admin/accounts/telegram/proxy"),
+    tgSaveProxy: (body) =>
+      request("/api/admin/accounts/telegram/proxy", {
+        method: "POST",
+        body: JSON.stringify(body || {}),
+      }),
+    tgTestProxy: () =>
+      request("/api/admin/accounts/telegram/proxy/test", {
+        method: "POST",
+        body: "{}",
+      }),
     maxSettings: () => request("/api/admin/accounts/max/settings"),
     maxSaveSettings: (body) =>
       request("/api/admin/accounts/max/settings", {

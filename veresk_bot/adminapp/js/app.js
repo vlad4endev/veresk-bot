@@ -4969,6 +4969,121 @@
     });
   }
 
+  function renderTgProxyStatus(p) {
+    const box = $("#tgProxyStatus");
+    const hint = $("#tgProxyHint");
+    if (!box) return;
+    if (!p || !p.configured) {
+      box.innerHTML =
+        '<span class="status-pill warn"><span class="d"></span>Не задан</span>';
+      if (hint) hint.textContent = "";
+      return;
+    }
+    if (!p.enabled) {
+      box.innerHTML =
+        '<span class="status-pill warn"><span class="d"></span>Выключен</span>';
+    } else if (p.running) {
+      box.innerHTML =
+        '<span class="status-pill ok"><span class="d"></span>' +
+        esc(String(p.kind || "proxy").toUpperCase()) +
+        " · работает</span>";
+    } else {
+      box.innerHTML =
+        '<span class="status-pill err"><span class="d"></span>Ошибка</span>';
+    }
+    if (hint) {
+      const bits = [];
+      if (p.remark) bits.push(p.remark);
+      else if (p.uri_masked) bits.push(p.uri_masked);
+      if (p.local && p.enabled) bits.push("локально " + p.local);
+      if (!p.singbox) bits.push("sing-box не установлен на сервере");
+      if (p.error) bits.push(p.error);
+      hint.textContent = bits.join(" · ");
+    }
+  }
+
+  async function loadTgProxyStatus() {
+    const enabledEl = $("#tgProxyEnabled");
+    const uriEl = $("#tgProxyUri");
+    try {
+      const s = await AdminAPI.tgSettings();
+      const p = s.proxy || (await AdminAPI.tgProxySettings());
+      if (enabledEl) enabledEl.checked = !!p.enabled;
+      if (uriEl && typeof p.uri === "string" && !uriEl.dataset.dirty) {
+        uriEl.value = p.uri;
+      }
+      renderTgProxyStatus(p);
+    } catch (_) {
+      try {
+        const p = await AdminAPI.tgProxySettings();
+        if (enabledEl) enabledEl.checked = !!p.enabled;
+        if (uriEl && typeof p.uri === "string" && !uriEl.dataset.dirty) {
+          uriEl.value = p.uri;
+        }
+        renderTgProxyStatus(p);
+      } catch (__) {
+        renderTgProxyStatus(null);
+      }
+    }
+  }
+
+  $("#tgProxyUri")?.addEventListener("input", () => {
+    const el = $("#tgProxyUri");
+    if (el) el.dataset.dirty = "1";
+  });
+
+  $("#tgProxySave")?.addEventListener("click", async () => {
+    const uri = ($("#tgProxyUri")?.value || "").trim();
+    const enabled = !!$("#tgProxyEnabled")?.checked;
+    if (enabled && !uri) {
+      return alert("Вставьте ссылку vless:// или hysteria2://");
+    }
+    try {
+      const res = await AdminAPI.tgSaveProxy({ uri, enabled });
+      const uriEl = $("#tgProxyUri");
+      if (uriEl) delete uriEl.dataset.dirty;
+      renderTgProxyStatus(res);
+      if (!res.ok) {
+        return alert(res.detail || res.error || "Не удалось поднять прокси");
+      }
+      alert(
+        enabled
+          ? "Прокси сохранён — трафик Telegram идёт через него"
+          : "Прокси сохранён (выключен)"
+      );
+    } catch (err) {
+      alert(err.data?.detail || err.data?.error || err.message);
+    }
+  });
+
+  $("#tgProxyTest")?.addEventListener("click", async () => {
+    try {
+      const res = await AdminAPI.tgTestProxy();
+      renderTgProxyStatus(res);
+      if (res.ok) alert(res.detail || "Прокси работает");
+      else alert(res.error || "Проверка не прошла");
+    } catch (err) {
+      alert(err.data?.error || err.data?.detail || err.message);
+    }
+  });
+
+  $("#tgProxyClear")?.addEventListener("click", async () => {
+    if (!confirm("Отключить прокси и удалить ключ?")) return;
+    try {
+      const res = await AdminAPI.tgSaveProxy({ clear: true });
+      const uriEl = $("#tgProxyUri");
+      if (uriEl) {
+        uriEl.value = "";
+        delete uriEl.dataset.dirty;
+      }
+      if ($("#tgProxyEnabled")) $("#tgProxyEnabled").checked = false;
+      renderTgProxyStatus(res);
+      alert("Прокси отключён");
+    } catch (err) {
+      alert(err.data?.error || err.message);
+    }
+  });
+
   async function loadTgApiStatus() {
     const box = $("#tgApiStatus");
     if (!box) return;
@@ -4986,7 +5101,9 @@
         box.innerHTML =
           '<span class="status-pill warn"><span class="d"></span>Не заданы</span>';
       }
+      if (s.proxy) renderTgProxyStatus(s.proxy);
     } catch (_) {}
+    loadTgProxyStatus();
   }
 
   $("#tgApiSave")?.addEventListener("click", async () => {

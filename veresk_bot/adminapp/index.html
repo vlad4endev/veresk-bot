@@ -645,6 +645,43 @@
               </div>
             </details>
 
+            <!-- 1b. Proxy for Telegram traffic -->
+            <details class="set-block set-details" id="tgProxyForm" open>
+              <summary class="set-details-sum">
+                <div>
+                  <h4>Прокси VLESS / Hysteria2</h4>
+                  <p>Весь трафик бота и номеров Telegram — через ваш ключ.</p>
+                </div>
+                <div id="tgProxyStatus" class="form-status form-status-inline"></div>
+              </summary>
+              <div class="set-details-body">
+                <p class="form-lead">
+                  Вставьте ссылку <code>vless://…</code> или <code>hysteria2://…</code> / <code>hy2://…</code>
+                  из клиента VPN. Поднимется локальный SOCKS — и Bot API, и Telethon пойдут через него.
+                </p>
+                <form class="pw-form" autocomplete="off" onsubmit="return false;">
+                  <label class="check-row" for="tgProxyEnabled" style="display:flex;align-items:center;gap:8px;margin-bottom:10px;">
+                    <input id="tgProxyEnabled" type="checkbox">
+                    <span>Включить прокси для Telegram</span>
+                  </label>
+                  <label for="tgProxyUri">Ключ / ссылка</label>
+                  <textarea
+                    id="tgProxyUri"
+                    rows="3"
+                    spellcheck="false"
+                    placeholder="vless://uuid@host:443?security=reality&amp;pbk=…&#10;или hysteria2://password@host:443/?sni=…"
+                    style="width:100%;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12.5px;resize:vertical;"
+                  ></textarea>
+                  <p class="form-foot" id="tgProxyHint" style="margin-top:8px;"></p>
+                  <div class="form-actions">
+                    <button type="button" class="btn primary" id="tgProxySave">Сохранить прокси</button>
+                    <button type="button" class="btn" id="tgProxyTest">Проверить</button>
+                    <button type="button" class="btn" id="tgProxyClear">Отключить</button>
+                  </div>
+                </form>
+              </div>
+            </details>
+
             <!-- 2. Numbers -->
             <div class="set-block">
               <div class="set-block-head">

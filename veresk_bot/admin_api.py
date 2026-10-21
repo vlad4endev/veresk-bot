@@ -2395,12 +2395,19 @@ async def handle_telegram_settings_get(request: web.Request) -> web.Response:
         return err
     api_id, api_hash = get_api_credentials()
     from_env = bool(runtime_settings.get("telegram_api_id")) is False and bool(api_id)
+    from telegram_proxy import get_proxy_uri, proxy_status
+
     return _json(
         {
             "configured": bool(api_id and api_hash),
             "api_id": api_id or None,
             "api_hash_set": bool(api_hash),
             "from_env": from_env,
+            "proxy": {
+                **proxy_status(),
+                # полный URI только для формы (админ уже авторизован)
+                "uri": get_proxy_uri() or "",
+            },
         }
     )
 
@@ -2429,6 +2436,77 @@ async def handle_telegram_settings_save(request: web.Request) -> web.Response:
         {"telegram_api_id": api_id, "telegram_api_hash": raw_hash}
     )
     return _json({"ok": True, "configured": is_telethon_configured()})
+
+
+async def _rebind_telegram_after_proxy_change() -> None:
+    """Сбросить Telethon-пул и HTTP-сессию бота, чтобы трафик пошёл через новый прокси."""
+    try:
+        from senders.telegram_chat import release_all_sessions
+
+        await release_all_sessions()
+    except Exception:
+        logger.debug("release_all_sessions after proxy change failed", exc_info=True)
+    # Не импортируем bot.py из admin_local — только если модуль уже загружен (процесс bot).
+    try:
+        import sys
+
+        bot_mod = sys.modules.get("bot")
+        rebind = getattr(bot_mod, "rebind_bot_session", None) if bot_mod else None
+        if rebind:
+            await rebind()
+    except Exception:
+        logger.debug("bot session rebind after proxy failed", exc_info=True)
+
+
+async def handle_telegram_proxy_get(request: web.Request) -> web.Response:
+    err = await _require_admin(request)
+    if err:
+        return err
+    from telegram_proxy import get_proxy_uri, proxy_status
+
+    return _json({**proxy_status(), "uri": get_proxy_uri() or ""})
+
+
+async def handle_telegram_proxy_save(request: web.Request) -> web.Response:
+    err = await _require_admin(request)
+    if err:
+        return err
+    try:
+        body = await request.json()
+    except Exception:
+        return _json({"error": "invalid_json"}, status=400)
+
+    from telegram_proxy import save_proxy_settings
+
+    clear = bool(body.get("clear"))
+    uri = body.get("uri")
+    enabled = body.get("enabled")
+    if enabled is not None:
+        enabled = bool(enabled)
+
+    try:
+        result = save_proxy_settings(
+            uri=None if uri is None else str(uri),
+            enabled=enabled,
+            clear=clear,
+        )
+    except ValueError as exc:
+        return _json({"ok": False, "error": "invalid_uri", "detail": str(exc)}, status=400)
+
+    await _rebind_telegram_after_proxy_change()
+    status = 200 if result.get("ok") else 502
+    return _json(result, status=status)
+
+
+async def handle_telegram_proxy_test(request: web.Request) -> web.Response:
+    err = await _require_admin(request)
+    if err:
+        return err
+    from telegram_proxy import test_proxy_connectivity
+
+    result = await test_proxy_connectivity()
+    status = 200 if result.get("ok") else 502
+    return _json(result, status=status)
 
 
 def _mask_token(token: str) -> str:
@@ -5617,9 +5695,17 @@ async def _notify_wheel_prize(
                 from aiogram import Bot
                 from aiogram.client.session.aiohttp import AiohttpSession
 
+                from telegram_proxy import local_socks_url
+
                 if not BOT_TOKEN:
                     return False
-                bot = Bot(token=BOT_TOKEN, session=AiohttpSession(timeout=60))
+                proxy = local_socks_url()
+                session = (
+                    AiohttpSession(timeout=60, proxy=proxy)
+                    if proxy
+                    else AiohttpSession(timeout=60)
+                )
+                bot = Bot(token=BOT_TOKEN, session=session)
                 try:
                     await bot.send_message(int(uid), text_md, parse_mode="Markdown")
                 finally:
@@ -6196,6 +6282,9 @@ def setup_admin_routes(app: web.Application) -> None:
         ("/api/admin/accounts", handle_accounts_list, "GET"),
         ("/api/admin/accounts/telegram/settings", handle_telegram_settings_get, "GET"),
         ("/api/admin/accounts/telegram/settings", handle_telegram_settings_save, "POST"),
+        ("/api/admin/accounts/telegram/proxy", handle_telegram_proxy_get, "GET"),
+        ("/api/admin/accounts/telegram/proxy", handle_telegram_proxy_save, "POST"),
+        ("/api/admin/accounts/telegram/proxy/test", handle_telegram_proxy_test, "POST"),
         ("/api/admin/accounts/telegram/start", handle_telegram_connect_start, "POST"),
         ("/api/admin/accounts/telegram/resend", handle_telegram_connect_resend, "POST"),
         ("/api/admin/accounts/telegram/confirm", handle_telegram_connect_confirm, "POST"),
@@ -6267,6 +6356,22 @@ def setup_admin_routes(app: web.Application) -> None:
 
 async def _admin_background_startup() -> None:
     """Posiflora + MAX webhook — после того, как HTTP уже слушает порт."""
+    try:
+        from telegram_proxy import ensure_proxy_running_async, is_proxy_enabled
+
+        if is_proxy_enabled():
+            result = await ensure_proxy_running_async()
+            if result.get("ok"):
+                logger.info(
+                    "Telegram proxy ready: %s → %s",
+                    result.get("kind"),
+                    result.get("local"),
+                )
+            else:
+                logger.error("Telegram proxy failed: %s", result.get("error"))
+    except Exception:
+        logger.exception("Telegram proxy startup failed")
+
     try:
         from max_bot.webhook_runtime import (
             ensure_runtime,
