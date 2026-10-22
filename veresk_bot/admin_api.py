@@ -2485,7 +2485,8 @@ async def handle_telegram_proxy_save(request: web.Request) -> web.Response:
         enabled = bool(enabled)
 
     try:
-        result = save_proxy_settings(
+        result = await asyncio.to_thread(
+            save_proxy_settings,
             uri=None if uri is None else str(uri),
             enabled=enabled,
             clear=clear,
@@ -3250,9 +3251,29 @@ async def _probe_telegram_bot() -> dict[str, Any]:
     try:
         import aiohttp
 
+        from telegram_proxy import (
+            aiohttp_proxy_connector,
+            ensure_proxy_running_async,
+            is_proxy_enabled,
+        )
+
+        connector = None
+        if is_proxy_enabled():
+            started = await ensure_proxy_running_async()
+            if not started.get("ok"):
+                return {
+                    "configured": True,
+                    "api_ok": False,
+                    "username": None,
+                    "name": None,
+                    "bot_id": None,
+                    "error": str(started.get("error") or "proxy_not_running")[:200],
+                }
+            connector = aiohttp_proxy_connector()
+
         url = f"https://api.telegram.org/bot{token}/getMe"
         timeout = aiohttp.ClientTimeout(total=12)
-        async with aiohttp.ClientSession(timeout=timeout) as session:
+        async with aiohttp.ClientSession(timeout=timeout, connector=connector) as session:
             async with session.get(url) as resp:
                 data = await resp.json(content_type=None)
         if not data.get("ok"):

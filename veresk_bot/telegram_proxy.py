@@ -12,6 +12,8 @@ aiogram ходят только через него.
 from __future__ import annotations
 
 import asyncio
+import base64
+import ipaddress
 import json
 import logging
 import os
@@ -73,6 +75,19 @@ def local_socks_url() -> str | None:
     return f"socks5://{LOCAL_HOST}:{LOCAL_PORT}"
 
 
+def aiohttp_proxy_connector() -> Any | None:
+    """SOCKS-коннектор на локальный sing-box. None — прокси выключен."""
+    url = local_socks_url()
+    if not url:
+        return None
+    try:
+        from aiohttp_socks import ProxyConnector
+    except ImportError:
+        logger.error("aiohttp-socks не установлен — прямой запрос к Telegram не уйдёт в прокси")
+        return None
+    return ProxyConnector.from_url(url, rdns=True)
+
+
 def telethon_proxy() -> Any | None:
     """Кортеж для TelegramClient(proxy=…). None — без прокси."""
     if not is_proxy_enabled():
@@ -80,18 +95,19 @@ def telethon_proxy() -> Any | None:
     try:
         from python_socks import ProxyType
 
-        return (ProxyType.SOCKS5, LOCAL_HOST, LOCAL_PORT)
+        # rdns=True: имена Telegram резолвятся на стороне sing-box, не на хосте
+        return (ProxyType.SOCKS5, LOCAL_HOST, LOCAL_PORT, True)
     except ImportError:
         # PySocks fallback
         try:
             import socks  # type: ignore
 
-            return (socks.SOCKS5, LOCAL_HOST, LOCAL_PORT)
+            return (socks.SOCKS5, LOCAL_HOST, LOCAL_PORT, True)
         except ImportError:
             logger.error(
                 "Нужен python-socks или PySocks для Telethon через прокси"
             )
-            return (2, LOCAL_HOST, LOCAL_PORT)  # ProxyType.SOCKS5 == 2
+            return (2, LOCAL_HOST, LOCAL_PORT, True)  # ProxyType.SOCKS5 == 2
 
 
 def find_singbox() -> str | None:
@@ -120,6 +136,21 @@ def _as_bool(raw: str) -> bool:
     return raw.strip().lower() in ("1", "true", "yes", "on")
 
 
+_SHARE_RE = re.compile(r"(?i)(vless|hysteria2|hy2)://\S+")
+_UTLS_FP = {
+    "chrome",
+    "firefox",
+    "edge",
+    "safari",
+    "360",
+    "qq",
+    "ios",
+    "android",
+    "random",
+    "randomized",
+}
+
+
 def detect_proxy_kind(uri: str) -> str | None:
     low = (uri or "").strip().lower()
     if low.startswith("vless://"):
@@ -127,6 +158,74 @@ def detect_proxy_kind(uri: str) -> str | None:
     if low.startswith("hysteria2://") or low.startswith("hy2://"):
         return "hysteria2"
     return None
+
+
+def _normalize_share_uri(uri: str) -> str:
+    """Достать ссылку из вставки: пробелы, кавычки, одна base64-строка."""
+    raw = (uri or "").strip().strip("`\"'<>")
+    raw = re.sub(r"\s+", "", raw)
+    found = _SHARE_RE.search(raw)
+    if found:
+        return found.group(0)
+    if len(raw) < 16:
+        return raw
+    try:
+        pad = "=" * (-len(raw) % 4)
+        decoded = base64.urlsafe_b64decode(raw + pad).decode("utf-8")
+    except Exception:
+        return raw
+    decoded = re.sub(r"\s+", "", decoded)
+    found = _SHARE_RE.search(decoded)
+    return found.group(0) if found else raw
+
+
+def _is_ip_literal(host: str) -> bool:
+    try:
+        ipaddress.ip_address(host)
+    except ValueError:
+        return False
+    return True
+
+
+def _fingerprint(raw: str) -> str:
+    fp = (raw or "").strip().lower().replace("-", "_")
+    if fp in ("ff",):
+        return "firefox"
+    if fp in _UTLS_FP:
+        return fp
+    if fp.startswith("chrome"):
+        return "chrome"
+    return "chrome"
+
+
+def _vless_flow(raw: str) -> str | None:
+    flow = (raw or "").strip().lower()
+    if flow in ("xtls-rprx-vision", "xtls-rprx-vision-udp443"):
+        return "xtls-rprx-vision"
+    return None
+
+
+def _server_ports(raw: str) -> list[str]:
+    ports: list[str] = []
+    for part in raw.split(","):
+        piece = part.strip()
+        if not piece:
+            continue
+        if "-" in piece and ":" not in piece:
+            left, right = piece.split("-", 1)
+            lo, hi = int(left), int(right)
+        elif ":" in piece:
+            left, right = piece.split(":", 1)
+            lo, hi = int(left), int(right)
+        else:
+            ports.append(str(int(piece)))
+            continue
+        if lo <= 0 or hi > 65535 or lo > hi:
+            raise ValueError(f"Некорректный диапазон портов: {piece}")
+        ports.append(f"{lo}:{hi}")
+    if not ports:
+        raise ValueError("Пустой диапазон портов Hysteria2")
+    return ports
 
 
 def _parse_authority(netloc: str) -> tuple[str, str, int]:
@@ -157,11 +256,9 @@ def _parse_authority(netloc: str) -> tuple[str, str, int]:
 
 def parse_proxy_uri(uri: str) -> dict[str, Any]:
     """Разобрать vless:// или hysteria2:// → метаданные + outbound для sing-box."""
-    raw = (uri or "").strip()
+    raw = _normalize_share_uri(uri)
     if not raw:
         raise ValueError("Ссылка пустая")
-    # Убрать пробелы/переносы из вставки
-    raw = re.sub(r"\s+", "", raw)
     kind = detect_proxy_kind(raw)
     if not kind:
         raise ValueError(
@@ -178,12 +275,19 @@ def parse_proxy_uri(uri: str) -> dict[str, Any]:
     else:
         outbound = _hysteria2_outbound(userinfo, host, port, qs)
 
+    warning = None
+    if kind == "hysteria2" and _qs_first(qs, "pinSHA256", "pin_sha256", "pin"):
+        warning = (
+            "pinSHA256 из ссылки не применяется: sing-box 1.11 проверяет сертификат обычным TLS"
+        )
+
     return {
         "kind": kind,
         "host": host,
         "port": port,
         "remark": remark,
         "outbound": outbound,
+        "warning": warning,
     }
 
 
@@ -193,7 +297,7 @@ def _tls_block(qs: dict[str, list[str]], *, security: str) -> dict[str, Any] | N
     sni = _qs_first(qs, "sni", "peer", "host")
     insecure = _as_bool(_qs_first(qs, "allowInsecure", "insecure", "allow_insecure"))
     alpn_raw = _qs_first(qs, "alpn")
-    fp = _qs_first(qs, "fp", "fingerprint") or "chrome"
+    fp = _fingerprint(_qs_first(qs, "fp", "fingerprint"))
     tls: dict[str, Any] = {
         "enabled": True,
         "insecure": insecure,
@@ -230,6 +334,9 @@ def _transport_block(qs: dict[str, list[str]]) -> dict[str, Any] | None:
         early = _qs_first(qs, "ed", "earlyData", "max_early_data")
         if early.isdigit():
             transport["max_early_data"] = int(early)
+        eh = _qs_first(qs, "eh", "earlyDataHeaderName")
+        if eh:
+            transport["early_data_header_name"] = eh
         return transport
     if net == "grpc":
         service = _qs_first(qs, "serviceName", "service_name") or "GunService"
@@ -242,9 +349,9 @@ def _transport_block(qs: dict[str, list[str]]) -> dict[str, Any] | None:
             if host_header:
                 t["host"] = host_header
             return t
-        t = {"type": "http", "path": [path] if path else ["/"]}
+        t = {"type": "http", "path": path or "/"}
         if host_header:
-            t["host"] = [host_header]
+            t["host"] = host_header
         return t
     if net == "quic":
         return {"type": "quic"}
@@ -260,8 +367,8 @@ def _vless_outbound(
     # encryption=none в ссылке — не security; Reality узнаём по pbk
     if security in ("", "none") and _qs_first(qs, "pbk"):
         security = "reality"
-    flow = _qs_first(qs, "flow")
-    packet = _qs_first(qs, "packetEncoding", "packetencoding") or "xudp"
+    flow = _vless_flow(_qs_first(qs, "flow"))
+    packet = (_qs_first(qs, "packetEncoding", "packetencoding") or "xudp").lower()
 
     outbound: dict[str, Any] = {
         "type": "vless",
@@ -286,12 +393,14 @@ def _hysteria2_outbound(
     password: str, host: str, port: int, qs: dict[str, list[str]]
 ) -> dict[str, Any]:
     if not password:
+        password = _qs_first(qs, "auth", "password")
+    if not password:
         raise ValueError("Hysteria2: в ссылке нет пароля")
     sni = _qs_first(qs, "sni", "peer") or host
     insecure = _as_bool(_qs_first(qs, "insecure", "allowInsecure"))
     obfs = _qs_first(qs, "obfs")
     obfs_password = _qs_first(qs, "obfs-password", "obfs_password", "obfsPassword")
-    pin = _qs_first(qs, "pinSHA256", "pin_sha256", "pin")
+    mport = _qs_first(qs, "mport", "server_ports")
 
     outbound: dict[str, Any] = {
         "type": "hysteria2",
@@ -305,8 +414,10 @@ def _hysteria2_outbound(
             "insecure": insecure,
         },
     }
-    if pin:
-        outbound["tls"]["certificate_public_key_sha256"] = [pin]
+    if mport:
+        outbound["server_ports"] = _server_ports(mport)
+        outbound["hop_interval"] = "30s"
+    # pinSHA256 sing-box 1.11 не понимает — не кладём в конфиг, иначе процесс не стартует.
     if obfs:
         outbound["obfs"] = {
             "type": obfs if obfs in ("salamander",) else "salamander",
@@ -315,10 +426,30 @@ def _hysteria2_outbound(
     return outbound
 
 
+def _dns_config(server_host: str) -> dict[str, Any]:
+    """DNS Telegram-имён — через туннель. Имя самого прокси резолвится локально, без петли."""
+    dns: dict[str, Any] = {
+        "servers": [
+            {"tag": "bootstrap", "address": "local"},
+            {
+                "tag": "remote",
+                "address": "https://1.1.1.1/dns-query",
+                "detour": "proxy",
+            },
+        ],
+        "final": "remote",
+        "strategy": "prefer_ipv4",
+    }
+    if server_host and not _is_ip_literal(server_host):
+        dns["rules"] = [{"domain": [server_host], "server": "bootstrap"}]
+    return dns
+
+
 def build_singbox_config(uri: str) -> dict[str, Any]:
     meta = parse_proxy_uri(uri)
     return {
         "log": {"level": "warn", "timestamp": True},
+        "dns": _dns_config(str(meta["host"])),
         "inbounds": [
             {
                 "type": "mixed",
@@ -462,6 +593,10 @@ def ensure_proxy_running(*, force_restart: bool = False) -> dict[str, Any]:
         _DATA_DIR.mkdir(parents=True, exist_ok=True)
         _CONFIG_PATH.write_text(config_text, encoding="utf-8")
 
+        try:
+            os.chmod(_CONFIG_PATH, 0o600)
+        except OSError:
+            pass
         log_f = open(_LOG_PATH, "ab", buffering=0)
         try:
             _proc = subprocess.Popen(
@@ -472,7 +607,6 @@ def ensure_proxy_running(*, force_restart: bool = False) -> dict[str, Any]:
                 start_new_session=True,
             )
         except OSError as exc:
-            log_f.close()
             _last_error = f"Не удалось запустить sing-box: {exc}"
             return {
                 "ok": False,
@@ -481,9 +615,10 @@ def ensure_proxy_running(*, force_restart: bool = False) -> dict[str, Any]:
                 "error": _last_error,
                 "kind": meta["kind"],
             }
-
+        finally:
+            # fd уже унаследован процессом sing-box
+            log_f.close()
         _PID_PATH.write_text(str(_proc.pid), encoding="utf-8")
-        # Не закрываем log_f — процесс пишет в него
         if not _wait_port(timeout=8.0):
             rc = _proc.poll()
             tail = ""
@@ -567,6 +702,7 @@ def proxy_status() -> dict[str, Any]:
         "local": f"{LOCAL_HOST}:{LOCAL_PORT}" if enabled else None,
         "singbox": find_singbox() is not None,
         "error": _last_error or parse_error,
+        "warning": (meta or {}).get("warning"),
     }
 
 
@@ -583,13 +719,14 @@ def save_proxy_settings(
 
     updates: dict[str, Any] = {}
     if uri is not None:
-        cleaned = re.sub(r"\s+", "", uri.strip())
-        if cleaned:
-            # валидация до записи
+        cleaned = _normalize_share_uri(uri)
+        if cleaned and detect_proxy_kind(cleaned):
             parse_proxy_uri(cleaned)
             updates["telegram_proxy_uri"] = cleaned
-        else:
+        elif not cleaned:
             runtime_settings.delete_keys("telegram_proxy_uri")
+        else:
+            parse_proxy_uri(cleaned)
     if enabled is not None:
         updates["telegram_proxy_enabled"] = bool(enabled)
 

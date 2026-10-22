@@ -4997,10 +4997,13 @@
       else if (p.uri_masked) bits.push(p.uri_masked);
       if (p.local && p.enabled) bits.push("локально " + p.local);
       if (!p.singbox) bits.push("sing-box не установлен на сервере");
+      if (p.warning) bits.push(p.warning);
       if (p.error) bits.push(p.error);
       hint.textContent = bits.join(" · ");
     }
   }
+
+  let tgProxyEnabledTouched = false;
 
   async function loadTgProxyStatus() {
     const enabledEl = $("#tgProxyEnabled");
@@ -5027,20 +5030,37 @@
     }
   }
 
+  $("#tgProxyEnabled")?.addEventListener("change", () => {
+    tgProxyEnabledTouched = true;
+  });
+
   $("#tgProxyUri")?.addEventListener("input", () => {
     const el = $("#tgProxyUri");
     if (el) el.dataset.dirty = "1";
+    const uri = (el?.value || "").replace(/\s+/g, "");
+    const box = $("#tgProxyEnabled");
+    if (
+      box &&
+      !tgProxyEnabledTouched &&
+      /(vless|hysteria2|hy2):\/\//i.test(uri)
+    ) {
+      box.checked = true;
+    }
   });
 
   $("#tgProxySave")?.addEventListener("click", async () => {
-    const uri = ($("#tgProxyUri")?.value || "").trim();
-    const enabled = !!$("#tgProxyEnabled")?.checked;
+    const uriEl = $("#tgProxyUri");
+    const uri = (uriEl?.value || "").trim();
+    let enabled = !!$("#tgProxyEnabled")?.checked;
+    if (!tgProxyEnabledTouched && uriEl?.dataset.dirty && uri) {
+      enabled = true;
+      if ($("#tgProxyEnabled")) $("#tgProxyEnabled").checked = true;
+    }
     if (enabled && !uri) {
       return alert("Вставьте ссылку vless:// или hysteria2://");
     }
     try {
       const res = await AdminAPI.tgSaveProxy({ uri, enabled });
-      const uriEl = $("#tgProxyUri");
       if (uriEl) delete uriEl.dataset.dirty;
       renderTgProxyStatus(res);
       if (!res.ok) {
