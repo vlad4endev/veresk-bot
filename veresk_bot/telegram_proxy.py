@@ -427,10 +427,15 @@ def _hysteria2_outbound(
 
 
 def _dns_config(server_host: str) -> dict[str, Any]:
-    """DNS Telegram-имён — через туннель. Имя самого прокси резолвится локально, без петли."""
+    """DNS имён Telegram — через туннель.
+
+    Имя самого прокси резолвится напрямую (detour direct). Без этого системный
+    DNS уходит в ещё не поднятый hysteria2/vless и lookup зависает: локальный
+    порт открыт, а api.telegram.org не отвечает.
+    """
     dns: dict[str, Any] = {
         "servers": [
-            {"tag": "bootstrap", "address": "local"},
+            {"tag": "bootstrap", "address": "local", "detour": "direct"},
             {
                 "tag": "remote",
                 "address": "https://1.1.1.1/dns-query",

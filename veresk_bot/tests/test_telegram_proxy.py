@@ -145,6 +145,7 @@ class ParseProxyTests(unittest.TestCase):
         )
         self.assertEqual(domain_cfg["route"]["final"], "proxy")
         self.assertEqual(domain_cfg["dns"]["final"], "remote")
+        self.assertEqual(domain_cfg["dns"]["servers"][0]["detour"], "direct")
         self.assertEqual(domain_cfg["dns"]["servers"][1]["detour"], "proxy")
         self.assertEqual(
             domain_cfg["dns"]["rules"],
