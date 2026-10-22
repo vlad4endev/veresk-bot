@@ -22,6 +22,7 @@ os.environ["TELEGRAM_CHANNEL_USERNAME"] = ""
 import runtime_settings  # noqa: E402
 from channel_subscriptions import (  # noqa: E402
     _channel_full_id,
+    _channel_limitation_note,
     _is_admin_member_status,
     _is_chat_admin_required,
     get_channel_config,
@@ -71,6 +72,7 @@ class ChannelMatchAndRememberTests(unittest.TestCase):
             "telegram_channel_id",
             "telegram_channel_username",
             "telegram_channel_title",
+            "telegram_channel_participants",
         )
 
     def test_save_normalizes_short_id(self) -> None:
@@ -185,6 +187,17 @@ class ChannelMatchAndRememberTests(unittest.TestCase):
 
         self.assertTrue(asyncio.run(_run()))
         self.assertEqual(calls[0][0], "@veresk_flowers")
+
+    def test_save_participants_count(self) -> None:
+        cfg = save_channel_config(channel_id=-100555, participants_count=126)
+        self.assertEqual(cfg["participants_count"], 126)
+        self.assertIn("~126", _channel_limitation_note(participants_count=126, tracked=0))
+        note = _channel_limitation_note(
+            participants_count=126, tracked=3, list_mode="admins"
+        )
+        self.assertIn("ограничение API", note)
+        self.assertIn("администраторы (3)", note)
+        self.assertNotIn("не админ канала", note)
 
 
 if __name__ == "__main__":

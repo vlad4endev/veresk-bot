@@ -1502,6 +1502,9 @@
         const bits = [];
         if (ch.channel_username) bits.push("@" + ch.channel_username);
         if (ch.channel_id) bits.push("id " + ch.channel_id);
+        if (ch.participants_count != null) {
+          bits.push("~" + fmtNum(ch.participants_count) + " в канале");
+        }
         metaEl.textContent = bits.join(" · ");
       } else {
         metaEl.textContent = "Откройте настройки и определите канал";
@@ -1917,20 +1920,26 @@
       subsSelected = keep;
 
       if (!data.items.length) {
+        const pub = data.channel?.participants_count;
         const emptyMsg = subsSearch
           ? "Никого не нашли по запросу"
           : data.channel?.configured
             ? subsFilter === "new"
-              ? `Нет новых подписчиков ${subsNewPeriodHint(subsNewDays)} — смените период или выгрузите список`
-              : "В этом фильтре пока пусто — смените фильтр или выгрузите подписчиков"
+              ? `Нет новых подписчиков ${subsNewPeriodHint(subsNewDays)}`
+              : pub
+                ? `Telegram не отдаёт полный список. В канале ~${fmtNum(pub)} подписчиков — здесь появятся новые, если бот админ канала.`
+                : "В этом фильтре пока пусто. Новые подписки появятся сами, если бот — админ канала."
             : "Канал не определён — нажмите «Определить автоматически»";
         box.innerHTML = `<tr><td colspan="4"><div class="empty-state"><div class="t">${emptyMsg}</div></div></td></tr>`;
         const members = data.stats?.members || 0;
         const neu = data.stats?.new || 0;
+        const pubHint = data.channel?.participants_count != null
+          ? ` · в канале ~${fmtNum(data.channel.participants_count)}`
+          : "";
         $("#subsHint").textContent = data.channel?.configured
           ? subsFilter === "new"
             ? `0 · ${subsNewPeriodHint(data.new_days || subsNewDays)}`
-            : `${fmtNum(members)} подп. · ${fmtNum(neu)} нов. ${subsNewPeriodHint(data.new_days || subsNewDays)} · ${fmtNum(data.stats?.survey || 0)} с анкетой`
+            : `${fmtNum(members)} учтено${pubHint} · ${fmtNum(neu)} нов. ${subsNewPeriodHint(data.new_days || subsNewDays)}`
           : "Канал не настроен";
         syncSubsBulkUi();
         return;
@@ -1996,14 +2005,16 @@
       const neu = data.stats?.new || 0;
       const survey = data.stats?.survey || 0;
       const period = subsNewPeriodHint(data.new_days || subsNewDays);
+      const pub = data.channel?.participants_count;
+      const pubBit = pub != null ? ` · в канале ~${fmtNum(pub)}` : "";
       $("#subsHint").textContent =
         subsFilter === "new"
           ? shown === total
             ? `${fmtNum(total)} ${period}`
             : `Показано ${fmtNum(shown)} из ${fmtNum(total)} ${period}`
           : shown === total
-            ? `${fmtNum(total)} · новых ${period}: ${fmtNum(neu)} · анкета: ${fmtNum(survey)}`
-            : `Показано ${fmtNum(shown)} из ${fmtNum(total)} · новых ${period}: ${fmtNum(neu)}`;
+            ? `${fmtNum(total)} учтено${pubBit} · новых ${period}: ${fmtNum(neu)} · анкета: ${fmtNum(survey)}`
+            : `Показано ${fmtNum(shown)} из ${fmtNum(total)}${pubBit} · новых ${period}: ${fmtNum(neu)}`;
       syncSubsBulkUi();
     } catch (err) {
       if (err.status === 401) return showLogin();
@@ -2171,28 +2182,19 @@
     try {
       const res = await AdminAPI.syncChannelSubscribers();
       if (res.ok) {
-        let msg =
-          res.synced > 0
-            ? `Готово: ${res.synced} участников`
-            : "Выгрузка списка недоступна";
-        if (res.marked_left) msg += `, отмечено отписок: ${res.marked_left}`;
-        if (res.participants_count != null && res.synced === 0) {
-          msg += `\nВ канале ~${res.participants_count} подписчиков (публичный счётчик).`;
-        }
-        if (res.note) msg += `\n\n${res.note}`;
-        alert(msg);
+        alert(
+          res.note ||
+            (res.synced > 0
+              ? `Готово: ${res.synced} участников`
+              : "Канал найден. Полный список Telegram не отдаёт — новые подписки появятся сами.")
+        );
         await loadSubscribers({ skipDiscover: true });
       } else {
-        alert(res.detail || res.error || "Не удалось выгрузить подписчиков");
+        alert(res.detail || res.error || "Не удалось обновить данные канала");
       }
     } catch (err) {
       const detail = err.data?.detail || err.data?.error || err.message;
-      alert(
-        String(detail || "").includes("admin privileges") ||
-          err.data?.error === "chat_admin_required"
-          ? "Нужны права админа канала у Telegram-аккаунта из Настроек (не только у бота).\n\nДобавьте этот аккаунт администратором канала и повторите. Новые подписки бот считает сам, если он тоже админ."
-          : "Ошибка выгрузки: " + detail
-      );
+      alert("Ошибка выгрузки: " + detail);
     }
     btn.disabled = false;
     btn.innerHTML =

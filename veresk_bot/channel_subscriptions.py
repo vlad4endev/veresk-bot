@@ -171,13 +171,31 @@ def _is_chat_admin_required(exc: BaseException) -> bool:
     )
 
 
-_SYNC_ADMIN_REQUIRED_DETAIL = (
-    "Telegram-аккаунт из Настройки → Telegram должен быть администратором канала "
-    "(не только бот).\n\n"
-    "1) Канал → Администраторы → добавьте тот же аккаунт, что подключён в админке.\n"
-    "2) Бот тоже должен быть админом — тогда новые подписки считаются сами "
-    "(кнопка «Выгрузить» для канала всё равно отдаёт только админов)."
-)
+def _channel_limitation_note(
+    *,
+    participants_count: int | None,
+    tracked: int = 0,
+    list_mode: str = "none",
+) -> str:
+    """Пояснение, почему в таблице не все ~N подписчиков канала."""
+    count_line = (
+        f"В канале сейчас ~{int(participants_count)} подписчиков."
+        if participants_count is not None
+        else "Счётчик канала получить не удалось."
+    )
+    if list_mode == "admins" and tracked:
+        extra = f" В таблицу записаны администраторы ({tracked})."
+    elif tracked:
+        extra = f" Бот уже учёл: {tracked}."
+    else:
+        extra = " В таблице пока пусто — появятся новые подписки."
+    return (
+        f"{count_line}\n\n"
+        "Telegram не отдаёт полный список подписчиков канала — это ограничение API, "
+        "не ошибка."
+        f"{extra} "
+        "Новые подписки и отписки бот пишет сам, если он админ канала."
+    )
 
 
 def get_channel_config() -> dict[str, Any]:
@@ -207,11 +225,20 @@ def get_channel_config() -> dict[str, Any]:
 
     title = str(runtime_settings.get("telegram_channel_title") or "").strip()
 
+    participants_count = None
+    raw_count = runtime_settings.get("telegram_channel_participants")
+    if raw_count not in (None, ""):
+        try:
+            participants_count = max(0, int(raw_count))
+        except (TypeError, ValueError):
+            participants_count = None
+
     return {
         "channel_id": channel_id,
         "channel_username": username,
         "channel_title": title,
         "configured": bool(channel_id or username),
+        "participants_count": participants_count,
         "new_days": NEW_SUBSCRIBER_DAYS,
         "new_periods": list(NEW_SUBSCRIBER_PERIODS),
         "welcome": get_welcome_config(),
@@ -375,6 +402,7 @@ def save_channel_config(
     channel_id: int | None = None,
     channel_username: str | None = None,
     channel_title: str | None = None,
+    participants_count: int | None = None,
 ) -> dict[str, Any]:
     payload: dict[str, Any] = {}
     if channel_id is not None:
@@ -385,6 +413,11 @@ def save_channel_config(
         payload["telegram_channel_username"] = str(channel_username).strip().lstrip("@")
     if channel_title is not None:
         payload["telegram_channel_title"] = str(channel_title).strip()
+    if participants_count is not None:
+        try:
+            payload["telegram_channel_participants"] = max(0, int(participants_count))
+        except (TypeError, ValueError):
+            pass
     if payload:
         runtime_settings.set_many(payload)
     return get_channel_config()
@@ -1092,6 +1125,52 @@ async def customers_for_channel_subscribers(
     return await ensure_customers_for_subscribers(ids)
 
 
+def _channel_api_refs(cfg: dict[str, Any] | None = None) -> list[int | str]:
+    cfg = cfg or get_channel_config()
+    refs: list[int | str] = []
+    uname = str(cfg.get("channel_username") or "").strip().lstrip("@")
+    if uname:
+        refs.append("@" + uname)
+    cid = cfg.get("channel_id")
+    if cid:
+        try:
+            refs.append(int(cid))
+        except (TypeError, ValueError):
+            pass
+    return refs
+
+
+async def _bot_api_call(method: str, payload: dict[str, Any]) -> dict[str, Any] | None:
+    """Один вызов Bot API через прокси, если он включён."""
+    try:
+        import aiohttp
+
+        from config import BOT_TOKEN
+        from telegram_proxy import aiohttp_proxy_connector, ensure_proxy_running, is_proxy_enabled
+    except ImportError:
+        return None
+    if is_proxy_enabled():
+        try:
+            ensure_proxy_running()
+        except Exception:
+            logger.debug("ensure_proxy_running before %s failed", method, exc_info=True)
+
+    url = f"https://api.telegram.org/bot{BOT_TOKEN}/{method}"
+    timeout = aiohttp.ClientTimeout(total=15)
+    connector = aiohttp_proxy_connector()
+    session_kwargs: dict[str, Any] = {"timeout": timeout}
+    if connector is not None:
+        session_kwargs["connector"] = connector
+    try:
+        async with aiohttp.ClientSession(**session_kwargs) as session:
+            async with session.post(url, json=payload) as resp:
+                data = await resp.json(content_type=None)
+    except Exception:
+        logger.debug("Bot API %s failed", method, exc_info=True)
+        return None
+    return data if isinstance(data, dict) else None
+
+
 async def _bot_api_member_status(chat_id: int | str, user_id: int) -> str | None:
     """Статус участника через Bot API (бот сам проверяет, что он админ).
 
@@ -1100,37 +1179,10 @@ async def _bot_api_member_status(chat_id: int | str, user_id: int) -> str | None
     """
     if not chat_id or not user_id:
         return None
-    try:
-        import aiohttp
-
-        from config import BOT_TOKEN
-        from telegram_proxy import aiohttp_proxy_connector, ensure_proxy_running, is_proxy_enabled
-    except ImportError:
-        return None
-
-    if is_proxy_enabled():
-        try:
-            ensure_proxy_running()
-        except Exception:
-            logger.debug("ensure_proxy_running before getChatMember failed", exc_info=True)
-
-    url = f"https://api.telegram.org/bot{BOT_TOKEN}/getChatMember"
-    timeout = aiohttp.ClientTimeout(total=15)
-    connector = aiohttp_proxy_connector()
-    session_kwargs: dict[str, Any] = {"timeout": timeout}
-    if connector is not None:
-        session_kwargs["connector"] = connector
-    try:
-        async with aiohttp.ClientSession(**session_kwargs) as session:
-            async with session.post(
-                url, json={"chat_id": chat_id, "user_id": int(user_id)}
-            ) as resp:
-                data = await resp.json(content_type=None)
-    except Exception:
-        logger.debug("getChatMember failed chat=%s", chat_id, exc_info=True)
-        return None
-
-    if not isinstance(data, dict):
+    data = await _bot_api_call(
+        "getChatMember", {"chat_id": chat_id, "user_id": int(user_id)}
+    )
+    if not data:
         return None
     if data.get("ok"):
         result = data.get("result") or {}
@@ -1149,6 +1201,78 @@ async def _bot_api_member_status(chat_id: int | str, user_id: int) -> str | None
         return "left"
     logger.debug("getChatMember: %s", data)
     return None
+
+
+async def _bot_api_member_count(chat_id: int | str) -> int | None:
+    data = await _bot_api_call("getChatMemberCount", {"chat_id": chat_id})
+    if not data or not data.get("ok"):
+        return None
+    try:
+        return max(0, int(data.get("result")))
+    except (TypeError, ValueError):
+        return None
+
+
+async def _upsert_bot_api_administrators(channel_id: int, chat_id: int | str) -> int:
+    """Админы канала через Bot API — бот сам админ, личный аккаунт не нужен."""
+    data = await _bot_api_call("getChatAdministrators", {"chat_id": chat_id})
+    if not data or not data.get("ok"):
+        return 0
+    rows = data.get("result") or []
+    if not isinstance(rows, list):
+        return 0
+    n = 0
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        user = row.get("user") or {}
+        if not isinstance(user, dict) or user.get("is_bot"):
+            continue
+        try:
+            uid = int(user.get("id") or 0)
+        except (TypeError, ValueError):
+            continue
+        if not uid:
+            continue
+        status = str(row.get("status") or "administrator")
+        await upsert_subscription(
+            tg_user_id=uid,
+            channel_id=channel_id,
+            status=status,
+            username=str(user.get("username") or ""),
+            first_name=str(user.get("first_name") or ""),
+            last_name=str(user.get("last_name") or ""),
+            source="sync",
+        )
+        n += 1
+    return n
+
+
+async def refresh_channel_stats_via_bot_api(
+    *,
+    channel_id: int | None = None,
+    upsert_admins: bool = True,
+) -> dict[str, Any]:
+    """Счётчик канала + админы через Bot API (бот должен быть админом канала)."""
+    cfg = get_channel_config()
+    cid = normalize_telegram_channel_id(channel_id or cfg.get("channel_id") or 0)
+    refs = _channel_api_refs({**cfg, "channel_id": cid or cfg.get("channel_id")})
+    count: int | None = None
+    admins_n = 0
+    for ref in refs:
+        if count is None:
+            count = await _bot_api_member_count(ref)
+        if upsert_admins and cid and not admins_n:
+            admins_n = await _upsert_bot_api_administrators(cid, ref)
+        if count is not None and (admins_n or not upsert_admins or not cid):
+            break
+    if count is not None:
+        save_channel_config(participants_count=count)
+    return {
+        "participants_count": count,
+        "admins_synced": admins_n,
+        "channel_id": cid or None,
+    }
 
 
 async def _bot_is_admin_of_channel(ch: dict[str, Any], bot_id: int) -> bool | None:
@@ -1274,35 +1398,40 @@ async def sync_channel_subscribers_via_telethon(
     participants_count: int | None = None
     list_mode = "members"  # members | admins | none
 
-    def _admin_required_result(*, ok: bool) -> dict[str, Any]:
-        payload: dict[str, Any] = {
-            "ok": ok,
-            "error": None if ok else "chat_admin_required",
-            "detail": None if ok else _SYNC_ADMIN_REQUIRED_DETAIL,
+    async def _finish_without_full_list(*, via_bot_api: bool = True) -> dict[str, Any]:
+        nonlocal participants_count, upserts, list_mode, channel_id
+        bot_stats = await refresh_channel_stats_via_bot_api(
+            channel_id=channel_id or None,
+            upsert_admins=via_bot_api,
+        )
+        if bot_stats.get("participants_count") is not None:
+            participants_count = int(bot_stats["participants_count"])
+        elif participants_count is not None:
+            save_channel_config(participants_count=int(participants_count))
+        if bot_stats.get("admins_synced"):
+            upserts = int(bot_stats["admins_synced"])
+            list_mode = "admins"
+        else:
+            list_mode = "none"
+        _, _, stats_partial = await list_subscribers(
+            status=STATUS_MEMBER, page=1, page_size=1
+        )
+        tracked = int(stats_partial.get("members") or upserts or 0)
+        return {
+            "ok": True,
             "channel_id": channel_id or None,
-            "synced": 0,
+            "synced": upserts,
             "marked_left": 0,
+            "stats": stats_partial,
             "broadcast": is_broadcast,
             "participants_count": participants_count,
-            "list_mode": "none",
+            "list_mode": list_mode,
+            "note": _channel_limitation_note(
+                participants_count=participants_count,
+                tracked=tracked,
+                list_mode=list_mode,
+            ),
         }
-        if ok:
-            payload.pop("error", None)
-            payload.pop("detail", None)
-            count_bit = (
-                f"В канале сейчас ~{int(participants_count)} подписчиков "
-                "(публичный счётчик). "
-                if participants_count is not None
-                else ""
-            )
-            payload["note"] = (
-                "Список участников недоступен: Telegram-аккаунт из Настроек "
-                "не админ канала.\n\n"
-                f"{count_bit}"
-                "Добавьте этот аккаунт админом, чтобы выгрузить админов; "
-                "новые подписки бот считает сам, если он тоже админ канала."
-            )
-        return payload
 
     try:
         async with telegram_session(session_file, account_id) as client:
@@ -1402,19 +1531,15 @@ async def sync_channel_subscribers_via_telethon(
                         list_mode = "admins"
             except Exception as list_exc:
                 if _is_chat_admin_required(list_exc):
-                    if participants_count is not None:
-                        _, _, stats_partial = await list_subscribers(
-                            status=STATUS_MEMBER, page=1, page_size=1
-                        )
-                        result = _admin_required_result(ok=True)
-                        result["stats"] = stats_partial
-                        return result
-                    return _admin_required_result(ok=False)
+                    logger.info(
+                        "Telethon не может выгрузить участников канала — берём счётчик и админов через Bot API"
+                    )
+                    return await _finish_without_full_list()
                 raise
     except Exception as exc:
         if _is_chat_admin_required(exc):
-            logger.warning("Выгрузка подписчиков: нужны права админа — %s", exc)
-            return _admin_required_result(ok=False)
+            logger.info("Выгрузка через Telethon недоступна — %s", exc)
+            return await _finish_without_full_list()
         logger.exception("Ошибка выгрузки подписчиков канала")
         return {
             "ok": False,
@@ -1431,19 +1556,16 @@ async def sync_channel_subscribers_via_telethon(
     if can_mark_left:
         left_n = await mark_missing_as_left(channel_id, present)
 
+    if participants_count is not None:
+        save_channel_config(participants_count=int(participants_count))
+
     _, _, stats = await list_subscribers(status=STATUS_MEMBER, page=1, page_size=1)
     note = None
-    if is_broadcast or list_mode == "admins":
-        count_bit = (
-            f" Публичный счётчик канала: ~{int(participants_count)}."
-            if participants_count is not None
-            else ""
-        )
-        note = (
-            "У канала Telegram не отдаёт полный список подписчиков — "
-            "выгружены только администраторы."
-            f"{count_bit} "
-            "Новые подписки и отписки считаются автоматически, если бот — админ канала."
+    if is_broadcast or list_mode != "members":
+        note = _channel_limitation_note(
+            participants_count=participants_count,
+            tracked=int(stats.get("members") or upserts or 0),
+            list_mode=list_mode,
         )
     return {
         "ok": True,
