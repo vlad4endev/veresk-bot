@@ -18,6 +18,7 @@ os.environ["TELEGRAM_CHANNEL_USERNAME"] = ""
 
 import runtime_settings  # noqa: E402
 from channel_subscriptions import (  # noqa: E402
+    _is_chat_admin_required,
     get_channel_config,
     matches_configured_channel,
     normalize_telegram_channel_id,
@@ -103,6 +104,21 @@ class ChannelMatchAndRememberTests(unittest.TestCase):
         )
         self.assertTrue(result.get("skipped"))
         self.assertEqual(result.get("reason"), "other_channel_configured")
+
+    def test_detect_chat_admin_required_error(self) -> None:
+        class ChatAdminRequiredError(Exception):
+            pass
+
+        self.assertTrue(_is_chat_admin_required(ChatAdminRequiredError("x")))
+        self.assertTrue(
+            _is_chat_admin_required(
+                RuntimeError(
+                    "Chat admin privileges are required to do that in the "
+                    "specified chat (caused by GetParticipantsRequest)"
+                )
+            )
+        )
+        self.assertFalse(_is_chat_admin_required(RuntimeError("flood wait")))
 
 
 if __name__ == "__main__":

@@ -1048,13 +1048,36 @@ async def customers_for_channel_subscribers(
     return await ensure_customers_for_subscribers(ids)
 
 
+def _is_chat_admin_required(exc: BaseException) -> bool:
+    name = type(exc).__name__
+    if "ChatAdminRequired" in name or "ChatAdminRequiredError" in name:
+        return True
+    text = str(exc).lower()
+    return "chat admin privileges are required" in text or "getparticipantsrequest" in text
+
+
+_SYNC_ADMIN_REQUIRED_DETAIL = (
+    "Telegram-аккаунт из Настройки → Telegram должен быть администратором канала "
+    "(не только бот).\n\n"
+    "1) Откройте канал → Администраторы → добавьте тот же номер/аккаунт, "
+    "что подключён в админке.\n"
+    "2) Бот тоже должен быть админом — тогда новые подписки считаются сами "
+    "(кнопка «Выгрузить» для канала всё равно отдаёт только админов)."
+)
+
+
 async def sync_channel_subscribers_via_telethon(
     *,
     session_file: str,
     account_id: int | None = None,
     channel_ref: str | int | None = None,
 ) -> dict[str, Any]:
-    """Полная выгрузка участников канала через Telethon-сессию."""
+    """Выгрузка участников канала через Telethon-сессию.
+
+    У broadcast-канала Telegram не отдаёт полный список подписчиков — только
+    админов (и то если userbot сам админ). Полный учёт идёт через chat_member
+    у бота.
+    """
     cfg = get_channel_config()
     ref: str | int | None = channel_ref
     if ref is None:
@@ -1083,6 +1106,7 @@ async def sync_channel_subscribers_via_telethon(
             ChannelParticipantBanned,
             ChannelParticipantCreator,
             ChannelParticipantSelf,
+            ChannelParticipantsAdmins,
             User,
         )
     except ImportError as exc:
@@ -1097,6 +1121,7 @@ async def sync_channel_subscribers_via_telethon(
     channel_id = int(cfg["channel_id"] or 0)
     is_broadcast = False
     participants_count: int | None = None
+    list_mode = "members"  # members | admins | none
 
     try:
         async with telegram_session(session_file, account_id) as client:
@@ -1117,58 +1142,132 @@ async def sync_channel_subscribers_via_telethon(
                 channel_id = full_id or channel_id
 
             try:
-                full = await client.get_entity(entity)
-                participants_count = getattr(full, "participants_count", None)
-                if participants_count is None:
-                    from telethon.tl.functions.channels import GetFullChannelRequest
+                from telethon.tl.functions.channels import GetFullChannelRequest
 
-                    full_ch = await client(GetFullChannelRequest(entity))
-                    participants_count = getattr(
-                        getattr(full_ch, "full_chat", None),
-                        "participants_count",
-                        None,
-                    )
+                full_ch = await client(GetFullChannelRequest(entity))
+                participants_count = getattr(
+                    getattr(full_ch, "full_chat", None),
+                    "participants_count",
+                    None,
+                )
             except Exception:
                 logger.debug("Не удалось получить participants_count", exc_info=True)
+                try:
+                    participants_count = getattr(entity, "participants_count", None)
+                except Exception:
+                    participants_count = None
 
-            async for user in client.iter_participants(entity, aggressive=True):
-                if not isinstance(user, User) or getattr(user, "bot", False):
-                    continue
-                uid = int(user.id)
-                present.add(uid)
-                participant = getattr(user, "participant", None)
-                joined_dt: datetime | None = None
-                status = STATUS_MEMBER
-                if isinstance(
-                    participant,
-                    (
-                        ChannelParticipant,
-                        ChannelParticipantSelf,
-                        ChannelParticipantAdmin,
-                        ChannelParticipantCreator,
-                    ),
-                ):
-                    raw_date = getattr(participant, "date", None)
-                    if isinstance(raw_date, datetime):
-                        joined_dt = raw_date
-                elif isinstance(participant, ChannelParticipantBanned):
-                    status = STATUS_LEFT
-                    raw_date = getattr(participant, "date", None)
-                    if isinstance(raw_date, datetime):
-                        joined_dt = raw_date
+            async def _upsert_from_iter(*, filter_obj: Any | None = None) -> int:
+                n = 0
+                kwargs: dict[str, Any] = {}
+                if filter_obj is not None:
+                    kwargs["filter"] = filter_obj
+                async for user in client.iter_participants(entity, **kwargs):
+                    if not isinstance(user, User) or getattr(user, "bot", False):
+                        continue
+                    uid = int(user.id)
+                    present.add(uid)
+                    participant = getattr(user, "participant", None)
+                    joined_dt: datetime | None = None
+                    status = STATUS_MEMBER
+                    if isinstance(
+                        participant,
+                        (
+                            ChannelParticipant,
+                            ChannelParticipantSelf,
+                            ChannelParticipantAdmin,
+                            ChannelParticipantCreator,
+                        ),
+                    ):
+                        raw_date = getattr(participant, "date", None)
+                        if isinstance(raw_date, datetime):
+                            joined_dt = raw_date
+                    elif isinstance(participant, ChannelParticipantBanned):
+                        status = STATUS_LEFT
+                        raw_date = getattr(participant, "date", None)
+                        if isinstance(raw_date, datetime):
+                            joined_dt = raw_date
 
-                await upsert_subscription(
-                    tg_user_id=uid,
-                    channel_id=channel_id,
-                    status=status,
-                    username=str(getattr(user, "username", None) or ""),
-                    first_name=str(getattr(user, "first_name", None) or ""),
-                    last_name=str(getattr(user, "last_name", None) or ""),
-                    joined_at=_dt_to_iso(joined_dt),
-                    source="sync",
-                )
-                upserts += 1
+                    await upsert_subscription(
+                        tg_user_id=uid,
+                        channel_id=channel_id,
+                        status=status,
+                        username=str(getattr(user, "username", None) or ""),
+                        first_name=str(getattr(user, "first_name", None) or ""),
+                        last_name=str(getattr(user, "last_name", None) or ""),
+                        joined_at=_dt_to_iso(joined_dt),
+                        source="sync",
+                    )
+                    n += 1
+                return n
+
+            # Broadcast: полный список недоступен — сразу только админы.
+            # Супергруппа: сначала все участники, при CHAT_ADMIN_REQUIRED — админы.
+            try:
+                if is_broadcast:
+                    upserts = await _upsert_from_iter(
+                        filter_obj=ChannelParticipantsAdmins()
+                    )
+                    list_mode = "admins"
+                else:
+                    try:
+                        upserts = await _upsert_from_iter()
+                        list_mode = "members"
+                    except Exception as members_exc:
+                        if not _is_chat_admin_required(members_exc):
+                            raise
+                        logger.info(
+                            "Нет прав на полный список участников — пробуем админов"
+                        )
+                        upserts = await _upsert_from_iter(
+                            filter_obj=ChannelParticipantsAdmins()
+                        )
+                        list_mode = "admins"
+            except Exception as list_exc:
+                if _is_chat_admin_required(list_exc):
+                    # Канал найден, счётчик мог подтянуться — live-учёт всё ещё ок
+                    if participants_count is not None:
+                        _, _, stats_partial = await list_subscribers(
+                            status=STATUS_MEMBER, page=1, page_size=1
+                        )
+                        return {
+                            "ok": True,
+                            "channel_id": channel_id,
+                            "synced": 0,
+                            "marked_left": 0,
+                            "stats": stats_partial,
+                            "broadcast": is_broadcast,
+                            "participants_count": participants_count,
+                            "list_mode": "none",
+                            "note": (
+                                "Список участников недоступен: Telegram-аккаунт "
+                                "из Настроек не админ канала.\n\n"
+                                f"В канале сейчас ~{int(participants_count)} подписчиков "
+                                "(публичный счётчик). Добавьте этот аккаунт админом, "
+                                "чтобы выгрузить админов; новые подписки бот считает сам, "
+                                "если он тоже админ канала."
+                            ),
+                        }
+                    return {
+                        "ok": False,
+                        "error": "chat_admin_required",
+                        "detail": _SYNC_ADMIN_REQUIRED_DETAIL,
+                        "channel_id": channel_id,
+                        "broadcast": is_broadcast,
+                        "participants_count": participants_count,
+                    }
+                raise
     except Exception as exc:
+        if _is_chat_admin_required(exc):
+            logger.warning("Выгрузка подписчиков: нужны права админа — %s", exc)
+            return {
+                "ok": False,
+                "error": "chat_admin_required",
+                "detail": _SYNC_ADMIN_REQUIRED_DETAIL,
+                "channel_id": channel_id or None,
+                "broadcast": is_broadcast,
+                "participants_count": participants_count,
+            }
         logger.exception("Ошибка выгрузки подписчиков канала")
         return {
             "ok": False,
@@ -1176,9 +1275,11 @@ async def sync_channel_subscribers_via_telethon(
             "detail": str(exc)[:400],
         }
 
-    # У broadcast-каналов API обычно отдаёт только админов — не помечаем остальных left.
+    # У broadcast / режима «только админы» не помечаем остальных left.
     left_n = 0
-    can_mark_left = bool(channel_id) and present and not is_broadcast
+    can_mark_left = (
+        bool(channel_id) and present and not is_broadcast and list_mode == "members"
+    )
     if can_mark_left and participants_count and len(present) < max(3, int(participants_count) * 0.5):
         can_mark_left = False
     if can_mark_left:
@@ -1186,11 +1287,17 @@ async def sync_channel_subscribers_via_telethon(
 
     _, _, stats = await list_subscribers(status=STATUS_MEMBER, page=1, page_size=1)
     note = None
-    if is_broadcast:
+    if is_broadcast or list_mode == "admins":
+        count_bit = (
+            f" Публичный счётчик канала: ~{int(participants_count)}."
+            if participants_count is not None
+            else ""
+        )
         note = (
-            "У публичного канала Telegram не отдаёт полный список подписчиков — "
-            "только админов. Новые подписки и отписки учитываются автоматически, "
-            "если бот — админ канала."
+            "У канала Telegram не отдаёт полный список подписчиков — "
+            "выгружены только администраторы."
+            f"{count_bit} "
+            "Новые подписки и отписки считаются автоматически, если бот — админ канала."
         )
     return {
         "ok": True,
@@ -1200,6 +1307,7 @@ async def sync_channel_subscribers_via_telethon(
         "stats": stats,
         "broadcast": is_broadcast,
         "participants_count": participants_count,
+        "list_mode": list_mode,
         "note": note,
     }
 
