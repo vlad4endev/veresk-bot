@@ -1681,7 +1681,7 @@
       btn.addEventListener("click", async () => {
         try {
           const res = await AdminAPI.discoverChannelSubscribers({
-            channel_id: Number(btn.dataset.id),
+            channel_id: btn.dataset.id || "",
             channel_username: btn.dataset.username || "",
             channel_title: btn.dataset.title || "",
           });
@@ -2171,16 +2171,28 @@
     try {
       const res = await AdminAPI.syncChannelSubscribers();
       if (res.ok) {
-        let msg = `Готово: ${res.synced || 0} участников`;
+        let msg =
+          res.synced > 0
+            ? `Готово: ${res.synced} участников`
+            : "Выгрузка списка недоступна";
         if (res.marked_left) msg += `, отмечено отписок: ${res.marked_left}`;
+        if (res.participants_count != null && res.synced === 0) {
+          msg += `\nВ канале ~${res.participants_count} подписчиков (публичный счётчик).`;
+        }
         if (res.note) msg += `\n\n${res.note}`;
         alert(msg);
         await loadSubscribers({ skipDiscover: true });
       } else {
-        alert("Ошибка: " + (res.detail || res.error || "unknown"));
+        alert(res.detail || res.error || "Не удалось выгрузить подписчиков");
       }
     } catch (err) {
-      alert("Ошибка выгрузки: " + (err.data?.detail || err.data?.error || err.message));
+      const detail = err.data?.detail || err.data?.error || err.message;
+      alert(
+        String(detail || "").includes("admin privileges") ||
+          err.data?.error === "chat_admin_required"
+          ? "Нужны права админа канала у Telegram-аккаунта из Настроек (не только у бота).\n\nДобавьте этот аккаунт администратором канала и повторите. Новые подписки бот считает сам, если он тоже админ."
+          : "Ошибка выгрузки: " + detail
+      );
     }
     btn.disabled = false;
     btn.innerHTML =

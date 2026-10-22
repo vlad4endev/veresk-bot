@@ -127,6 +127,59 @@ def is_new_subscriber(joined_at: str | None, *, days: int = NEW_SUBSCRIBER_DAYS)
     return dt >= new_cutoff_dt(days)
 
 
+def normalize_telegram_channel_id(channel_id: int | str | None) -> int:
+    """Привести id канала к виду Bot API (−100…).
+
+    Telethon отдаёт короткий положительный id; Bot API и chat_member —
+    полный −100XXXXXXXXXX. Без нормализации автоопределение канала и
+    live-учёт подписчиков расходятся и молча ничего не пишут.
+    """
+    if channel_id in (None, ""):
+        return 0
+    try:
+        cid = int(channel_id)
+    except (TypeError, ValueError):
+        return 0
+    if cid == 0:
+        return 0
+    if cid > 0:
+        return int(f"-100{cid}")
+    return cid
+
+
+def same_telegram_channel_id(a: int | str | None, b: int | str | None) -> bool:
+    """True, если оба id — один канал (короткий и −100… совпадают)."""
+    na = normalize_telegram_channel_id(a)
+    nb = normalize_telegram_channel_id(b)
+    if not na or not nb:
+        return False
+    return na == nb
+
+
+def _is_admin_member_status(status: str | None) -> bool:
+    return (status or "").strip().lower() in ("administrator", "creator")
+
+
+def _is_chat_admin_required(exc: BaseException) -> bool:
+    name = type(exc).__name__
+    if "ChatAdminRequired" in name:
+        return True
+    text = str(exc).lower()
+    return (
+        "chat admin privileges are required" in text
+        or "getparticipantsrequest" in text
+    )
+
+
+_SYNC_ADMIN_REQUIRED_DETAIL = (
+    "Telegram-аккаунт из Настройки → Telegram должен быть администратором канала "
+    "(не только бот).\n\n"
+    "1) Канал → Администраторы → добавьте тот же аккаунт, что подключён в админке.\n"
+    "2) Бот тоже должен быть админом — тогда новые подписки считаются сами "
+    "(кнопка «Выгрузить» для канала всё равно отдаёт только админов)."
+)
+
+
 def get_channel_config() -> dict[str, Any]:
     """ID/username канала: runtime_settings → .env."""
     raw_id = runtime_settings.get("telegram_channel_id")
@@ -138,6 +191,14 @@ def get_channel_config() -> dict[str, Any]:
             channel_id = 0
     if not channel_id:
         channel_id = int(TELEGRAM_CHANNEL_ID or 0)
+
+    normalized = normalize_telegram_channel_id(channel_id)
+    if normalized and normalized != channel_id:
+        try:
+            runtime_settings.set_many({"telegram_channel_id": normalized})
+        except Exception:
+            logger.debug("Не удалось нормализовать telegram_channel_id", exc_info=True)
+    channel_id = normalized
 
     username = str(runtime_settings.get("telegram_channel_username") or "").strip()
     if not username:
@@ -317,7 +378,9 @@ def save_channel_config(
 ) -> dict[str, Any]:
     payload: dict[str, Any] = {}
     if channel_id is not None:
-        payload["telegram_channel_id"] = int(channel_id) if channel_id else 0
+        payload["telegram_channel_id"] = (
+            normalize_telegram_channel_id(channel_id) if channel_id else 0
+        )
     if channel_username is not None:
         payload["telegram_channel_username"] = str(channel_username).strip().lstrip("@")
     if channel_title is not None:
@@ -348,26 +411,28 @@ def remember_bot_admin_channel(
     """
     Сохранить канал, где бот стал админом.
     Если канал уже настроен на другой id — не перезаписываем (кроме force=True).
+    Короткий Telethon-id и −100… считаются одним каналом.
     """
     cfg = get_channel_config()
-    cid = int(channel_id)
+    cid = normalize_telegram_channel_id(channel_id)
     uname = (channel_username or "").strip().lstrip("@")
     title = (channel_title or "").strip()
+    cfg_uname = (cfg.get("channel_username") or "").strip().lstrip("@").lower()
+    same_by_id = bool(cfg.get("channel_id")) and same_telegram_channel_id(
+        cfg.get("channel_id"), cid
+    )
+    same_by_username = bool(uname and cfg_uname and uname.lower() == cfg_uname)
 
     if cfg["configured"] and not force:
-        if cfg["channel_id"] and cfg["channel_id"] != cid:
+        if cfg["channel_id"] and not same_by_id and not same_by_username:
             return {**cfg, "skipped": True, "reason": "other_channel_configured"}
         # Тот же канал / только username — допишем недостающие поля
         save_kwargs: dict[str, Any] = {}
-        if not cfg["channel_id"]:
+        if cid and (not cfg["channel_id"] or not same_by_id or cfg["channel_id"] != cid):
             save_kwargs["channel_id"] = cid
-        elif cfg["channel_id"] == cid:
-            save_kwargs["channel_id"] = cid
-        if uname and not cfg["channel_username"]:
+        if uname and (not cfg["channel_username"] or same_by_id or same_by_username):
             save_kwargs["channel_username"] = uname
-        elif uname and cfg["channel_id"] == cid:
-            save_kwargs["channel_username"] = uname
-        if title and (not cfg.get("channel_title") or cfg["channel_id"] == cid):
+        if title and (not cfg.get("channel_title") or same_by_id or same_by_username):
             save_kwargs["channel_title"] = title
         if save_kwargs:
             return {**save_channel_config(**save_kwargs), "skipped": False, "updated": True}
@@ -400,6 +465,28 @@ def _ensure_column(db: sqlite3.Connection, table: str, column: str, typedef: str
         db.execute(f"ALTER TABLE {table} ADD COLUMN {column} {typedef}")
 
 
+def _normalize_stored_subscription_channel_ids(db: sqlite3.Connection) -> int:
+    """Починить channel_id в БД после смены формата (короткий → −100…)."""
+    try:
+        rows = db.execute(
+            "SELECT DISTINCT channel_id FROM channel_subscriptions WHERE channel_id > 0"
+        ).fetchall()
+    except sqlite3.Error:
+        return 0
+    updated = 0
+    for row in rows:
+        old = int(row[0])
+        new = normalize_telegram_channel_id(old)
+        if not new or new == old:
+            continue
+        cur = db.execute(
+            "UPDATE channel_subscriptions SET channel_id = ? WHERE channel_id = ?",
+            (new, old),
+        )
+        updated += int(cur.rowcount or 0)
+    return updated
+
+
 def _ensure_channel_subscriptions_schema(db: sqlite3.Connection) -> None:
     db.executescript(_SCHEMA)
     # На старых БД CREATE TABLE IF NOT EXISTS не добавит welcome_*;
@@ -407,6 +494,9 @@ def _ensure_channel_subscriptions_schema(db: sqlite3.Connection) -> None:
     _ensure_column(db, "channel_subscriptions", "welcome_due_at", "TEXT")
     _ensure_column(db, "channel_subscriptions", "welcome_sent_at", "TEXT")
     db.executescript(_SCHEMA_WELCOME_INDEX)
+    n = _normalize_stored_subscription_channel_ids(db)
+    if n:
+        logger.info("Нормализовано channel_id в подписчиках: %s строк", n)
 
 
 async def init_channel_subscriptions() -> None:
@@ -522,6 +612,7 @@ async def upsert_subscription(
     status_norm = (status or "").strip().lower() or STATUS_LEFT
     is_active = status_norm in _ACTIVE
     stored_status = STATUS_MEMBER if is_active else STATUS_LEFT
+    channel_id = normalize_telegram_channel_id(channel_id) or int(channel_id or 0)
 
     def _upsert() -> dict[str, Any]:
         with _connect() as db:
@@ -1001,13 +1092,143 @@ async def customers_for_channel_subscribers(
     return await ensure_customers_for_subscribers(ids)
 
 
+async def _bot_api_member_status(chat_id: int | str, user_id: int) -> str | None:
+    """Статус участника через Bot API (бот сам проверяет, что он админ).
+
+    None — сеть/прокси/неизвестный ответ. Строка — definitive status
+    (administrator/creator/member/left/…).
+    """
+    if not chat_id or not user_id:
+        return None
+    try:
+        import aiohttp
+
+        from config import BOT_TOKEN
+        from telegram_proxy import aiohttp_proxy_connector, ensure_proxy_running, is_proxy_enabled
+    except ImportError:
+        return None
+
+    if is_proxy_enabled():
+        try:
+            ensure_proxy_running()
+        except Exception:
+            logger.debug("ensure_proxy_running before getChatMember failed", exc_info=True)
+
+    url = f"https://api.telegram.org/bot{BOT_TOKEN}/getChatMember"
+    timeout = aiohttp.ClientTimeout(total=15)
+    connector = aiohttp_proxy_connector()
+    session_kwargs: dict[str, Any] = {"timeout": timeout}
+    if connector is not None:
+        session_kwargs["connector"] = connector
+    try:
+        async with aiohttp.ClientSession(**session_kwargs) as session:
+            async with session.post(
+                url, json={"chat_id": chat_id, "user_id": int(user_id)}
+            ) as resp:
+                data = await resp.json(content_type=None)
+    except Exception:
+        logger.debug("getChatMember failed chat=%s", chat_id, exc_info=True)
+        return None
+
+    if not isinstance(data, dict):
+        return None
+    if data.get("ok"):
+        result = data.get("result") or {}
+        return str(result.get("status") or "") or None
+    desc = str(data.get("description") or "").lower()
+    if any(
+        bit in desc
+        for bit in (
+            "chat not found",
+            "not a member",
+            "bot was kicked",
+            "bot is not a member",
+            "kicked",
+        )
+    ):
+        return "left"
+    logger.debug("getChatMember: %s", data)
+    return None
+
+
+async def _bot_is_admin_of_channel(ch: dict[str, Any], bot_id: int) -> bool | None:
+    """True/False если Bot API ответил, None если проверить не удалось."""
+    refs: list[int | str] = []
+    uname = str(ch.get("channel_username") or "").strip().lstrip("@")
+    if uname:
+        refs.append("@" + uname)
+    cid = ch.get("channel_id")
+    if cid:
+        try:
+            refs.append(int(cid))
+        except (TypeError, ValueError):
+            pass
+    last: str | None = None
+    for ref in refs:
+        last = await _bot_api_member_status(ref, bot_id)
+        if last is not None:
+            return _is_admin_member_status(last)
+    return None if last is None else _is_admin_member_status(last)
+
+
+async def _telethon_bot_is_admin(client: Any, entity: Any, bot_id: int) -> bool:
+    """Запасной путь, если Bot API недоступен."""
+    try:
+        perms = await client.get_permissions(entity, bot_id)
+        if getattr(perms, "is_admin", False) or getattr(perms, "is_creator", False):
+            return True
+    except Exception:
+        logger.debug("get_permissions для бота не удался", exc_info=True)
+    try:
+        from telethon.tl.types import ChannelParticipantsAdmins
+
+        async for admin in client.iter_participants(
+            entity, filter=ChannelParticipantsAdmins()
+        ):
+            if int(getattr(admin, "id", 0) or 0) == int(bot_id):
+                return True
+    except Exception:
+        logger.debug("iter_participants(Admins) для бота не удался", exc_info=True)
+    return False
+
+
+def _dialog_channel_payload(entity: Any, dialog: Any | None = None) -> dict[str, Any]:
+    full_id = _channel_full_id(entity)
+    title = str(
+        getattr(entity, "title", None)
+        or (getattr(dialog, "name", None) if dialog is not None else None)
+        or ""
+    ).strip()
+    username = str(getattr(entity, "username", None) or "").strip()
+    participants_count = getattr(entity, "participants_count", None)
+    if participants_count is None and dialog is not None:
+        participants_count = getattr(dialog, "participants_count", None)
+    try:
+        participants_count = (
+            int(participants_count) if participants_count is not None else None
+        )
+    except (TypeError, ValueError):
+        participants_count = None
+    return {
+        "channel_id": full_id,
+        "channel_username": username,
+        "channel_title": title,
+        "participants_count": participants_count,
+    }
+
+
 async def sync_channel_subscribers_via_telethon(
     *,
     session_file: str,
     account_id: int | None = None,
     channel_ref: str | int | None = None,
 ) -> dict[str, Any]:
-    """Полная выгрузка участников канала через Telethon-сессию."""
+    """Выгрузка участников канала через Telethon-сессию.
+
+    У broadcast-канала Telegram не отдаёт полный список подписчиков — только
+    админов (и то если userbot сам админ). Полный учёт идёт через chat_member
+    у бота.
+    """
     cfg = get_channel_config()
     ref: str | int | None = channel_ref
     if ref is None:
@@ -1036,6 +1257,7 @@ async def sync_channel_subscribers_via_telethon(
             ChannelParticipantBanned,
             ChannelParticipantCreator,
             ChannelParticipantSelf,
+            ChannelParticipantsAdmins,
             User,
         )
     except ImportError as exc:
@@ -1050,84 +1272,149 @@ async def sync_channel_subscribers_via_telethon(
     channel_id = int(cfg["channel_id"] or 0)
     is_broadcast = False
     participants_count: int | None = None
+    list_mode = "members"  # members | admins | none
+
+    def _admin_required_result(*, ok: bool) -> dict[str, Any]:
+        payload: dict[str, Any] = {
+            "ok": ok,
+            "error": None if ok else "chat_admin_required",
+            "detail": None if ok else _SYNC_ADMIN_REQUIRED_DETAIL,
+            "channel_id": channel_id or None,
+            "synced": 0,
+            "marked_left": 0,
+            "broadcast": is_broadcast,
+            "participants_count": participants_count,
+            "list_mode": "none",
+        }
+        if ok:
+            payload.pop("error", None)
+            payload.pop("detail", None)
+            count_bit = (
+                f"В канале сейчас ~{int(participants_count)} подписчиков "
+                "(публичный счётчик). "
+                if participants_count is not None
+                else ""
+            )
+            payload["note"] = (
+                "Список участников недоступен: Telegram-аккаунт из Настроек "
+                "не админ канала.\n\n"
+                f"{count_bit}"
+                "Добавьте этот аккаунт админом, чтобы выгрузить админов; "
+                "новые подписки бот считает сам, если он тоже админ канала."
+            )
+        return payload
 
     try:
         async with telegram_session(session_file, account_id) as client:
             entity = await client.get_entity(ref)
-            channel_id = int(getattr(entity, "id", 0) or 0)
             is_broadcast = bool(getattr(entity, "broadcast", False))
-            is_channel_like = bool(
-                is_broadcast or getattr(entity, "megagroup", False)
-            )
-            # Для каналов/супергрупп Telethon отдаёт «короткий» id;
-            # bot API и chat_member используют -100XXXXXXXXXX.
-            if channel_id > 0 and is_channel_like:
-                full_id = int(f"-100{channel_id}")
-            elif channel_id < 0:
-                full_id = channel_id
-            else:
-                full_id = channel_id
+            full_id = _channel_full_id(entity)
 
-            # Сохраняем полный id канала, если ещё не был задан
-            if full_id and full_id != cfg["channel_id"]:
+            if full_id and (
+                not cfg["channel_id"]
+                or not same_telegram_channel_id(full_id, cfg["channel_id"])
+                or int(cfg["channel_id"]) != full_id
+            ):
                 save_channel_config(channel_id=full_id)
                 channel_id = full_id
             else:
                 channel_id = full_id or channel_id
 
             try:
-                full = await client.get_entity(entity)
-                participants_count = getattr(full, "participants_count", None)
-                if participants_count is None:
-                    from telethon.tl.functions.channels import GetFullChannelRequest
+                from telethon.tl.functions.channels import GetFullChannelRequest
 
-                    full_ch = await client(GetFullChannelRequest(entity))
-                    participants_count = getattr(
-                        getattr(full_ch, "full_chat", None),
-                        "participants_count",
-                        None,
-                    )
+                full_ch = await client(GetFullChannelRequest(entity))
+                participants_count = getattr(
+                    getattr(full_ch, "full_chat", None),
+                    "participants_count",
+                    None,
+                )
             except Exception:
                 logger.debug("Не удалось получить participants_count", exc_info=True)
+                try:
+                    participants_count = getattr(entity, "participants_count", None)
+                except Exception:
+                    participants_count = None
 
-            async for user in client.iter_participants(entity, aggressive=True):
-                if not isinstance(user, User) or getattr(user, "bot", False):
-                    continue
-                uid = int(user.id)
-                present.add(uid)
-                participant = getattr(user, "participant", None)
-                joined_dt: datetime | None = None
-                status = STATUS_MEMBER
-                if isinstance(
-                    participant,
-                    (
-                        ChannelParticipant,
-                        ChannelParticipantSelf,
-                        ChannelParticipantAdmin,
-                        ChannelParticipantCreator,
-                    ),
-                ):
-                    raw_date = getattr(participant, "date", None)
-                    if isinstance(raw_date, datetime):
-                        joined_dt = raw_date
-                elif isinstance(participant, ChannelParticipantBanned):
-                    status = STATUS_LEFT
-                    raw_date = getattr(participant, "date", None)
-                    if isinstance(raw_date, datetime):
-                        joined_dt = raw_date
+            async def _upsert_from_iter(*, filter_obj: Any | None = None) -> int:
+                n = 0
+                kwargs: dict[str, Any] = {}
+                if filter_obj is not None:
+                    kwargs["filter"] = filter_obj
+                async for user in client.iter_participants(entity, **kwargs):
+                    if not isinstance(user, User) or getattr(user, "bot", False):
+                        continue
+                    uid = int(user.id)
+                    present.add(uid)
+                    participant = getattr(user, "participant", None)
+                    joined_dt: datetime | None = None
+                    status = STATUS_MEMBER
+                    if isinstance(
+                        participant,
+                        (
+                            ChannelParticipant,
+                            ChannelParticipantSelf,
+                            ChannelParticipantAdmin,
+                            ChannelParticipantCreator,
+                        ),
+                    ):
+                        raw_date = getattr(participant, "date", None)
+                        if isinstance(raw_date, datetime):
+                            joined_dt = raw_date
+                    elif isinstance(participant, ChannelParticipantBanned):
+                        status = STATUS_LEFT
+                        raw_date = getattr(participant, "date", None)
+                        if isinstance(raw_date, datetime):
+                            joined_dt = raw_date
 
-                await upsert_subscription(
-                    tg_user_id=uid,
-                    channel_id=channel_id,
-                    status=status,
-                    username=str(getattr(user, "username", None) or ""),
-                    first_name=str(getattr(user, "first_name", None) or ""),
-                    last_name=str(getattr(user, "last_name", None) or ""),
-                    joined_at=_dt_to_iso(joined_dt),
-                    source="sync",
-                )
-                upserts += 1
+                    await upsert_subscription(
+                        tg_user_id=uid,
+                        channel_id=channel_id,
+                        status=status,
+                        username=str(getattr(user, "username", None) or ""),
+                        first_name=str(getattr(user, "first_name", None) or ""),
+                        last_name=str(getattr(user, "last_name", None) or ""),
+                        joined_at=_dt_to_iso(joined_dt),
+                        source="sync",
+                    )
+                    n += 1
+                return n
+
+            try:
+                if is_broadcast:
+                    upserts = await _upsert_from_iter(
+                        filter_obj=ChannelParticipantsAdmins()
+                    )
+                    list_mode = "admins"
+                else:
+                    try:
+                        upserts = await _upsert_from_iter()
+                        list_mode = "members"
+                    except Exception as members_exc:
+                        if not _is_chat_admin_required(members_exc):
+                            raise
+                        logger.info(
+                            "Нет прав на полный список участников — пробуем админов"
+                        )
+                        upserts = await _upsert_from_iter(
+                            filter_obj=ChannelParticipantsAdmins()
+                        )
+                        list_mode = "admins"
+            except Exception as list_exc:
+                if _is_chat_admin_required(list_exc):
+                    if participants_count is not None:
+                        _, _, stats_partial = await list_subscribers(
+                            status=STATUS_MEMBER, page=1, page_size=1
+                        )
+                        result = _admin_required_result(ok=True)
+                        result["stats"] = stats_partial
+                        return result
+                    return _admin_required_result(ok=False)
+                raise
     except Exception as exc:
+        if _is_chat_admin_required(exc):
+            logger.warning("Выгрузка подписчиков: нужны права админа — %s", exc)
+            return _admin_required_result(ok=False)
         logger.exception("Ошибка выгрузки подписчиков канала")
         return {
             "ok": False,
@@ -1135,9 +1422,10 @@ async def sync_channel_subscribers_via_telethon(
             "detail": str(exc)[:400],
         }
 
-    # У broadcast-каналов API обычно отдаёт только админов — не помечаем остальных left.
     left_n = 0
-    can_mark_left = bool(channel_id) and present and not is_broadcast
+    can_mark_left = (
+        bool(channel_id) and present and not is_broadcast and list_mode == "members"
+    )
     if can_mark_left and participants_count and len(present) < max(3, int(participants_count) * 0.5):
         can_mark_left = False
     if can_mark_left:
@@ -1145,11 +1433,17 @@ async def sync_channel_subscribers_via_telethon(
 
     _, _, stats = await list_subscribers(status=STATUS_MEMBER, page=1, page_size=1)
     note = None
-    if is_broadcast:
+    if is_broadcast or list_mode == "admins":
+        count_bit = (
+            f" Публичный счётчик канала: ~{int(participants_count)}."
+            if participants_count is not None
+            else ""
+        )
         note = (
-            "У публичного канала Telegram не отдаёт полный список подписчиков — "
-            "только админов. Новые подписки и отписки учитываются автоматически, "
-            "если бот — админ канала."
+            "У канала Telegram не отдаёт полный список подписчиков — "
+            "выгружены только администраторы."
+            f"{count_bit} "
+            "Новые подписки и отписки считаются автоматически, если бот — админ канала."
         )
     return {
         "ok": True,
@@ -1159,30 +1453,45 @@ async def sync_channel_subscribers_via_telethon(
         "stats": stats,
         "broadcast": is_broadcast,
         "participants_count": participants_count,
+        "list_mode": list_mode,
         "note": note,
     }
 
 
 def matches_configured_channel(chat_id: int, chat_username: str | None = None) -> bool:
-    """True, если событие относится к настроенному каналу."""
+    """True, если событие относится к настроенному каналу.
+
+    Сравнивает id в короткой и −100-форме; при совпадении @username тоже
+    принимает событие (даже если в конфиге устаревший короткий id).
+    """
     cfg = get_channel_config()
-    configured = int(cfg["channel_id"] or 0)
-    uname = (cfg["channel_username"] or "").lower()
-    if configured:
-        return int(chat_id) == configured
-    if uname:
-        return (chat_username or "").lower().lstrip("@") == uname
-    # Пока канал не задан — не пишем чужие chat_member-события
+    configured = normalize_telegram_channel_id(cfg.get("channel_id") or 0)
+    uname = (cfg.get("channel_username") or "").lower().lstrip("@")
+    event_uname = (chat_username or "").lower().lstrip("@")
+    if configured and same_telegram_channel_id(chat_id, configured):
+        return True
+    if uname and event_uname and event_uname == uname:
+        return True
     return False
 
 
 def _channel_full_id(entity: Any) -> int:
-    channel_id = int(getattr(entity, "id", 0) or 0)
+    try:
+        from telethon.utils import get_peer_id
+
+        marked = int(get_peer_id(entity))
+        if marked:
+            return marked
+    except Exception:
+        pass
+    channel_id = int(
+        getattr(entity, "id", 0) or getattr(entity, "channel_id", 0) or 0
+    )
     is_channel_like = bool(
         getattr(entity, "broadcast", False) or getattr(entity, "megagroup", False)
     )
     if channel_id > 0 and is_channel_like:
-        return int(f"-100{channel_id}")
+        return normalize_telegram_channel_id(channel_id)
     return channel_id
 
 
@@ -1194,9 +1503,11 @@ async def discover_channels_where_bot_is_admin(
     auto_save: bool = True,
 ) -> dict[str, Any]:
     """
-    Найти каналы, где бот — админ (через Telethon-сессию userbot).
+    Найти каналы, где бот — админ.
 
-    Userbot должен состоять в этих каналах (видеть их в диалогах).
+    Список каналов берём из диалогов userbot (он должен их видеть).
+    Проверку «бот админ» делаем через Bot API getChatMember — так не нужно,
+    чтобы личный аккаунт сам был админом канала. Telethon — запасной путь.
     Если найден ровно один канал и конфиг пуст — сохраняем автоматически.
     """
     if not session_file:
@@ -1218,7 +1529,6 @@ async def discover_channels_where_bot_is_admin(
 
     try:
         from senders.telegram_chat import telegram_session
-        from telethon.tl.types import ChannelParticipantsAdmins
     except ImportError as exc:
         return {
             "ok": False,
@@ -1227,7 +1537,7 @@ async def discover_channels_where_bot_is_admin(
             "channels": [],
         }
 
-    found: list[dict[str, Any]] = []
+    candidates: list[dict[str, Any]] = []
     try:
         async with telegram_session(session_file, account_id) as client:
             async for dialog in client.iter_dialogs():
@@ -1235,43 +1545,7 @@ async def discover_channels_where_bot_is_admin(
                 # Только каналы (broadcast), не супергруппы/чаты
                 if not bool(getattr(entity, "broadcast", False)):
                     continue
-                try:
-                    bot_is_admin = False
-                    async for admin in client.iter_participants(
-                        entity, filter=ChannelParticipantsAdmins()
-                    ):
-                        if int(getattr(admin, "id", 0) or 0) == bid:
-                            bot_is_admin = True
-                            break
-                    if not bot_is_admin:
-                        continue
-                except Exception:
-                    logger.debug(
-                        "Не удалось проверить админов канала %s",
-                        getattr(entity, "id", "?"),
-                        exc_info=True,
-                    )
-                    continue
-
-                full_id = _channel_full_id(entity)
-                title = str(getattr(entity, "title", None) or dialog.name or "").strip()
-                username = str(getattr(entity, "username", None) or "").strip()
-                participants_count = getattr(entity, "participants_count", None)
-                try:
-                    participants_count = (
-                        int(participants_count) if participants_count is not None else None
-                    )
-                except (TypeError, ValueError):
-                    participants_count = None
-
-                found.append(
-                    {
-                        "channel_id": full_id,
-                        "channel_username": username,
-                        "channel_title": title,
-                        "participants_count": participants_count,
-                    }
-                )
+                candidates.append(_dialog_channel_payload(entity, dialog))
     except Exception as exc:
         logger.exception("Ошибка поиска каналов, где бот админ")
         return {
@@ -1280,6 +1554,73 @@ async def discover_channels_where_bot_is_admin(
             "detail": str(exc)[:400],
             "channels": [],
         }
+
+    if not candidates:
+        cfg_preview = get_channel_config()
+        if cfg_preview.get("channel_id") or cfg_preview.get("channel_username"):
+            candidates.append(
+                {
+                    "channel_id": int(cfg_preview.get("channel_id") or 0),
+                    "channel_username": cfg_preview.get("channel_username") or "",
+                    "channel_title": cfg_preview.get("channel_title") or "",
+                    "participants_count": None,
+                }
+            )
+
+    found: list[dict[str, Any]] = []
+    unchecked: list[dict[str, Any]] = []
+    for ch in candidates:
+        admin = await _bot_is_admin_of_channel(ch, bid)
+        if admin is True:
+            found.append(ch)
+        elif admin is None:
+            unchecked.append(ch)
+
+    if unchecked:
+        try:
+            async with telegram_session(session_file, account_id) as client:
+                for ch in unchecked:
+                    entity_ref: Any = ch.get("channel_username") or ch.get("channel_id")
+                    if not entity_ref:
+                        continue
+                    try:
+                        entity = await client.get_entity(entity_ref)
+                        if await _telethon_bot_is_admin(client, entity, bid):
+                            found.append(_dialog_channel_payload(entity))
+                    except Exception:
+                        logger.debug(
+                            "Не удалось проверить админов канала %s",
+                            entity_ref,
+                            exc_info=True,
+                        )
+        except Exception:
+            logger.debug("Telethon fallback проверки админов не удался", exc_info=True)
+
+    if candidates and not found:
+        logger.info(
+            "Автопоиск: в диалогах %s канал(ов), бот id=%s нигде не админ",
+            len(candidates),
+            bid,
+        )
+
+    # Убрать дубли short/−100 / username
+    uniq: list[dict[str, Any]] = []
+    seen_ids: set[int] = set()
+    seen_unames: set[str] = set()
+    for ch in found:
+        cid = normalize_telegram_channel_id(ch.get("channel_id"))
+        uname = (ch.get("channel_username") or "").strip().lstrip("@").lower()
+        if cid and cid in seen_ids:
+            continue
+        if uname and uname in seen_unames:
+            continue
+        if cid:
+            seen_ids.add(cid)
+            ch = {**ch, "channel_id": cid}
+        if uname:
+            seen_unames.add(uname)
+        uniq.append(ch)
+    found = uniq
 
     found.sort(
         key=lambda c: (
@@ -1290,26 +1631,34 @@ async def discover_channels_where_bot_is_admin(
 
     cfg = get_channel_config()
     auto_saved = False
-    if auto_save and len(found) == 1 and not cfg.get("configured"):
-        ch = found[0]
-        remember_bot_admin_channel(
-            channel_id=int(ch["channel_id"]),
-            channel_username=ch.get("channel_username") or "",
-            channel_title=ch.get("channel_title") or "",
-            force=True,
-        )
-        auto_saved = True
-    elif auto_save and len(found) == 1 and cfg.get("configured"):
-        ch = found[0]
-        if int(cfg.get("channel_id") or 0) in (0, int(ch["channel_id"])) or (
-            cfg.get("channel_username") or ""
-        ).lower() == (ch.get("channel_username") or "").lower():
+    if auto_save and found:
+        if len(found) == 1 and not cfg.get("configured"):
+            ch = found[0]
             remember_bot_admin_channel(
                 channel_id=int(ch["channel_id"]),
                 channel_username=ch.get("channel_username") or "",
                 channel_title=ch.get("channel_title") or "",
-                force=False,
+                force=True,
             )
+            auto_saved = True
+        elif cfg.get("configured"):
+            cfg_uname = (cfg.get("channel_username") or "").lower().lstrip("@")
+            for ch in found:
+                ch_uname = (ch.get("channel_username") or "").lower().lstrip("@")
+                same = (
+                    not cfg.get("channel_id")
+                    or same_telegram_channel_id(cfg.get("channel_id"), ch.get("channel_id"))
+                    or (bool(cfg_uname and ch_uname) and cfg_uname == ch_uname)
+                )
+                if not same:
+                    continue
+                remember_bot_admin_channel(
+                    channel_id=int(ch["channel_id"]),
+                    channel_username=ch.get("channel_username") or "",
+                    channel_title=ch.get("channel_title") or "",
+                    force=False,
+                )
+                break
 
     # Кэш списка для UI
     try:
