@@ -3296,13 +3296,21 @@ async def _probe_telegram_bot() -> dict[str, Any]:
         }
     except Exception as exc:
         logger.debug("Telegram getMe failed", exc_info=True)
+        message = str(exc) or type(exc).__name__
+        low = message.lower()
+        if "socks" in low or "proxy" in low or "timeout" in low or "timed out" in low:
+            message = (
+                "Токен есть, но Telegram не ответил через прокси. "
+                "Нажмите «Проверить» в настройках прокси. "
+                + message
+            )
         return {
             "configured": True,
             "api_ok": False,
             "username": None,
             "name": None,
             "bot_id": None,
-            "error": str(exc)[:200],
+            "error": message[:200],
         }
 
 
