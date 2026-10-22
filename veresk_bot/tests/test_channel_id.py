@@ -21,6 +21,7 @@ os.environ["TELEGRAM_CHANNEL_USERNAME"] = ""
 
 import runtime_settings  # noqa: E402
 from channel_subscriptions import (  # noqa: E402
+    _account_hint_from_me,
     _channel_full_id,
     _channel_limitation_note,
     _is_admin_member_status,
@@ -57,6 +58,15 @@ class ChannelIdNormalizeTests(unittest.TestCase):
     def test_channel_full_id_from_broadcast_entity(self) -> None:
         entity = SimpleNamespace(id=555666777, broadcast=True, megagroup=False)
         self.assertEqual(_channel_full_id(entity), -100555666777)
+
+    def test_account_hint(self) -> None:
+        me = SimpleNamespace(
+            first_name="Анна", last_name="И", username="florist", phone="7999"
+        )
+        hint = _account_hint_from_me(me)
+        self.assertIn("Анна", hint)
+        self.assertIn("@florist", hint)
+        self.assertIn("+7999", hint)
 
     def test_admin_status_helper(self) -> None:
         self.assertTrue(_is_admin_member_status("administrator"))
@@ -193,11 +203,19 @@ class ChannelMatchAndRememberTests(unittest.TestCase):
         self.assertEqual(cfg["participants_count"], 126)
         self.assertIn("~126", _channel_limitation_note(participants_count=126, tracked=0))
         note = _channel_limitation_note(
-            participants_count=126, tracked=3, list_mode="admins"
+            participants_count=126,
+            tracked=2,
+            list_mode="admins",
+            account_hint="@florist",
+            userbot_admin_missing=True,
         )
-        self.assertIn("ограничение API", note)
-        self.assertIn("администраторы (3)", note)
-        self.assertNotIn("не админ канала", note)
+        self.assertIn("@florist", note)
+        self.assertIn("нет прав администратора", note)
+        self.assertIn("Выгрузить", note)
+        done = _channel_limitation_note(
+            participants_count=126, tracked=120, list_mode="members"
+        )
+        self.assertIn("Готово: 120", done)
 
 
 if __name__ == "__main__":

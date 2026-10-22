@@ -171,11 +171,37 @@ def _is_chat_admin_required(exc: BaseException) -> bool:
     )
 
 
+_PARTICIPANT_SEARCH_LETTERS = (
+    "abcdefghijklmnopqrstuvwxyz0123456789"
+    "абвгдеёжзийклмнопрстуфхцчшщъыьэюя"
+)
+
+
+def _account_hint_from_me(me: Any | None) -> str:
+    if me is None:
+        return ""
+    bits: list[str] = []
+    name = " ".join(
+        x for x in (getattr(me, "first_name", None), getattr(me, "last_name", None)) if x
+    ).strip()
+    if name:
+        bits.append(name)
+    username = str(getattr(me, "username", None) or "").strip()
+    if username:
+        bits.append("@" + username.lstrip("@"))
+    phone = str(getattr(me, "phone", None) or "").strip().lstrip("+")
+    if phone:
+        bits.append("+" + phone)
+    return " ".join(bits)
+
+
 def _channel_limitation_note(
     *,
     participants_count: int | None,
     tracked: int = 0,
     list_mode: str = "none",
+    account_hint: str = "",
+    userbot_admin_missing: bool = False,
 ) -> str:
     """Пояснение, почему в таблице не все ~N подписчиков канала."""
     count_line = (
@@ -183,6 +209,23 @@ def _channel_limitation_note(
         if participants_count is not None
         else "Счётчик канала получить не удалось."
     )
+    if userbot_admin_missing:
+        who = f" ({account_hint})" if account_hint else " из Настройки → Telegram"
+        return (
+            f"{count_line}\n\n"
+            f"Полный список раньше брался через Telegram-аккаунт{who}. "
+            "Сейчас у него нет прав администратора канала, поэтому выгрузились "
+            "только админы.\n\n"
+            "Добавьте этот аккаунт в админы канала (Канал → Администраторы) "
+            "и нажмите «Выгрузить» ещё раз."
+        )
+    if list_mode == "members" and participants_count and tracked:
+        if tracked >= max(3, int(participants_count) * 0.7):
+            return f"Готово: {tracked} подписчиков."
+        return (
+            f"Выгружено {tracked} из ~{int(participants_count)}. "
+            "Остальных Telegram скрывает или не отдаёт этому аккаунту."
+        )
     if list_mode == "admins" and tracked:
         extra = f" В таблицу записаны администраторы ({tracked})."
     elif tracked:
@@ -191,10 +234,9 @@ def _channel_limitation_note(
         extra = " В таблице пока пусто — появятся новые подписки."
     return (
         f"{count_line}\n\n"
-        "Telegram не отдаёт полный список подписчиков канала — это ограничение API, "
-        "не ошибка."
+        "Telegram не отдал полный список этим правами."
         f"{extra} "
-        "Новые подписки и отписки бот пишет сам, если он админ канала."
+        "Новые подписки бот пишет сам, если он админ канала."
     )
 
 
@@ -1382,6 +1424,7 @@ async def sync_channel_subscribers_via_telethon(
             ChannelParticipantCreator,
             ChannelParticipantSelf,
             ChannelParticipantsAdmins,
+            ChannelParticipantsRecent,
             User,
         )
     except ImportError as exc:
@@ -1397,6 +1440,7 @@ async def sync_channel_subscribers_via_telethon(
     is_broadcast = False
     participants_count: int | None = None
     list_mode = "members"  # members | admins | none
+    account_hint = ""
 
     async def _finish_without_full_list(*, via_bot_api: bool = True) -> dict[str, Any]:
         nonlocal participants_count, upserts, list_mode, channel_id
@@ -1409,9 +1453,10 @@ async def sync_channel_subscribers_via_telethon(
         elif participants_count is not None:
             save_channel_config(participants_count=int(participants_count))
         if bot_stats.get("admins_synced"):
-            upserts = int(bot_stats["admins_synced"])
-            list_mode = "admins"
-        else:
+            upserts = max(upserts, int(bot_stats["admins_synced"]))
+            if list_mode != "members":
+                list_mode = "admins"
+        elif list_mode != "members":
             list_mode = "none"
         _, _, stats_partial = await list_subscribers(
             status=STATUS_MEMBER, page=1, page_size=1
@@ -1430,6 +1475,8 @@ async def sync_channel_subscribers_via_telethon(
                 participants_count=participants_count,
                 tracked=tracked,
                 list_mode=list_mode,
+                account_hint=account_hint,
+                userbot_admin_missing=True,
             ),
         }
 
@@ -1465,11 +1512,23 @@ async def sync_channel_subscribers_via_telethon(
                 except Exception:
                     participants_count = None
 
-            async def _upsert_from_iter(*, filter_obj: Any | None = None) -> int:
+            try:
+                me = await client.get_me()
+                account_hint = _account_hint_from_me(me)
+            except Exception:
+                logger.debug("get_me для подсказки аккаунта не удался", exc_info=True)
+
+            async def _upsert_from_iter(
+                *,
+                filter_obj: Any | None = None,
+                search: str | None = None,
+            ) -> int:
                 n = 0
                 kwargs: dict[str, Any] = {}
                 if filter_obj is not None:
                     kwargs["filter"] = filter_obj
+                if search is not None:
+                    kwargs["search"] = search
                 async for user in client.iter_participants(entity, **kwargs):
                     if not isinstance(user, User) or getattr(user, "bot", False):
                         continue
@@ -1509,30 +1568,53 @@ async def sync_channel_subscribers_via_telethon(
                     n += 1
                 return n
 
+            async def _scrape_hidden_by_letter() -> None:
+                """Добор по буквам: так раньше собирался полный список канала."""
+                stagnant = 0
+                for letter in _PARTICIPANT_SEARCH_LETTERS:
+                    before = len(present)
+                    await _upsert_from_iter(search=letter)
+                    if len(present) == before:
+                        stagnant += 1
+                    else:
+                        stagnant = 0
+                    if participants_count and len(present) >= int(participants_count):
+                        return
+                    if stagnant >= 10:
+                        return
+
             try:
-                if is_broadcast:
-                    upserts = await _upsert_from_iter(
-                        filter_obj=ChannelParticipantsAdmins()
-                    )
-                    list_mode = "admins"
-                else:
+                # Как раньше: GetParticipants без фильтра Admins (Search '').
+                await _upsert_from_iter()
+                list_mode = "members"
+                if participants_count and len(present) < max(
+                    3, int(participants_count) * 0.6
+                ):
                     try:
-                        upserts = await _upsert_from_iter()
-                        list_mode = "members"
-                    except Exception as members_exc:
-                        if not _is_chat_admin_required(members_exc):
+                        await _upsert_from_iter(filter_obj=ChannelParticipantsRecent())
+                    except Exception as recent_exc:
+                        if _is_chat_admin_required(recent_exc):
                             raise
-                        logger.info(
-                            "Нет прав на полный список участников — пробуем админов"
-                        )
-                        upserts = await _upsert_from_iter(
+                        logger.debug("Recent-participants не удался", exc_info=True)
+                if participants_count and len(present) < max(
+                    3, int(participants_count) * 0.6
+                ):
+                    await _scrape_hidden_by_letter()
+                upserts = len(present)
+                if participants_count and len(present) < max(3, int(participants_count) * 0.15):
+                    # Почти никого — скорее всего аккаунт не админ / скрытые участники
+                    try:
+                        extra = await _upsert_from_iter(
                             filter_obj=ChannelParticipantsAdmins()
                         )
-                        list_mode = "admins"
+                        if extra and len(present) <= extra + 1:
+                            list_mode = "admins"
+                    except Exception:
+                        logger.debug("Admins fallback не удался", exc_info=True)
             except Exception as list_exc:
                 if _is_chat_admin_required(list_exc):
                     logger.info(
-                        "Telethon не может выгрузить участников канала — берём счётчик и админов через Bot API"
+                        "Нет прав на список участников канала — нужен админ-аккаунт из Настроек"
                     )
                     return await _finish_without_full_list()
                 raise
@@ -1560,13 +1642,14 @@ async def sync_channel_subscribers_via_telethon(
         save_channel_config(participants_count=int(participants_count))
 
     _, _, stats = await list_subscribers(status=STATUS_MEMBER, page=1, page_size=1)
-    note = None
-    if is_broadcast or list_mode != "members":
-        note = _channel_limitation_note(
-            participants_count=participants_count,
-            tracked=int(stats.get("members") or upserts or 0),
-            list_mode=list_mode,
-        )
+    tracked = int(stats.get("members") or upserts or 0)
+    note = _channel_limitation_note(
+        participants_count=participants_count,
+        tracked=tracked,
+        list_mode=list_mode,
+        account_hint=account_hint,
+        userbot_admin_missing=(list_mode in ("admins", "none")),
+    )
     return {
         "ok": True,
         "channel_id": channel_id,
