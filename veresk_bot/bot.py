@@ -1452,10 +1452,31 @@ BOT_COMMANDS = [
     BotCommand(command="cancel", description="Отменить текущую анкету"),
 ]
 
-bot = Bot(token=BOT_TOKEN, session=AiohttpSession(timeout=120))
+
+def build_aiogram_session(*, timeout: float = 120) -> AiohttpSession:
+    """Сессия Bot API: через локальный SOCKS, если в настройках задан VLESS/Hysteria2."""
+    from telegram_proxy import local_socks_url
+
+    proxy = local_socks_url()
+    if proxy:
+        return AiohttpSession(timeout=timeout, proxy=proxy)
+    return AiohttpSession(timeout=timeout)
+
+
+bot = Bot(token=BOT_TOKEN, session=build_aiogram_session())
 dp = Dispatcher(storage=storage)
 dp.include_router(notifications_router)
 register_handlers(dp)
+
+
+async def rebind_bot_session() -> None:
+    """Пересоздать HTTP-сессию бота после смены прокси (без рестарта процесса)."""
+    old = bot.session
+    bot.session = build_aiogram_session()
+    try:
+        await old.close()
+    except Exception:
+        logging.getLogger(__name__).debug("old bot session close failed", exc_info=True)
 
 
 async def validate_bot_token() -> bool:
@@ -1540,6 +1561,28 @@ async def main() -> None:
     await init_mailing_db()
     await init_bot_metrics()
     await init_channel_subscriptions()
+
+    # VLESS / Hysteria2 → локальный SOCKS до любых запросов к Telegram
+    try:
+        from telegram_proxy import ensure_proxy_running_async
+
+        proxy_boot = await ensure_proxy_running_async()
+        if proxy_boot.get("enabled"):
+            await rebind_bot_session()
+            if proxy_boot.get("ok"):
+                logger.info(
+                    "Telegram proxy: %s (%s) → %s",
+                    proxy_boot.get("remark") or proxy_boot.get("kind"),
+                    proxy_boot.get("kind"),
+                    proxy_boot.get("local"),
+                )
+            else:
+                logger.error(
+                    "Telegram proxy не поднялся: %s",
+                    proxy_boot.get("error") or "unknown",
+                )
+    except Exception:
+        logger.exception("Не удалось инициализировать Telegram proxy")
 
     redis = getattr(dp.storage, "redis", None)
     if redis:

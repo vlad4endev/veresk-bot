@@ -86,18 +86,26 @@ def make_telegram_client(session_base: str) -> Any:
     """Telethon-клиент с авто-reconnect, чтобы сессия не умирала на сетевом сбое."""
     from telethon import TelegramClient
 
+    from telegram_proxy import ensure_proxy_running, telethon_proxy
+
     api_id, api_hash = get_api_credentials()
-    return TelegramClient(
-        session_base,
-        api_id,
-        api_hash,
-        connection_retries=5,
-        retry_delay=1,
-        auto_reconnect=True,
-        request_retries=3,
-        timeout=20,
-        flood_sleep_threshold=60,
-    )
+    # Если прокси включён — поднимаем sing-box до connect()
+    try:
+        ensure_proxy_running()
+    except Exception:
+        logger.debug("ensure_proxy_running before Telethon failed", exc_info=True)
+    proxy = telethon_proxy()
+    kwargs: dict[str, Any] = {
+        "connection_retries": 5,
+        "retry_delay": 1,
+        "auto_reconnect": True,
+        "request_retries": 3,
+        "timeout": 20,
+        "flood_sleep_threshold": 60,
+    }
+    if proxy is not None:
+        kwargs["proxy"] = proxy
+    return TelegramClient(session_base, api_id, api_hash, **kwargs)
 
 
 async def start_telegram_login(phone: str) -> dict[str, Any]:
