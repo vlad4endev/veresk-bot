@@ -170,8 +170,8 @@ def get_channel_config() -> dict[str, Any]:
         channel_id = int(TELEGRAM_CHANNEL_ID or 0)
 
     normalized = normalize_telegram_channel_id(channel_id)
-    # Автолечение: в runtime лежал короткий id — перепишем в −100…
-    if normalized and normalized != channel_id and raw_id not in (None, ""):
+    # Автолечение: короткий id из runtime или .env → полный −100…
+    if normalized and normalized != channel_id:
         try:
             runtime_settings.set_many({"telegram_channel_id": normalized})
         except Exception:
@@ -446,6 +446,28 @@ def _ensure_column(db: sqlite3.Connection, table: str, column: str, typedef: str
         db.execute(f"ALTER TABLE {table} ADD COLUMN {column} {typedef}")
 
 
+def _normalize_stored_subscription_channel_ids(db: sqlite3.Connection) -> int:
+    """Починить channel_id в БД после смены формата (короткий → −100…)."""
+    try:
+        rows = db.execute(
+            "SELECT DISTINCT channel_id FROM channel_subscriptions WHERE channel_id > 0"
+        ).fetchall()
+    except sqlite3.Error:
+        return 0
+    updated = 0
+    for row in rows:
+        old = int(row[0])
+        new = normalize_telegram_channel_id(old)
+        if not new or new == old:
+            continue
+        cur = db.execute(
+            "UPDATE channel_subscriptions SET channel_id = ? WHERE channel_id = ?",
+            (new, old),
+        )
+        updated += int(cur.rowcount or 0)
+    return updated
+
+
 def _ensure_channel_subscriptions_schema(db: sqlite3.Connection) -> None:
     db.executescript(_SCHEMA)
     # На старых БД CREATE TABLE IF NOT EXISTS не добавит welcome_*;
@@ -453,6 +475,9 @@ def _ensure_channel_subscriptions_schema(db: sqlite3.Connection) -> None:
     _ensure_column(db, "channel_subscriptions", "welcome_due_at", "TEXT")
     _ensure_column(db, "channel_subscriptions", "welcome_sent_at", "TEXT")
     db.executescript(_SCHEMA_WELCOME_INDEX)
+    n = _normalize_stored_subscription_channel_ids(db)
+    if n:
+        logger.info("Нормализовано channel_id в подписчиках: %s строк", n)
 
 
 async def init_channel_subscriptions() -> None:
