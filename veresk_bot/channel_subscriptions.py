@@ -127,6 +127,36 @@ def is_new_subscriber(joined_at: str | None, *, days: int = NEW_SUBSCRIBER_DAYS)
     return dt >= new_cutoff_dt(days)
 
 
+def normalize_telegram_channel_id(channel_id: int | str | None) -> int:
+    """Привести id канала к виду Bot API (−100…).
+
+    Telethon отдаёт «короткий» положительный id канала; Bot API и chat_member —
+    полный −100XXXXXXXXXX. Без нормализации совпадение ломается: канал «не
+    определяется», а live-учёт подписчиков молча отбрасывает события.
+    """
+    if channel_id in (None, ""):
+        return 0
+    try:
+        cid = int(channel_id)
+    except (TypeError, ValueError):
+        return 0
+    if cid == 0:
+        return 0
+    if cid > 0:
+        return int(f"-100{cid}")
+    # Уже полный (−100…) или старый формат группы (−…)
+    return cid
+
+
+def same_telegram_channel_id(a: int | str | None, b: int | str | None) -> bool:
+    """True, если оба id указывают на один канал (short и −100… — одно и то же)."""
+    na = normalize_telegram_channel_id(a)
+    nb = normalize_telegram_channel_id(b)
+    if not na or not nb:
+        return False
+    return na == nb
+
+
 def get_channel_config() -> dict[str, Any]:
     """ID/username канала: runtime_settings → .env."""
     raw_id = runtime_settings.get("telegram_channel_id")
@@ -138,6 +168,15 @@ def get_channel_config() -> dict[str, Any]:
             channel_id = 0
     if not channel_id:
         channel_id = int(TELEGRAM_CHANNEL_ID or 0)
+
+    normalized = normalize_telegram_channel_id(channel_id)
+    # Автолечение: в runtime лежал короткий id — перепишем в −100…
+    if normalized and normalized != channel_id and raw_id not in (None, ""):
+        try:
+            runtime_settings.set_many({"telegram_channel_id": normalized})
+        except Exception:
+            logger.debug("Не удалось нормализовать telegram_channel_id", exc_info=True)
+    channel_id = normalized
 
     username = str(runtime_settings.get("telegram_channel_username") or "").strip()
     if not username:
@@ -317,7 +356,9 @@ def save_channel_config(
 ) -> dict[str, Any]:
     payload: dict[str, Any] = {}
     if channel_id is not None:
-        payload["telegram_channel_id"] = int(channel_id) if channel_id else 0
+        payload["telegram_channel_id"] = (
+            normalize_telegram_channel_id(channel_id) if channel_id else 0
+        )
     if channel_username is not None:
         payload["telegram_channel_username"] = str(channel_username).strip().lstrip("@")
     if channel_title is not None:
@@ -348,26 +389,31 @@ def remember_bot_admin_channel(
     """
     Сохранить канал, где бот стал админом.
     Если канал уже настроен на другой id — не перезаписываем (кроме force=True).
+    Короткий Telethon-id и −100… считаются одним каналом.
     """
     cfg = get_channel_config()
-    cid = int(channel_id)
+    cid = normalize_telegram_channel_id(channel_id)
     uname = (channel_username or "").strip().lstrip("@")
     title = (channel_title or "").strip()
+    cfg_uname = (cfg.get("channel_username") or "").strip().lstrip("@").lower()
+    same_by_id = bool(cfg.get("channel_id")) and same_telegram_channel_id(
+        cfg.get("channel_id"), cid
+    )
+    same_by_username = bool(uname and cfg_uname and uname.lower() == cfg_uname)
 
     if cfg["configured"] and not force:
-        if cfg["channel_id"] and cfg["channel_id"] != cid:
+        if cfg["channel_id"] and not same_by_id and not same_by_username:
             return {**cfg, "skipped": True, "reason": "other_channel_configured"}
         # Тот же канал / только username — допишем недостающие поля
         save_kwargs: dict[str, Any] = {}
-        if not cfg["channel_id"]:
+        if cid and (not cfg["channel_id"] or not same_by_id or cfg["channel_id"] != cid):
+            # Пустой / короткий / устаревший id → полный −100…
             save_kwargs["channel_id"] = cid
-        elif cfg["channel_id"] == cid:
-            save_kwargs["channel_id"] = cid
-        if uname and not cfg["channel_username"]:
+        if uname and (not cfg["channel_username"] or same_by_id or same_by_username):
             save_kwargs["channel_username"] = uname
-        elif uname and cfg["channel_id"] == cid:
-            save_kwargs["channel_username"] = uname
-        if title and (not cfg.get("channel_title") or cfg["channel_id"] == cid):
+        if title and (
+            not cfg.get("channel_title") or same_by_id or same_by_username
+        ):
             save_kwargs["channel_title"] = title
         if save_kwargs:
             return {**save_channel_config(**save_kwargs), "skipped": False, "updated": True}
@@ -522,6 +568,7 @@ async def upsert_subscription(
     status_norm = (status or "").strip().lower() or STATUS_LEFT
     is_active = status_norm in _ACTIVE
     stored_status = STATUS_MEMBER if is_active else STATUS_LEFT
+    channel_id = normalize_telegram_channel_id(channel_id) or int(channel_id or 0)
 
     def _upsert() -> dict[str, Any]:
         with _connect() as db:
@@ -1054,22 +1101,16 @@ async def sync_channel_subscribers_via_telethon(
     try:
         async with telegram_session(session_file, account_id) as client:
             entity = await client.get_entity(ref)
-            channel_id = int(getattr(entity, "id", 0) or 0)
             is_broadcast = bool(getattr(entity, "broadcast", False))
-            is_channel_like = bool(
-                is_broadcast or getattr(entity, "megagroup", False)
-            )
-            # Для каналов/супергрупп Telethon отдаёт «короткий» id;
-            # bot API и chat_member используют -100XXXXXXXXXX.
-            if channel_id > 0 and is_channel_like:
-                full_id = int(f"-100{channel_id}")
-            elif channel_id < 0:
-                full_id = channel_id
-            else:
-                full_id = channel_id
+            # Telethon → короткий id; нормализуем к Bot API (−100…)
+            full_id = _channel_full_id(entity)
 
-            # Сохраняем полный id канала, если ещё не был задан
-            if full_id and full_id != cfg["channel_id"]:
+            # Сохраняем полный id канала (и чиним короткий, если был)
+            if full_id and (
+                not cfg["channel_id"]
+                or not same_telegram_channel_id(full_id, cfg["channel_id"])
+                or int(cfg["channel_id"]) != full_id
+            ):
                 save_channel_config(channel_id=full_id)
                 channel_id = full_id
             else:
@@ -1164,14 +1205,19 @@ async def sync_channel_subscribers_via_telethon(
 
 
 def matches_configured_channel(chat_id: int, chat_username: str | None = None) -> bool:
-    """True, если событие относится к настроенному каналу."""
+    """True, если событие относится к настроенному каналу.
+
+    Сравнивает id в короткой и −100-форме; при совпадении @username тоже
+    принимает событие (даже если в конфиге устаревший короткий id).
+    """
     cfg = get_channel_config()
-    configured = int(cfg["channel_id"] or 0)
-    uname = (cfg["channel_username"] or "").lower()
-    if configured:
-        return int(chat_id) == configured
-    if uname:
-        return (chat_username or "").lower().lstrip("@") == uname
+    configured = normalize_telegram_channel_id(cfg.get("channel_id") or 0)
+    uname = (cfg.get("channel_username") or "").lower().lstrip("@")
+    event_uname = (chat_username or "").lower().lstrip("@")
+    if configured and same_telegram_channel_id(chat_id, configured):
+        return True
+    if uname and event_uname and event_uname == uname:
+        return True
     # Пока канал не задан — не пишем чужие chat_member-события
     return False
 
@@ -1182,7 +1228,7 @@ def _channel_full_id(entity: Any) -> int:
         getattr(entity, "broadcast", False) or getattr(entity, "megagroup", False)
     )
     if channel_id > 0 and is_channel_like:
-        return int(f"-100{channel_id}")
+        return normalize_telegram_channel_id(channel_id)
     return channel_id
 
 
@@ -1237,12 +1283,21 @@ async def discover_channels_where_bot_is_admin(
                     continue
                 try:
                     bot_is_admin = False
-                    async for admin in client.iter_participants(
-                        entity, filter=ChannelParticipantsAdmins()
-                    ):
-                        if int(getattr(admin, "id", 0) or 0) == bid:
-                            bot_is_admin = True
-                            break
+                    # get_permissions надёжнее полного обхода админов
+                    # (меньше FLOOD / CHANNEL_PRIVATE на больших каналах)
+                    try:
+                        perms = await client.get_permissions(entity, bid)
+                        bot_is_admin = bool(
+                            getattr(perms, "is_admin", False)
+                            or getattr(perms, "is_creator", False)
+                        )
+                    except Exception:
+                        async for admin in client.iter_participants(
+                            entity, filter=ChannelParticipantsAdmins()
+                        ):
+                            if int(getattr(admin, "id", 0) or 0) == bid:
+                                bot_is_admin = True
+                                break
                     if not bot_is_admin:
                         continue
                 except Exception:
@@ -1257,6 +1312,8 @@ async def discover_channels_where_bot_is_admin(
                 title = str(getattr(entity, "title", None) or dialog.name or "").strip()
                 username = str(getattr(entity, "username", None) or "").strip()
                 participants_count = getattr(entity, "participants_count", None)
+                if participants_count is None:
+                    participants_count = getattr(dialog, "participants_count", None)
                 try:
                     participants_count = (
                         int(participants_count) if participants_count is not None else None
@@ -1301,9 +1358,14 @@ async def discover_channels_where_bot_is_admin(
         auto_saved = True
     elif auto_save and len(found) == 1 and cfg.get("configured"):
         ch = found[0]
-        if int(cfg.get("channel_id") or 0) in (0, int(ch["channel_id"])) or (
-            cfg.get("channel_username") or ""
-        ).lower() == (ch.get("channel_username") or "").lower():
+        cfg_uname = (cfg.get("channel_username") or "").lower().lstrip("@")
+        ch_uname = (ch.get("channel_username") or "").lower().lstrip("@")
+        same = (
+            not cfg.get("channel_id")
+            or same_telegram_channel_id(cfg.get("channel_id"), ch.get("channel_id"))
+            or (bool(cfg_uname and ch_uname) and cfg_uname == ch_uname)
+        )
+        if same:
             remember_bot_admin_channel(
                 channel_id=int(ch["channel_id"]),
                 channel_username=ch.get("channel_username") or "",
