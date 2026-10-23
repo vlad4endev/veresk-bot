@@ -72,7 +72,6 @@ from mailing_db import (
     permissions_catalog,
     account_effective_daily_limit,
     account_quota_remaining,
-    account_sent_today,
     pick_ready_account,
     set_customer_tg_by_phone,
     set_customer_max_by_phone,
