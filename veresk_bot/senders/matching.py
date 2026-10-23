@@ -273,6 +273,7 @@ async def preview_mailing_match(
     from mailing_db import (
         customers_by_ids,
         customers_for_segment,
+        explain_mailing_account_availability,
         get_active_discount,
         list_send_accounts,
         pick_ready_account,
@@ -286,6 +287,7 @@ async def preview_mailing_match(
         customers = await customers_for_segment(segment or "all", new_days=new_days)
         audience = segment or "all"
     accounts = await list_send_accounts()
+    tg_avail = await explain_mailing_account_availability("tg_userbot")
     tg_ready = await pick_ready_account("tg_userbot")
     tg_count = sum(
         1
@@ -335,6 +337,11 @@ async def preview_mailing_match(
         "accounts": {
             "tg": {
                 "ready": bool(tg_ready),
+                "connected": tg_avail.get("connected_count", 0) > 0,
+                "block_reason": tg_avail.get("reason"),
+                "sent_today": tg_avail.get("sent_today"),
+                "effective_daily_limit": tg_avail.get("effective_daily_limit"),
+                "warmup_until": tg_avail.get("warmup_until"),
                 "count": tg_count,
                 "label": (tg_ready or {}).get("label") if tg_ready else None,
             },

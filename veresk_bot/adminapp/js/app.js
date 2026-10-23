@@ -3480,7 +3480,7 @@
       renderMaxUserbotList(maxUserbotItems, data);
       renderMaxSessionBanner(maxUserbotItems, data);
       applySessionHealth(data);
-      const ready = tgItems.filter((a) => !["warmup", "unavailable", "blocked"].includes(String(a.status || ""))).length;
+      const ready = tgItems.filter((a) => a.mailing_available).length;
       const liveOk = tgItems.filter((a) => a.session_ok === true).length;
       updateTgSetupStatus(configured, tgItems.length, ready, checkLive ? liveOk : null);
       updateSettingsGlance(configured, tgItems.length);
@@ -3852,7 +3852,16 @@
         : "";
 
     const sent = a.sent_today != null ? a.sent_today : 0;
-    const limit = a.daily_limit != null ? a.daily_limit : 200;
+    const limit =
+      a.effective_daily_limit != null
+        ? a.effective_daily_limit
+        : a.daily_limit != null
+          ? a.daily_limit
+          : 200;
+    const limitNote =
+      a.status === "warmup" && (a.daily_limit || 200) > limit
+        ? " · лимит прогрева"
+        : "";
     const id = a.id != null ? String(a.id) : "";
     const dead = isDeadUserbot(a);
     const errText = dead ? (a.last_error || a.session_error || "") : "";
@@ -3867,7 +3876,7 @@
         </div>
       </div>
       <div class="acct-info">
-        <div class="acct-quota"><strong>${esc(String(sent))}</strong> из ${esc(String(limit))} сегодня</div>
+        <div class="acct-quota"><strong>${esc(String(sent))}</strong> из ${esc(String(limit))} сегодня${esc(limitNote)}</div>
         <div class="acct-tags">
           ${connectLabel ? `<span class="tagi" style="color:${connectColor}"><span class="d" style="background:${connectColor}"></span>${esc(connectLabel)}</span>` : ""}
           <span class="tagi" style="color:${statusColor}"><span class="d" style="background:${statusColor}"></span>${esc(statusLabel)}</span>
@@ -5631,7 +5640,16 @@
         ? "проверка " + fmtRelTime(a.last_checked_at)
         : "";
     const sent = a.sent_today != null ? a.sent_today : 0;
-    const limit = a.daily_limit != null ? a.daily_limit : 150;
+    const limit =
+      a.effective_daily_limit != null
+        ? a.effective_daily_limit
+        : a.daily_limit != null
+          ? a.daily_limit
+          : 150;
+    const limitNote =
+      a.status === "warmup" && (a.daily_limit || 150) > limit
+        ? " · лимит прогрева"
+        : "";
     const id = a.id != null ? String(a.id) : "";
     const nameBits = [];
     if (a.label && a.label !== a.phone && a.label !== a.phone_masked) nameBits.push(a.label);
@@ -5647,7 +5665,7 @@
         </div>
       </div>
       <div class="acct-info">
-        <div class="acct-quota"><strong>${esc(String(sent))}</strong> из ${esc(String(limit))} сегодня</div>
+        <div class="acct-quota"><strong>${esc(String(sent))}</strong> из ${esc(String(limit))} сегодня${esc(limitNote)}</div>
         <div class="acct-tags">
           ${connectLabel ? `<span class="tagi" style="color:${connectColor}"><span class="d" style="background:${connectColor}"></span>${esc(connectLabel)}</span>` : ""}
           <span class="tagi" style="color:${statusColor}"><span class="d" style="background:${statusColor}"></span>${esc(statusLabel)}</span>
@@ -6667,11 +6685,24 @@
       const tgAcc = data.accounts && data.accounts.tg;
       const maxAcc = data.accounts && data.accounts.max;
       if ($("#chanTgMeta")) {
-        $("#chanTgMeta").textContent = tgAcc?.ready
-          ? tgAcc.count > 1
-            ? tgAcc.count + " акк."
-            : "аккаунт готов"
-          : "нет аккаунта";
+        const tgMeta = (() => {
+          if (tgAcc?.ready) {
+            return tgAcc.count > 1 ? tgAcc.count + " акк." : "аккаунт готов";
+          }
+          if (tgAcc?.connected) {
+            if (tgAcc.block_reason === "warmup_limit") {
+              const lim = tgAcc.effective_daily_limit ?? 30;
+              return `лимит прогрева ${lim}/${lim} сегодня`;
+            }
+            if (tgAcc.block_reason === "daily_limit") {
+              const lim = tgAcc.effective_daily_limit ?? "—";
+              return `лимит на сегодня (${lim})`;
+            }
+            return "аккаунт занят";
+          }
+          return "нет аккаунта";
+        })();
+        $("#chanTgMeta").textContent = tgMeta;
       }
       if ($("#chanMaxMeta")) {
         const modeMax = maxAcc?.mode;
@@ -6708,10 +6739,29 @@
         const skipped = data.skipped || {};
         const skipTotal = Object.values(skipped).reduce((a, b) => a + b, 0);
         if (!will) {
-          note.textContent =
-            mode === "pick"
-              ? "У выбранных нет доставки в отмеченные каналы — смените канал или клиента."
-              : "Нет доставляемых получателей — подключите аккаунты или выберите другой сегмент/канал.";
+          const tgAcc = data.accounts && data.accounts.tg;
+          if (tgAcc?.block_reason === "warmup_limit") {
+            const lim = tgAcc.effective_daily_limit ?? 30;
+            const until = tgAcc.warmup_until
+              ? fmtWarmupDate(tgAcc.warmup_until)
+              : "";
+            note.textContent =
+              `Лимит прогрева Telegram на сегодня исчерпан (${lim} сообщений). ` +
+              (until
+                ? `Полный лимит откроется после ${until} или завтра снова до ${lim}/день.`
+                : "Попробуйте завтра или дождитесь окончания прогрева.");
+          } else if (tgAcc?.block_reason === "daily_limit") {
+            note.textContent =
+              "Дневной лимит Telegram-аккаунта исчерпан — рассылка продолжится завтра.";
+          } else if (tgAcc?.connected && !tgAcc?.ready) {
+            note.textContent =
+              "Telegram подключён, но сейчас нельзя отправлять — проверьте лимиты в Настройки → Telegram.";
+          } else {
+            note.textContent =
+              mode === "pick"
+                ? "У выбранных нет доставки в отмеченные каналы — смените канал или клиента."
+                : "Нет доставляемых получателей — подключите аккаунты или выберите другой сегмент/канал.";
+          }
           note.className = "match-preview-note warn";
         } else if (skipTotal) {
           note.textContent =

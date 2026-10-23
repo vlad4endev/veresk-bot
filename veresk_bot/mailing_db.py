@@ -1857,6 +1857,29 @@ async def get_send_account(account_id: int) -> dict[str, Any] | None:
     return await _run_db(_get)
 
 
+def account_effective_daily_limit(acc: dict[str, Any], today: str | None = None) -> int:
+    """Лимит отправок на сегодня с учётом прогрева (до 30/день)."""
+    today = today or datetime.now().date().isoformat()
+    base = int(acc.get("daily_limit") or 200)
+    if acc.get("status") == "warmup" and acc.get("warmup_until"):
+        if str(acc["warmup_until"]) > today:
+            return min(base, 30)
+    return base
+
+
+def account_sent_today(acc: dict[str, Any], today: str | None = None) -> int:
+    today = today or datetime.now().date().isoformat()
+    if acc.get("sent_day") != today:
+        return 0
+    return int(acc.get("sent_today") or 0)
+
+
+def account_quota_remaining(acc: dict[str, Any], today: str | None = None) -> int:
+    today = today or datetime.now().date().isoformat()
+    limit = account_effective_daily_limit(acc, today)
+    return max(0, limit - account_sent_today(acc, today))
+
+
 async def pick_ready_account(kind: str = "tg_userbot") -> dict[str, Any] | None:
     today = datetime.now().date().isoformat()
 
@@ -1880,25 +1903,84 @@ async def pick_ready_account(kind: str = "tg_userbot") -> dict[str, Any] | None:
                     acc["sent_today"] = 0
                     acc["sent_day"] = today
                 if acc["status"] == "warmup" and acc.get("warmup_until"):
-                    if acc["warmup_until"] > today:
-                        # ещё греется — пониженный лимит
-                        limit = min(acc["daily_limit"], 30)
-                    else:
+                    if acc["warmup_until"] <= today:
                         db.execute(
                             "UPDATE send_accounts SET status = 'ready' WHERE id = ?",
                             (acc["id"],),
                         )
                         acc["status"] = "ready"
-                        limit = acc["daily_limit"]
-                else:
-                    limit = acc["daily_limit"]
-                if acc["sent_today"] < limit:
+                limit = account_effective_daily_limit(acc, today)
+                if account_sent_today(acc, today) < limit:
                     db.commit()
                     return acc
             db.commit()
         return None
 
     return await _run_db(_pick)
+
+
+async def explain_mailing_account_availability(
+    kind: str = "tg_userbot",
+) -> dict[str, Any]:
+    """Почему рассылка через аккаунт доступна или нет (для превью и UI)."""
+    today = datetime.now().date().isoformat()
+
+    def _load() -> list[dict[str, Any]]:
+        with _connect() as db:
+            rows = db.execute(
+                """
+                SELECT * FROM send_accounts
+                WHERE kind = ? AND status IN ('ready', 'warmup')
+                ORDER BY id ASC
+                """,
+                (kind,),
+            ).fetchall()
+        return [dict(r) for r in rows]
+
+    accounts = await _run_db(_load)
+    picked = await pick_ready_account(kind)
+    if picked:
+        return {
+            "available": True,
+            "reason": None,
+            "connected_count": len(accounts),
+            "account_id": picked.get("id"),
+            "sent_today": account_sent_today(picked, today),
+            "effective_daily_limit": account_effective_daily_limit(picked, today),
+            "warmup_until": picked.get("warmup_until"),
+            "status": picked.get("status"),
+        }
+    if not accounts:
+        return {
+            "available": False,
+            "reason": "no_account",
+            "connected_count": 0,
+        }
+    acc = accounts[0]
+    sent = account_sent_today(acc, today)
+    limit = account_effective_daily_limit(acc, today)
+    if sent >= limit:
+        reason = "warmup_limit" if acc.get("status") == "warmup" else "daily_limit"
+        return {
+            "available": False,
+            "reason": reason,
+            "connected_count": len(accounts),
+            "account_id": acc.get("id"),
+            "sent_today": sent,
+            "effective_daily_limit": limit,
+            "warmup_until": acc.get("warmup_until"),
+            "status": acc.get("status"),
+        }
+    return {
+        "available": False,
+        "reason": "unavailable",
+        "connected_count": len(accounts),
+        "account_id": acc.get("id"),
+        "sent_today": sent,
+        "effective_daily_limit": limit,
+        "warmup_until": acc.get("warmup_until"),
+        "status": acc.get("status"),
+    }
 
 
 async def bump_account_sent(account_id: int) -> None:
