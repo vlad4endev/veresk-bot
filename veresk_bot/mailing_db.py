@@ -1485,6 +1485,58 @@ async def delete_campaign(campaign_id: int) -> str | None:
     return await _run_db(_delete)
 
 
+async def cancel_campaign_send(campaign_id: int) -> str | None:
+    """Останавливает отправку: pending получатели снимаются с очереди."""
+
+    def _cancel() -> str | None:
+        with _connect() as db:
+            row = db.execute(
+                "SELECT status FROM campaigns WHERE id = ?", (campaign_id,)
+            ).fetchone()
+            if not row:
+                return "not_found"
+            if row["status"] != "sending":
+                return "not_cancellable"
+            db.execute(
+                """
+                UPDATE campaign_recipients
+                SET status = 'cancelled'
+                WHERE campaign_id = ? AND status = 'pending'
+                """,
+                (campaign_id,),
+            )
+            stats = db.execute(
+                """
+                SELECT
+                    SUM(CASE WHEN status IN ('sent','delivered') THEN 1 ELSE 0 END) AS sent,
+                    SUM(CASE WHEN status = 'delivered' THEN 1 ELSE 0 END) AS deliv,
+                    SUM(CASE WHEN status = 'failed' THEN 1 ELSE 0 END) AS failed
+                FROM campaign_recipients WHERE campaign_id = ?
+                """,
+                (campaign_id,),
+            ).fetchone()
+            db.execute(
+                """
+                UPDATE campaigns SET
+                    status = 'cancelled',
+                    sent_count = ?, delivered_count = ?, failed_count = ?,
+                    updated_at = ?
+                WHERE id = ?
+                """,
+                (
+                    int(stats["sent"] or 0),
+                    int(stats["deliv"] or 0),
+                    int(stats["failed"] or 0),
+                    _now(),
+                    campaign_id,
+                ),
+            )
+            db.commit()
+            return None
+
+    return await _run_db(_cancel)
+
+
 async def list_campaign_recipients(
     campaign_id: int,
     *,

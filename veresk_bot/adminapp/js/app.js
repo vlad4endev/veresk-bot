@@ -1031,7 +1031,13 @@
   window.openDetail = openDetail;
 
   function renderDetail(c, recipients) {
-    const started = c.status === "sending" || c.status === "done" || c.status === "error";
+    const started =
+      c.status === "sending" ||
+      c.status === "done" ||
+      c.status === "error" ||
+      c.status === "cancelled";
+    const canEdit = c.status === "draft" || c.status === "scheduled";
+    const canCancelSend = c.status === "sending";
     const chans = String(c.channels || "")
       .split(",")
       .filter(Boolean)
@@ -1073,24 +1079,43 @@
       );
     const okCount = c.ok_count ?? c.sent_count ?? 0;
 
-    const leftActions = started
-      ? `<div class="det-actions">
-          <button class="btn primary" id="btnRepeat">Повторить рассылку</button>
-        </div>`
-      : `<div class="notsent">
+    const toolbarParts = [];
+    if (canEdit) {
+      toolbarParts.push(
+        '<button class="btn" type="button" id="btnEditCampaign">Редактировать</button>',
+        '<button class="btn danger-ghost" type="button" id="btnDeleteCampaign">Удалить</button>',
+        '<button class="btn primary" type="button" id="btnSendNow">Отправить сейчас</button>'
+      );
+    }
+    if (canCancelSend) {
+      toolbarParts.push(
+        '<button class="btn danger-ghost" type="button" id="btnCancelSend">Остановить очередь</button>'
+      );
+    }
+    if (started || canEdit) {
+      toolbarParts.push(
+        '<button class="btn" type="button" id="btnRepeat">Повторить как новую</button>'
+      );
+    }
+    const toolbarHtml = toolbarParts.length
+      ? `<div class="det-toolbar" role="toolbar" aria-label="Действия с рассылкой">${toolbarParts.join("")}</div>`
+      : "";
+
+    const leftActions = canEdit
+      ? `<div class="notsent">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><path d="M12 7v6M12 16h.01"/></svg>
           <div>${
             c.status === "scheduled"
               ? `Запланирована на ${esc(c.when_short || c.when)}. ${fmtNum(c.total_count)} получателей уже в очереди.`
               : `Черновик: ${fmtNum(c.total_count)} получателей готовы. Нажмите «Отправить сейчас», чтобы запустить.`
           }</div>
-        </div>
-        <div class="det-actions">
-          <button class="btn big" type="button" id="btnEditCampaign">Редактировать</button>
-          <button class="btn danger-ghost big" type="button" id="btnDeleteCampaign">Удалить</button>
-          <button class="btn primary big" type="button" id="btnSendNow">Отправить сейчас</button>
-          <button class="btn big" type="button" id="btnRepeat">Повторить как новую</button>
-        </div>`;
+        </div>`
+      : canCancelSend
+        ? `<div class="notsent">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><path d="M12 7v6M12 16h.01"/></svg>
+          <div>Идёт отправка: ${fmtNum(okCount)} из ${fmtNum(c.total_count)}. Оставшиеся в очереди можно снять кнопкой «Остановить очередь» выше.</div>
+        </div>`
+        : "";
 
     const rightBody = `<div class="subh">${started ? "Как дошло" : "Очередь отправки"}</div>
         <div class="dstrip">
@@ -1116,6 +1141,7 @@
         <div class="spacer"></div>
         <span class="status ${esc(c.status_class)}">${esc(c.status_label)}</span>
       </div>
+      ${toolbarHtml}
       <div class="detail-grid">
         <div class="detail-left">
           <div class="subh" style="margin-bottom:10px">Текст сообщения</div>
@@ -1144,6 +1170,36 @@
     $("#btnSendNow")?.addEventListener("click", async () => {
       await AdminAPI.patchCampaign(c.id, { send_now: true });
       openDetail(c.id);
+    });
+    $("#btnCancelSend")?.addEventListener("click", async () => {
+      const pending =
+        c.pending_count ??
+        Math.max(
+          0,
+          (c.total_count || 0) -
+            (c.ok_count ?? c.sent_count ?? 0) -
+            (c.failed_count || 0)
+        );
+      if (
+        !confirm(
+          `Остановить очередь? Уже отправленные (${fmtNum(
+            c.ok_count ?? c.sent_count ?? 0
+          )}) останутся, ${fmtNum(pending)} сообщений в очереди не уйдут.`
+        )
+      ) {
+        return;
+      }
+      try {
+        await AdminAPI.patchCampaign(c.id, { cancel_send: true });
+        openDetail(c.id);
+      } catch (err) {
+        const detail =
+          err.data?.message ||
+          err.data?.error ||
+          err.message ||
+          "Не удалось остановить";
+        alert(detail);
+      }
     });
     $("#btnDeleteCampaign")?.addEventListener("click", async () => {
       const kind =

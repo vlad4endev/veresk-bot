@@ -40,6 +40,7 @@ from mailing_db import (
     create_admin_session,
     create_admin_user,
     create_campaign,
+    cancel_campaign_send,
     delete_campaign,
     create_personal_message,
     delete_admin_session,
@@ -1503,6 +1504,7 @@ def _campaign_public(c: dict) -> dict:
         "sending": ("Отправляется", "sending"),
         "done": ("Отправлено", "done"),
         "error": ("Ошибка", "err"),
+        "cancelled": ("Остановлена", "draft"),
     }
     label, sclass = status_map.get(status, (status, "neutral"))
     total = int(c.get("total_count") or 0)
@@ -1532,6 +1534,10 @@ def _campaign_public(c: dict) -> dict:
     elif status == "error":
         when = "Ошибка отправки"
         when_short = "Ошибка"
+    elif status == "cancelled":
+        stamp = c.get("updated_at") or c.get("created_at")
+        when = f"Остановлена {_format_dt_short(stamp)} · {ok_count} из {total} ушло"
+        when_short = "Остановлена"
     channels = (c.get("channels") or "tg").replace("tg", "Telegram").replace("max", "MAX")
     media_path = c.get("media_path") or None
     return {
@@ -1826,6 +1832,21 @@ async def handle_campaign_patch(request: web.Request) -> web.Response:
     existing = await get_campaign(cid)
     if not existing:
         return _json({"error": "not_found"}, status=404)
+
+    if body.get("cancel_send"):
+        if existing["status"] != "sending":
+            return _json(
+                {
+                    "error": "not_cancellable",
+                    "message": "Остановить очередь можно только у рассылки в статусе «Отправляется»",
+                },
+                status=400,
+            )
+        code = await cancel_campaign_send(cid)
+        if code == "not_found":
+            return _json({"error": "not_found"}, status=404)
+        c = await get_campaign(cid)
+        return _json(_campaign_public(c))
 
     send_now = bool(body.get("send_now"))
     editable = existing["status"] in ("draft", "scheduled")

@@ -462,7 +462,9 @@
   .detail-left,.detail-right{min-width:0;}
   .detail-right .dmeta{margin-bottom:16px;}
   .detail-right > .subh{margin-top:4px;}
-  .dhead{display:flex;align-items:center;gap:12px;margin:2px 0 16px;flex-wrap:wrap;}
+  .dhead{display:flex;align-items:center;gap:12px;margin:2px 0 10px;flex-wrap:wrap;}
+  .det-toolbar{display:flex;flex-wrap:wrap;gap:8px;margin:0 0 16px;padding:12px 14px;background:var(--card);border:1px solid var(--line);border-radius:14px;}
+  .det-toolbar .btn{flex:none;}
   .dhead .em{font-size:30px;flex:none;}
   .dhead .n{font-size:22px;letter-spacing:-.3px;}
   .dmeta{display:flex;flex-direction:column;gap:12px;background:var(--surface);border:1px solid var(--line);border-radius:var(--radius);padding:14px 16px;margin-bottom:0;box-shadow:var(--shadow);}
