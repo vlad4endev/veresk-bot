@@ -892,6 +892,7 @@
       sent: { label: "Отправлено", cls: "done" },
       delivered: { label: "Доставлено", cls: "done" },
       failed: { label: "Ошибка", cls: "err" },
+      cancelled: { label: "Снято с очереди", cls: "neutral" },
     };
     return map[status] || { label: status || "—", cls: "neutral" };
   }
