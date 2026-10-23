@@ -80,6 +80,8 @@
       newClientDays: 30,
       newSubDays: 3,
       segmentCounts: null,
+      editCampaignId: null,
+      editPreset: null,
     },
     tgPhone: "",
     maxPhone: "",
@@ -1084,8 +1086,10 @@
           }</div>
         </div>
         <div class="det-actions">
-          <button class="btn primary big" id="btnSendNow">Отправить сейчас</button>
-          <button class="btn big" id="btnRepeat">Повторить как новую</button>
+          <button class="btn big" type="button" id="btnEditCampaign">Редактировать</button>
+          <button class="btn danger-ghost big" type="button" id="btnDeleteCampaign">Удалить</button>
+          <button class="btn primary big" type="button" id="btnSendNow">Отправить сейчас</button>
+          <button class="btn big" type="button" id="btnRepeat">Повторить как новую</button>
         </div>`;
 
     const rightBody = `<div class="subh">${started ? "Как дошло" : "Очередь отправки"}</div>
@@ -1140,6 +1144,33 @@
     $("#btnSendNow")?.addEventListener("click", async () => {
       await AdminAPI.patchCampaign(c.id, { send_now: true });
       openDetail(c.id);
+    });
+    $("#btnDeleteCampaign")?.addEventListener("click", async () => {
+      const kind =
+        c.status === "scheduled" ? "запланированную рассылку" : "черновик рассылки";
+      if (
+        !confirm(
+          `Удалить ${kind} «${c.title || "без названия"}»? Очередь получателей будет сброшена.`
+        )
+      ) {
+        return;
+      }
+      try {
+        await AdminAPI.deleteCampaign(c.id);
+        state.curCampaign = null;
+        go("home");
+      } catch (err) {
+        const detail =
+          err.data?.message ||
+          err.data?.error ||
+          err.message ||
+          "Не удалось удалить";
+        alert(detail);
+      }
+    });
+    $("#btnEditCampaign")?.addEventListener("click", () => {
+      state.wizard.editPreset = { c, recipients };
+      go("compose");
     });
     $("#btnRepeat")?.addEventListener("click", () => {
       state.wizard.keepMessage = true;
@@ -6767,11 +6798,129 @@
     onMediaFileChosen(file);
   });
 
+  function parseCampaignSchedule(iso) {
+    if (!iso) return null;
+    const m = String(iso).match(/^(\d{4}-\d{2}-\d{2})[T ](\d{2}:\d{2})/);
+    if (!m) return null;
+    return { date: m[1], time: m[2] };
+  }
+
+  function applyCampaignToComposeWizard(c, recipients) {
+    const ta = $("#msg");
+    if (ta) ta.value = c.message || "";
+    const seg = c.segment || "all";
+    state.wizard.segment = seg;
+    const chRaw = c.delivery_channels || c.channels || "tg";
+    const chans = String(chRaw)
+      .toLowerCase()
+      .split(",")
+      .map((x) => x.trim())
+      .filter(Boolean);
+    const wantTg = chans.some((x) => x === "tg" || x === "telegram");
+    const wantMax = chans.some((x) => x === "max");
+    $("#chanTg")?.classList.toggle("on", wantTg || (!wantTg && !wantMax));
+    $("#chanTg")?.setAttribute(
+      "aria-pressed",
+      $("#chanTg")?.classList.contains("on") ? "true" : "false"
+    );
+    $("#chanMax")?.classList.toggle("on", wantMax);
+    $("#chanMax")?.setAttribute("aria-pressed", wantMax ? "true" : "false");
+
+    if (seg === "selected") {
+      const byId = new Map();
+      (recipients.items || recipients || []).forEach((r) => {
+        if (!r.customer_id || byId.has(r.customer_id)) return;
+        byId.set(r.customer_id, {
+          id: r.customer_id,
+          name: r.name || "Клиент",
+          phone: r.phone || "",
+          phone_masked: r.phone_masked || r.phone || "",
+          messengers: null,
+        });
+      });
+      state.wizard.selectedCustomers = [...byId.values()];
+      state.wizard.audienceMode = "pick";
+      $$(".aud-mode-btn").forEach((b) => {
+        const on = b.dataset.aud === "pick";
+        b.classList.toggle("on", on);
+        b.setAttribute("aria-selected", on ? "true" : "false");
+      });
+      const segBlock = $("#audSegmentBlock");
+      const pickBlock = $("#audPickBlock");
+      if (segBlock) segBlock.hidden = true;
+      if (pickBlock) pickBlock.hidden = false;
+      renderPickSelected();
+    } else {
+      state.wizard.audienceMode = "segment";
+      state.wizard.selectedCustomers = [];
+      $$(".aud-mode-btn").forEach((b) => {
+        const on = b.dataset.aud === "segment";
+        b.classList.toggle("on", on);
+        b.setAttribute("aria-selected", on ? "true" : "false");
+      });
+      const segBlock = $("#audSegmentBlock");
+      const pickBlock = $("#audPickBlock");
+      if (segBlock) segBlock.hidden = false;
+      if (pickBlock) pickBlock.hidden = true;
+      $$("#s0 .choice").forEach((btn) =>
+        btn.classList.toggle("on", btn.dataset.seg === seg)
+      );
+    }
+
+    clearComposeMedia();
+    if (c.media_path) {
+      state.wizard.media = {
+        media_path: c.media_path,
+        media_kind: c.media_kind || "photo",
+        media_filename: c.media_filename || "фото",
+        media_mime: c.media_mime || "image/jpeg",
+      };
+    }
+
+    const sched = c.status === "scheduled" ? parseCampaignSchedule(c.scheduled_at) : null;
+    const datebox = $("#datebox");
+    if (sched) {
+      state.wizard.when = "later";
+      const dateInp = $("#wizDate");
+      const timeInp = $("#wizTime");
+      if (dateInp) dateInp.value = sched.date;
+      if (timeInp) timeInp.value = sched.time;
+      if (datebox) datebox.style.display = "";
+      $$("#s2 .choice").forEach((ch) =>
+        ch.classList.toggle("on", ch.dataset.when === "later")
+      );
+    } else {
+      state.wizard.when = "now";
+      if (datebox) datebox.style.display = "none";
+      $$("#s2 .choice").forEach((ch) =>
+        ch.classList.toggle("on", ch.dataset.when === "now")
+      );
+    }
+
+    state.wizard.lockMessage = false;
+    state.wizard.discount = null;
+    updatePreview();
+    updateAudienceContext();
+    syncMediaUi();
+    refreshMatchPreview();
+  }
+
   function resetComposeForm() {
     setAudienceError(false);
     setMsgError(false);
     setAiOpen(false);
     if (aiUndoRow) aiUndoRow.hidden = true;
+
+    if (state.wizard.editPreset) {
+      const { c, recipients } = state.wizard.editPreset;
+      state.wizard.editPreset = null;
+      state.wizard.editCampaignId = c.id;
+      state.wizard.keepMessage = false;
+      applyCampaignToComposeWizard(c, recipients);
+      return;
+    }
+
+    state.wizard.editCampaignId = null;
 
     // повтор рассылки: оставляем текст/аудиторию, которые уже выставили снаружи
     if (state.wizard.keepMessage) {
@@ -7295,16 +7444,26 @@
         body.customer_ids = selectedCustomerIds();
         body.segment = "selected";
       }
-      const created = await AdminAPI.createCampaign(body);
+      const editingId = state.wizard.editCampaignId;
+      const saved = editingId
+        ? await AdminAPI.patchCampaign(editingId, body)
+        : await AdminAPI.createCampaign(body);
+      state.wizard.editCampaignId = null;
       clearComposeMedia();
       setStep(3);
       const will =
-        (created.match && created.match.will_send) ||
-        created.total_count ||
+        (saved.match && saved.match.will_send) ||
+        saved.total_count ||
         0;
-      $("#successText").textContent = sendNow
-        ? `Рассылка запущена: ${fmtNum(will)} сообщений уходят порциями от имени аккаунтов.`
-        : `Сообщение уйдёт ${fmtNum(will)} получателям ${scheduled_at || ""} через ${channelsLabel(channels)}.`;
+      if (editingId) {
+        $("#successText").textContent = sendNow
+          ? `Изменения сохранены. Рассылка запущена: ${fmtNum(will)} сообщений уходят порциями.`
+          : `Изменения сохранены. Сообщение уйдёт ${fmtNum(will)} получателям ${scheduled_at || ""} через ${channelsLabel(channels)}.`;
+      } else {
+        $("#successText").textContent = sendNow
+          ? `Рассылка запущена: ${fmtNum(will)} сообщений уходят порциями от имени аккаунтов.`
+          : `Сообщение уйдёт ${fmtNum(will)} получателям ${scheduled_at || ""} через ${channelsLabel(channels)}.`;
+      }
     } catch (err) {
       const detail =
         err.data?.message ||

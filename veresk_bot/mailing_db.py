@@ -1430,6 +1430,61 @@ async def add_campaign_recipients(
     return await _run_db(_add)
 
 
+async def replace_campaign_recipients(
+    campaign_id: int,
+    recipients: list[tuple[int, str]],
+) -> int:
+    """Заменяет очередь получателей (только до старта отправки)."""
+
+    def _replace() -> int:
+        with _connect() as db:
+            db.execute(
+                "DELETE FROM campaign_recipients WHERE campaign_id = ?",
+                (campaign_id,),
+            )
+            if recipients:
+                db.executemany(
+                    """
+                    INSERT INTO campaign_recipients (campaign_id, customer_id, channel, status)
+                    VALUES (?, ?, ?, 'pending')
+                    """,
+                    [(campaign_id, cid, ch) for cid, ch in recipients],
+                )
+            count = len(recipients)
+            db.execute(
+                """
+                UPDATE campaigns
+                SET total_count = ?, sent_count = 0, delivered_count = 0,
+                    failed_count = 0, updated_at = ?
+                WHERE id = ?
+                """,
+                (count, _now(), campaign_id),
+            )
+            db.commit()
+            return count
+
+    return await _run_db(_replace)
+
+
+async def delete_campaign(campaign_id: int) -> str | None:
+    """Удаляет кампанию. None — успех; иначе код ошибки."""
+
+    def _delete() -> str | None:
+        with _connect() as db:
+            row = db.execute(
+                "SELECT status FROM campaigns WHERE id = ?", (campaign_id,)
+            ).fetchone()
+            if not row:
+                return "not_found"
+            if row["status"] not in ("draft", "scheduled"):
+                return "not_deletable"
+            db.execute("DELETE FROM campaigns WHERE id = ?", (campaign_id,))
+            db.commit()
+            return None
+
+    return await _run_db(_delete)
+
+
 async def list_campaign_recipients(
     campaign_id: int,
     *,

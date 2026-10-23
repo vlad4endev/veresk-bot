@@ -40,6 +40,7 @@ from mailing_db import (
     create_admin_session,
     create_admin_user,
     create_campaign,
+    delete_campaign,
     create_personal_message,
     delete_admin_session,
     delete_admin_user,
@@ -75,6 +76,7 @@ from mailing_db import (
     touch_admin_session,
     touch_admin_user_login,
     update_admin_user,
+    replace_campaign_recipients,
     update_campaign,
     update_send_account,
     upsert_send_account,
@@ -244,6 +246,92 @@ def _segment_label(seg: str) -> str:
         "channel_subscribers": "Подписчики канала",
         "channel_subscribers_new": "Новые подписчики",
     }.get(seg, seg)
+
+
+_CAMPAIGN_SEGMENT_MAP = {
+    "Постоянные": "regular",
+    "Все клиенты": "all",
+    "Новые": "new",
+    "Давно не заказывали": "inactive",
+    "Выбранные клиенты": "selected",
+    "selected": "selected",
+}
+
+
+def _normalize_campaign_segment(raw: Any, *, default: str = "all") -> str:
+    segment = str(raw or default)
+    return _CAMPAIGN_SEGMENT_MAP.get(segment, segment)
+
+
+async def _campaign_recipients_from_body(
+    body: dict[str, Any],
+    *,
+    default_segment: str = "all",
+    default_channels: str = "tg",
+) -> tuple[str, str, list[tuple[int, str]], dict[str, Any]] | web.Response:
+    segment = _normalize_campaign_segment(
+        body.get("segment") if "segment" in body else default_segment,
+        default=default_segment,
+    )
+    customer_ids = _parse_customer_ids(body.get("customer_ids"))
+    if customer_ids:
+        segment = "selected"
+    new_days = resolve_mail_new_days(segment, body.get("new_days"))
+    ch_raw = body.get("channels") if "channels" in body else default_channels
+    ch_list = parse_channels(ch_raw or "tg")
+    channels = ",".join(ch_list)
+
+    if customer_ids:
+        customers = await customers_by_ids(customer_ids)
+        if not customers:
+            return _json(
+                {
+                    "error": "customers_not_found",
+                    "message": "Выбранные клиенты не найдены в базе",
+                },
+                status=400,
+            )
+    else:
+        customers = await customers_for_segment(segment, new_days=new_days)
+    tg_ready = await pick_ready_account("tg_userbot") if "tg" in ch_list else None
+    max_userbot = await pick_ready_account("max_userbot") if "max" in ch_list else None
+    max_ok = (
+        bool(max_userbot) or is_max_configured()
+        if "max" in ch_list
+        else False
+    )
+    match = build_recipients_for_customers(
+        customers,
+        ch_list,
+        tg_accounts_ready=bool(tg_ready) if "tg" in ch_list else True,
+        max_configured=max_ok if "max" in ch_list else True,
+        max_allow_phone=bool(max_userbot) if "max" in ch_list else False,
+    )
+    recipients = match["recipients"]
+    if not recipients:
+        return _json(
+            {
+                "error": "no_reachable_recipients",
+                "message": (
+                    "Нет получателей для выбранных каналов. "
+                    "Проверьте аккаунты Telegram/MAX и привязки клиентов."
+                ),
+                "match": {
+                    "segment_total": match["segment_total"],
+                    "reachable": match["reachable"],
+                    "skipped": match["skipped"],
+                    "skipped_samples": match["skipped_samples"],
+                    "accounts": {
+                        "tg_ready": bool(tg_ready),
+                        "max_ready": max_ok,
+                        "max_userbot": bool(max_userbot),
+                        "max_bot": is_max_configured(),
+                    },
+                },
+            },
+            status=400,
+        )
+    return segment, channels, recipients, match
 
 
 def _format_relative(iso: str | None) -> str:
@@ -1454,6 +1542,7 @@ def _campaign_public(c: dict) -> dict:
         "segment": c["segment"],
         "segment_label": _segment_label(c["segment"]),
         "channels": channels,
+        "delivery_channels": c.get("channels") or "tg",
         "status": status,
         "status_label": label,
         "status_class": sclass,
@@ -1733,18 +1822,128 @@ async def handle_campaign_patch(request: web.Request) -> web.Response:
         body = await request.json()
     except Exception:
         return _json({"error": "invalid_json"}, status=400)
+
+    existing = await get_campaign(cid)
+    if not existing:
+        return _json({"error": "not_found"}, status=404)
+
+    send_now = bool(body.get("send_now"))
+    editable = existing["status"] in ("draft", "scheduled")
+    if not editable and not send_now:
+        return _json(
+            {
+                "error": "campaign_locked",
+                "message": "Редактировать можно только черновики и запланированные рассылки",
+            },
+            status=400,
+        )
+    if send_now and existing["status"] not in ("draft", "scheduled"):
+        return _json(
+            {"error": "campaign_locked", "message": "Эту рассылку уже нельзя запустить"},
+            status=400,
+        )
+
+    if "message" in body and not str(body.get("message") or "").strip():
+        return _json({"error": "message_required"}, status=400)
+
     fields: dict[str, Any] = {}
-    for key in ("title", "message", "emoji", "segment", "channels", "status", "scheduled_at"):
+    for key in ("title", "message", "emoji", "segment", "channels", "scheduled_at"):
         if key in body:
             fields[key] = body[key]
-    if body.get("send_now"):
+    if "segment" in fields:
+        fields["segment"] = _normalize_campaign_segment(fields["segment"])
+
+    for key in ("media_path", "media_kind", "media_filename", "media_mime"):
+        if key in body:
+            fields[key] = body[key]
+    if body.get("clear_media"):
+        fields["media_path"] = None
+        fields["media_kind"] = None
+        fields["media_filename"] = None
+        fields["media_mime"] = None
+
+    if fields.get("media_path"):
+        from campaign_media import resolve_campaign_media
+
+        resolved = resolve_campaign_media(str(fields["media_path"]))
+        if not resolved:
+            return _json({"error": "media_not_found"}, status=400)
+        fields.setdefault("media_kind", str(body.get("media_kind") or "photo"))
+        fields.setdefault(
+            "media_filename",
+            str(body.get("media_filename") or resolved.name)[:180],
+        )
+        fields.setdefault("media_mime", str(body.get("media_mime") or "image/jpeg"))
+
+    refresh_recipients = any(
+        k in body for k in ("segment", "channels", "customer_ids", "new_days")
+    )
+    match: dict[str, Any] | None = None
+    if refresh_recipients:
+        built = await _campaign_recipients_from_body(
+            body,
+            default_segment=existing.get("segment") or "all",
+            default_channels=existing.get("channels") or "tg",
+        )
+        if isinstance(built, web.Response):
+            return built
+        segment, channels, recipients, match = built
+        fields["segment"] = segment
+        fields["channels"] = channels
+        await replace_campaign_recipients(cid, recipients)
+
+    if send_now:
         fields["status"] = "sending"
         fields["scheduled_at"] = None
+    elif "scheduled_at" in body:
+        scheduled_at = body.get("scheduled_at")
+        if scheduled_at:
+            fields["status"] = "scheduled"
+            fields["scheduled_at"] = scheduled_at
+        else:
+            fields["status"] = "draft"
+            fields["scheduled_at"] = None
+    elif refresh_recipients and existing["status"] == "scheduled":
+        fields.setdefault("status", "scheduled")
+
+    if not fields:
+        return _json(_campaign_public(existing))
+
     ok = await update_campaign(cid, **fields)
     if not ok:
         return _json({"error": "not_found"}, status=404)
     c = await get_campaign(cid)
-    return _json(_campaign_public(c))
+    payload = _campaign_public(c)
+    if match:
+        payload["match"] = {
+            "segment_total": match["segment_total"],
+            "reachable": match["reachable"],
+            "skipped": match["skipped"],
+            "will_send": match["reachable"]["total"],
+        }
+    return _json(payload)
+
+
+async def handle_campaign_delete(request: web.Request) -> web.Response:
+    err = await _require_admin(request)
+    if err:
+        return err
+    try:
+        cid = int(request.match_info["id"])
+    except (KeyError, ValueError):
+        return _json({"error": "bad_id"}, status=400)
+    code = await delete_campaign(cid)
+    if code == "not_found":
+        return _json({"error": "not_found"}, status=404)
+    if code == "not_deletable":
+        return _json(
+            {
+                "error": "not_deletable",
+                "message": "Удалить можно только черновик или запланированную рассылку",
+            },
+            status=400,
+        )
+    return _json({"ok": True})
 
 
 async def handle_campaign_recipients(request: web.Request) -> web.Response:
@@ -6305,6 +6504,7 @@ def setup_admin_routes(app: web.Application) -> None:
         ("/api/admin/campaigns/media/{name}", handle_campaign_media_get, "GET"),
         ("/api/admin/campaigns/{id}", handle_campaign_get, "GET"),
         ("/api/admin/campaigns/{id}", handle_campaign_patch, "PATCH"),
+        ("/api/admin/campaigns/{id}", handle_campaign_delete, "DELETE"),
         ("/api/admin/campaigns/{id}/recipients", handle_campaign_recipients, "GET"),
         ("/api/admin/mailing/preview", handle_mailing_preview, "GET"),
         ("/api/admin/personal", handle_personal, "POST"),

@@ -191,6 +191,8 @@ const AdminAPI = (() => {
         method: "PATCH",
         body: JSON.stringify(body),
       }),
+    deleteCampaign: (id) =>
+      request("/api/admin/campaigns/" + id, { method: "DELETE" }),
     recipients: (id, params = {}) => {
       const q = new URLSearchParams(params).toString();
       return request(
