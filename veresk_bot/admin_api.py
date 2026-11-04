@@ -1634,25 +1634,39 @@ async def handle_campaign_media_upload(request: web.Request) -> web.Response:
         return _json({"error": "multipart_required"}, status=400)
     from campaign_media import CAMPAIGN_MEDIA_MAX_BYTES, save_campaign_photo
 
-    reader = await request.multipart()
-    raw = b""
-    filename = ""
-    mime = ""
-    while True:
-        part = await reader.next()
-        if part is None:
-            break
-        if part.name == "file":
-            filename = part.filename or "photo.jpg"
-            mime = part.headers.get("Content-Type", "") or ""
-            raw = await part.read(decode=False)
-        else:
-            await part.read(decode=False)
+    try:
+        reader = await request.multipart()
+        raw = b""
+        filename = ""
+        mime = ""
+        while True:
+            part = await reader.next()
+            if part is None:
+                break
+            if part.name == "file":
+                filename = part.filename or "photo.jpg"
+                mime = part.headers.get("Content-Type", "") or ""
+                raw = await part.read(decode=False)
+            else:
+                await part.read(decode=False)
+    except Exception:
+        logger.exception("campaign media multipart failed")
+        return _json(
+            {
+                "error": "upload_failed",
+                "message": "Не удалось прочитать файл. Попробуйте другое фото.",
+            },
+            status=400,
+        )
     if not raw:
-        return _json({"error": "file_required"}, status=400)
+        return _json({"error": "file_required", "message": "Выберите файл фото"}, status=400)
     if len(raw) > CAMPAIGN_MEDIA_MAX_BYTES:
         return _json(
-            {"error": "file_too_large", "max_mb": CAMPAIGN_MEDIA_MAX_BYTES // (1024 * 1024)},
+            {
+                "error": "file_too_large",
+                "message": f"Файл больше {CAMPAIGN_MEDIA_MAX_BYTES // (1024 * 1024)} МБ",
+                "max_mb": CAMPAIGN_MEDIA_MAX_BYTES // (1024 * 1024),
+            },
             status=413,
         )
     try:
@@ -1661,12 +1675,30 @@ async def handle_campaign_media_upload(request: web.Request) -> web.Response:
         code = str(exc)
         if code == "only_images":
             return _json(
-                {"error": "only_images", "message": "Можно прикрепить только фото (JPG, PNG, WEBP, GIF)"},
+                {
+                    "error": "only_images",
+                    "message": "Можно прикрепить только фото (JPG, PNG, WEBP, GIF)",
+                },
                 status=400,
             )
         if code == "file_too_large":
-            return _json({"error": "file_too_large"}, status=413)
-        return _json({"error": code or "bad_file"}, status=400)
+            return _json(
+                {
+                    "error": "file_too_large",
+                    "message": f"Файл больше {CAMPAIGN_MEDIA_MAX_BYTES // (1024 * 1024)} МБ",
+                },
+                status=413,
+            )
+        return _json({"error": code or "bad_file", "message": "Некорректный файл"}, status=400)
+    except OSError:
+        logger.exception("campaign media save failed")
+        return _json(
+            {
+                "error": "save_failed",
+                "message": "Не удалось сохранить фото на сервере",
+            },
+            status=500,
+        )
     return _json(
         {
             "ok": True,
