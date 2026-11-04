@@ -37,6 +37,7 @@ server {
     include /etc/letsencrypt/options-ssl-nginx.conf;
     ssl_dhparam /etc/letsencrypt/ssl-dhparams.pem;
 
+    # Обязательно! Дефолт nginx — 1m: фото в рассылках и бэкапы получают 413.
     client_max_body_size 200m;
 
     location / {
@@ -52,5 +53,6 @@ server {
         proxy_buffering off;
         proxy_cache off;
         proxy_read_timeout 86400s;
+        client_max_body_size 200m;
     }
 }

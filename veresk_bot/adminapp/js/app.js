@@ -6849,9 +6849,98 @@
     err.textContent = text;
   }
 
+  // Хост-nginx часто с client_max_body_size по умолчанию 1m → 413 HTML и «request_failed».
+  // Сжимаем фото до ~900 КБ, чтобы прикрепление работало без правки прокси.
+  const MEDIA_PROXY_SAFE_BYTES = 900 * 1024;
+  const MEDIA_MAX_EDGE = 1920;
+
+  function mediaUploadErrorText(err) {
+    const code = err?.data?.error || err?.message;
+    if (err?.data?.message) return err.data.message;
+    if (code === "only_images") return "Можно прикрепить только фото";
+    if (code === "file_too_large") return "Файл слишком большой — выберите фото до 10 МБ";
+    if (code === "file_required") return "Выберите файл фото";
+    if (code === "unauthorized") return "Сессия истекла — войдите снова";
+    if (code === "request_failed" || !code) {
+      return "Не удалось загрузить фото. Попробуйте другое изображение.";
+    }
+    return String(code);
+  }
+
+  function canvasToJpegBlob(canvas, quality) {
+    return new Promise((resolve) => {
+      canvas.toBlob((blob) => resolve(blob), "image/jpeg", quality);
+    });
+  }
+
+  async function prepareCampaignPhoto(file) {
+    if (!file) return null;
+    if (file.size <= MEDIA_PROXY_SAFE_BYTES) return file;
+    // Анимированный GIF через canvas потеряет кадры — оставляем как есть
+    // (если > лимита прокси, бэкенд/прокси вернут понятную ошибку).
+    if ((file.type || "").toLowerCase() === "image/gif") return file;
+
+    let bitmap;
+    try {
+      bitmap = await createImageBitmap(file);
+    } catch (_) {
+      return file;
+    }
+    try {
+      let w = bitmap.width || 1;
+      let h = bitmap.height || 1;
+      const scale = Math.min(1, MEDIA_MAX_EDGE / Math.max(w, h));
+      w = Math.max(1, Math.round(w * scale));
+      h = Math.max(1, Math.round(h * scale));
+      const canvas = document.createElement("canvas");
+      canvas.width = w;
+      canvas.height = h;
+      const ctx = canvas.getContext("2d", { alpha: false });
+      if (!ctx) return file;
+      ctx.fillStyle = "#ffffff";
+      ctx.fillRect(0, 0, w, h);
+      ctx.drawImage(bitmap, 0, 0, w, h);
+
+      let quality = 0.88;
+      let blob = await canvasToJpegBlob(canvas, quality);
+      while (blob && blob.size > MEDIA_PROXY_SAFE_BYTES && quality > 0.5) {
+        quality -= 0.08;
+        blob = await canvasToJpegBlob(canvas, quality);
+      }
+      // Ещё крупно — уменьшаем сторону
+      while (blob && blob.size > MEDIA_PROXY_SAFE_BYTES && Math.max(w, h) > 800) {
+        w = Math.max(1, Math.round(w * 0.75));
+        h = Math.max(1, Math.round(h * 0.75));
+        canvas.width = w;
+        canvas.height = h;
+        ctx.fillStyle = "#ffffff";
+        ctx.fillRect(0, 0, w, h);
+        ctx.drawImage(bitmap, 0, 0, w, h);
+        blob = await canvasToJpegBlob(canvas, 0.82);
+      }
+      if (!blob || blob.size >= file.size) return file;
+      const base = String(file.name || "photo")
+        .replace(/\.[^.]+$/, "")
+        .slice(0, 80);
+      return new File([blob], (base || "photo") + ".jpg", {
+        type: "image/jpeg",
+        lastModified: Date.now(),
+      });
+    } finally {
+      try {
+        bitmap.close();
+      } catch (_) {}
+    }
+  }
+
   async function onMediaFileChosen(file) {
     if (!file) return;
-    if (!String(file.type || "").startsWith("image/")) {
+    const type = String(file.type || "");
+    const name = String(file.name || "").toLowerCase();
+    const looksImage =
+      type.startsWith("image/") ||
+      /\.(jpe?g|png|webp|gif)$/i.test(name);
+    if (!looksImage) {
       setMediaError("Можно прикрепить только фото");
       return;
     }
@@ -6862,9 +6951,12 @@
     const box = $("#mediaAttach");
     box?.classList.add("busy");
     setMediaError("");
-    const localUrl = URL.createObjectURL(file);
+    let uploadFile = file;
+    let localUrl = "";
     try {
-      const res = await AdminAPI.uploadCampaignMedia(file);
+      uploadFile = (await prepareCampaignPhoto(file)) || file;
+      localUrl = URL.createObjectURL(uploadFile);
+      const res = await AdminAPI.uploadCampaignMedia(uploadFile);
       if (state.wizard.media?.localUrl) {
         try {
           URL.revokeObjectURL(state.wizard.media.localUrl);
@@ -6873,25 +6965,18 @@
       state.wizard.media = {
         media_path: res.media_path,
         media_kind: res.media_kind || "photo",
-        media_filename: res.media_filename || file.name,
-        media_mime: res.media_mime || file.type,
+        media_filename: res.media_filename || uploadFile.name || file.name,
+        media_mime: res.media_mime || uploadFile.type || file.type,
         localUrl,
       };
       syncMediaUi();
     } catch (err) {
-      try {
-        URL.revokeObjectURL(localUrl);
-      } catch (_) {}
-      const msg =
-        err.data?.message ||
-        (err.data?.error === "only_images"
-          ? "Можно прикрепить только фото"
-          : err.data?.error === "file_too_large"
-            ? "Файл больше 10 МБ"
-            : null) ||
-        err.message ||
-        "Не удалось загрузить фото";
-      setMediaError(msg);
+      if (localUrl) {
+        try {
+          URL.revokeObjectURL(localUrl);
+        } catch (_) {}
+      }
+      setMediaError(mediaUploadErrorText(err));
     }
     box?.classList.remove("busy");
   }

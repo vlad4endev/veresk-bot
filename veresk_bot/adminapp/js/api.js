@@ -61,9 +61,10 @@ const AdminAPI = (() => {
       headers,
       body: formData,
     });
+    const raw = await res.text();
     let data = null;
     try {
-      data = await res.json();
+      data = raw ? JSON.parse(raw) : {};
     } catch (_) {
       data = {};
     }
@@ -75,9 +76,29 @@ const AdminAPI = (() => {
       throw err;
     }
     if (!res.ok) {
+      // nginx/прокси часто отвечают HTML (413/502) без JSON — даём понятный код
+      if (!data || typeof data !== "object") data = {};
+      if (!data.error) {
+        if (res.status === 413) {
+          data.error = "file_too_large";
+          data.message =
+            "Файл слишком большой для прокси (лимит nginx). Уменьшите фото или поднимите client_max_body_size.";
+        } else if (res.status === 502 || res.status === 504) {
+          data.error = "gateway_error";
+          data.message = "Сервер не ответил (HTTP " + res.status + "). Попробуйте ещё раз.";
+        } else if (res.status === 404) {
+          data.error = "not_found";
+          data.message =
+            "API загрузки фото не найден. Пересоберите bot: docker compose build bot && docker compose up -d bot";
+        } else {
+          data.error = "request_failed";
+          data.message =
+            "Не удалось загрузить файл" + (res.status ? " (HTTP " + res.status + ")" : "");
+        }
+      }
       const err = new Error(data.error || "request_failed");
       err.status = res.status;
-      err.data = data;
+      err.data = Object.assign({ status: res.status }, data);
       throw err;
     }
     return data;

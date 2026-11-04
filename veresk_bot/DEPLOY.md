@@ -46,11 +46,11 @@ chmod +x deploy.sh && ./deploy.sh
 **Проверка, что выкатилось (иначе UI останется на старом `api.js?v=26`):**
 
 ```bash
-curl -s https://admin.veresk-flowers.ru/ | grep -oE 'api.js\?v=[0-9]+|max-login-v31'
-# ожидается: api.js?v=31  и  max-login-v31
+curl -s https://admin.veresk-flowers.ru/ | grep -oE 'api.js\?v=[0-9]+|app.js\?v=[0-9]+'
+# ожидается: api.js?v=45  и  app.js?v=100 (или новее)
 ```
 
-Если видите `v=26` — Docker/nginx запущены из **внешней** папки со старым `adminapp`, а не из `.../veresk_bot/veresk_bot`.
+Если видите старый `v=` — Docker/nginx запущены из **внешней** папки со старым `adminapp`, а не из `.../veresk_bot/veresk_bot`.
 
 Сохраните `./data/` (SQLite, сессии) и `.env`.
 
@@ -92,6 +92,9 @@ sudo nginx -t && sudo systemctl reload nginx
 # 3) Сертификат
 sudo certbot --nginx -d admin.veresk-flowers.ru
 ```
+
+В конфиге хоста обязательно `client_max_body_size 200m;` (в примере уже есть).  
+Без этого nginx режет загрузки > 1 МБ → в UI «Прикрепить фото» ошибка `request_failed` / 413.
 
 Проверка: `curl -I https://admin.veresk-flowers.ru/admin/`
 

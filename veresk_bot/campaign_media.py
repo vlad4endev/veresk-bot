@@ -18,6 +18,12 @@ ALLOWED_IMAGE_MIME = {
     "image/webp",
     "image/gif",
 }
+# Браузеры/ОС иногда шлют фото как octet-stream — не отвергаем, если расширение или сигнатура ок.
+GENERIC_UPLOAD_MIME = {
+    "",
+    "application/octet-stream",
+    "binary/octet-stream",
+}
 
 
 def campaign_media_dir() -> Path:
@@ -44,7 +50,18 @@ def resolve_campaign_media(stored: str | None) -> Path | None:
     return path
 
 
-def guess_ext(filename: str, mime: str) -> str:
+def guess_ext(filename: str, mime: str, data: bytes | None = None) -> str:
+    # Сигнатура важнее имени: Windows часто шлёт .JPG при другом содержимом.
+    if data:
+        kind = sniff_image_kind(data)
+        if kind == "png":
+            return ".png"
+        if kind == "webp":
+            return ".webp"
+        if kind == "gif":
+            return ".gif"
+        if kind == "jpeg":
+            return ".jpg"
     suf = Path(filename or "").suffix.lower()
     if suf in ALLOWED_IMAGE_EXT:
         return suf
@@ -56,6 +73,21 @@ def guess_ext(filename: str, mime: str) -> str:
     if "gif" in mime_l:
         return ".gif"
     return ".jpg"
+
+
+def sniff_image_kind(data: bytes) -> str | None:
+    """Определяет тип по сигнатуре файла (без доверия к Content-Type)."""
+    if not data:
+        return None
+    if data.startswith(b"\xff\xd8\xff"):
+        return "jpeg"
+    if data.startswith(b"\x89PNG\r\n\x1a\n"):
+        return "png"
+    if data.startswith(b"GIF87a") or data.startswith(b"GIF89a"):
+        return "gif"
+    if len(data) >= 12 and data[:4] == b"RIFF" and data[8:12] == b"WEBP":
+        return "webp"
+    return None
 
 
 def save_campaign_photo(
@@ -71,20 +103,37 @@ def save_campaign_photo(
         raise ValueError("file_too_large")
     mime_l = (mime or "").lower().split(";")[0].strip()
     name_l = (filename or "").lower()
-    ok_mime = mime_l in ALLOWED_IMAGE_MIME or mime_l.startswith("image/")
+    ok_mime = mime_l in ALLOWED_IMAGE_MIME or (
+        mime_l.startswith("image/") and mime_l != "image/svg+xml"
+    )
     ok_ext = any(name_l.endswith(ext) for ext in ALLOWED_IMAGE_EXT)
-    if not (ok_mime or ok_ext):
-        raise ValueError("only_images")
-    if mime_l and mime_l not in ALLOWED_IMAGE_MIME and not mime_l.startswith("image/"):
+    kind = sniff_image_kind(data)
+    ok_magic = kind is not None
+    generic_mime = mime_l in GENERIC_UPLOAD_MIME
+    # image/* MIME или сигнатура файла — ок.
+    # Пустой/octet-stream MIME — только с расширением фото или magic bytes.
+    if not (
+        ok_mime
+        or ok_magic
+        or ((generic_mime or not mime_l) and ok_ext)
+    ):
         raise ValueError("only_images")
 
-    ext = guess_ext(filename, mime_l)
+    ext = guess_ext(filename, mime_l, data)
     stored = f"{uuid.uuid4().hex}{ext}"
     dest = campaign_media_dir() / stored
     dest.write_bytes(data)
+    if mime_l in ALLOWED_IMAGE_MIME:
+        out_mime = "image/jpeg" if mime_l == "image/jpg" else mime_l
+    elif kind == "jpeg":
+        out_mime = "image/jpeg"
+    elif kind:
+        out_mime = f"image/{kind}"
+    else:
+        out_mime = "image/jpeg" if ext in (".jpg", ".jpeg") else f"image/{ext.lstrip('.')}"
     return {
         "media_path": stored,
         "media_kind": "photo",
         "media_filename": Path(filename or stored).name[:180] or stored,
-        "media_mime": mime_l if mime_l in ALLOWED_IMAGE_MIME else f"image/{ext.lstrip('.')}",
+        "media_mime": out_mime,
     }
