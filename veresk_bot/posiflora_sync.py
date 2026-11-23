@@ -111,7 +111,7 @@ async def sync_from_posiflora() -> dict[str, Any]:
             payload = await fetch_customers_and_events()
         except PosifloraAPIError as exc:
             _last_sync["error"] = str(exc)
-            logger.exception("Синхронизация Posiflora не удалась")
+            logger.error("Синхронизация Posiflora не удалась: %s", exc)
             return {"ok": False, "error": str(exc)}
         except Exception as exc:
             _last_sync["error"] = str(exc)

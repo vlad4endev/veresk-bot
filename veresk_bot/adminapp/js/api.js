@@ -141,6 +141,12 @@ const AdminAPI = (() => {
     stats: () => request("/api/admin/stats"),
     botsStatus: () => request("/api/admin/bots/status"),
     sync: () => request("/api/admin/sync", { method: "POST" }),
+    posifloraSettings: () => request("/api/admin/posiflora/settings"),
+    posifloraSaveSettings: (body) =>
+      request("/api/admin/posiflora/settings", {
+        method: "POST",
+        body: JSON.stringify(body),
+      }),
     clients: (params = {}) => {
       const q = new URLSearchParams(params).toString();
       return request("/api/admin/clients" + (q ? "?" + q : ""));

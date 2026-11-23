@@ -4558,10 +4558,12 @@
       from_env: false,
     };
 
+    let pf = { api_key_set: false, api_key_masked: null, source: null };
     try {
-      const [stats, aiSettings] = await Promise.all([
+      const [stats, aiSettings, pfSettings] = await Promise.all([
         AdminAPI.stats(),
         AdminAPI.aiSettings().catch(() => null),
+        AdminAPI.posifloraSettings().catch(() => null),
       ]);
       customersCount = Number(stats.customers) || 0;
       const sync = stats.sync || {};
@@ -4583,6 +4585,7 @@
           ai.providers = aiSettings.providers;
         }
       }
+      if (pfSettings) pf = Object.assign(pf, pfSettings);
     } catch (_) {}
 
     const providerLabel =
@@ -4671,16 +4674,37 @@
           </div>
           <div class="svc-metric svc-metric-wide">
             <div class="n-sm">${syncWhenHtml}</div>
-            <div class="l">${
+            <div class="l" title="${esc(syncError)}">${
               syncError
-                ? esc(String(syncError).slice(0, 140))
+                ? esc(String(syncError).slice(0, 240))
                 : customersCount
                   ? "Данные из Posiflora готовы к сегментам и рассылкам"
                   : "Нажмите «Синхронизировать», чтобы подтянуть клиентов"
             }</div>
           </div>
         </div>
+        <form class="svc-ai-form pw-form" id="pfKeyForm" autocomplete="off" onsubmit="return false;">
+          <div class="svc-field">
+            <label for="pfApiKey">API-ключ <span class="ai-key-status">${
+              pf.api_key_set
+                ? "· сохранён" + (pf.source === "env" ? " в .env" : "")
+                : "· не задан"
+            }</span></label>
+            <input id="pfApiKey" type="password" autocomplete="new-password" placeholder="${
+              pf.api_key_set
+                ? "Оставьте пустым, чтобы не менять · " + esc(pf.api_key_masked || "••••")
+                : "Ключ из админки Posiflora"
+            }">
+            <p class="form-foot">Выгрузка клиентов идёт только с API-ключом. Логин админки Posiflora на этот запрос отвечает 403.</p>
+          </div>
+        </form>
         <div class="form-actions svc-actions">
+          <button class="btn" type="button" id="pfSaveKeyBtn">Сохранить ключ</button>
+          ${
+            pf.source === "panel"
+              ? `<button class="btn" type="button" id="pfClearKeyBtn">Убрать ключ</button>`
+              : ""
+          }
           <button class="btn primary" type="button" id="integSyncBtn">Синхронизировать</button>
           <button class="btn" type="button" onclick="go('clients')">Открыть клиентов</button>
         </div>
@@ -4927,6 +4951,44 @@
       if ($("#aiModel")) $("#aiModel").dataset.autofill = "0";
     });
 
+    $("#pfSaveKeyBtn")?.addEventListener("click", async () => {
+      const btn = $("#pfSaveKeyBtn");
+      const key = ($("#pfApiKey")?.value || "").trim();
+      if (!key) {
+        alert("Вставьте API-ключ Posiflora");
+        return;
+      }
+      if (btn) {
+        btn.disabled = true;
+        btn.textContent = "Сохраняю…";
+      }
+      try {
+        await AdminAPI.posifloraSaveSettings({ api_key: key });
+        const input = $("#pfApiKey");
+        if (input) input.value = "";
+        alert("Ключ Posiflora сохранён");
+        loadIntegrationsPane();
+      } catch (err) {
+        alert("Ошибка: " + (err.data?.detail || err.data?.error || err.message));
+        if (btn) {
+          btn.disabled = false;
+          btn.textContent = "Сохранить ключ";
+        }
+      }
+    });
+
+    $("#pfClearKeyBtn")?.addEventListener("click", async () => {
+      const btn = $("#pfClearKeyBtn");
+      if (btn) btn.disabled = true;
+      try {
+        await AdminAPI.posifloraSaveSettings({ clear: true });
+        loadIntegrationsPane();
+      } catch (err) {
+        alert("Ошибка: " + (err.data?.detail || err.data?.error || err.message));
+        if (btn) btn.disabled = false;
+      }
+    });
+
     $("#integSyncBtn")?.addEventListener("click", async () => {
       const btn = $("#integSyncBtn");
       if (btn) {
@@ -4943,6 +5005,7 @@
         loadIntegrationsPane();
       } catch (err) {
         alert("Ошибка: " + (err.data?.error || err.message));
+        loadIntegrationsPane();
       }
       if (btn) {
         btn.disabled = false;

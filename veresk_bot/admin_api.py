@@ -125,6 +125,11 @@ from fortune_wheel import (
     save_config as save_wheel_config,
 )
 from bot_metrics import get_bot_metrics, init_bot_metrics
+from posiflora import (
+    clear_posiflora_api_key,
+    posiflora_settings_public,
+    save_posiflora_api_key,
+)
 from posiflora_sync import last_sync_info, sync_from_posiflora
 from senders.matching import (
     build_recipients_for_customers,
@@ -924,6 +929,42 @@ async def handle_sync(request: web.Request) -> web.Response:
     result = await sync_from_posiflora()
     status = 200 if result.get("ok") else 502
     return _json(result, status=status)
+
+
+async def handle_posiflora_settings_get(request: web.Request) -> web.Response:
+    err = await _require_admin(request)
+    if err:
+        return err
+    return _json(posiflora_settings_public())
+
+
+async def handle_posiflora_settings_save(request: web.Request) -> web.Response:
+    """POST /api/admin/posiflora/settings — сохранить или убрать API-ключ."""
+    err = await _require_admin(request)
+    if err:
+        return err
+    try:
+        body = await request.json()
+    except Exception:
+        return _json({"error": "invalid_json"}, status=400)
+    if not isinstance(body, dict):
+        return _json({"error": "invalid_json"}, status=400)
+
+    if body.get("clear"):
+        clear_posiflora_api_key()
+        return _json({"ok": True, "cleared": True, **posiflora_settings_public()})
+
+    api_key = body.get("api_key")
+    if not isinstance(api_key, str) or not api_key.strip():
+        return _json(
+            {"error": "api_key_required", "detail": "Вставьте API-ключ Posiflora"},
+            status=400,
+        )
+    try:
+        save_posiflora_api_key(api_key)
+    except ValueError as exc:
+        return _json({"error": "invalid_api_key", "detail": str(exc)}, status=400)
+    return _json({"ok": True, **posiflora_settings_public()})
 
 
 # ── clients ────────────────────────────────────────────────────────────────
@@ -6537,6 +6578,8 @@ def setup_admin_routes(app: web.Application) -> None:
         ("/api/admin/stats", handle_stats, "GET"),
         ("/api/admin/bots/status", handle_bots_status, "GET"),
         ("/api/admin/sync", handle_sync, "POST"),
+        ("/api/admin/posiflora/settings", handle_posiflora_settings_get, "GET"),
+        ("/api/admin/posiflora/settings", handle_posiflora_settings_save, "POST"),
         ("/api/admin/clients", handle_clients_list, "GET"),
         ("/api/admin/clients/{id}", handle_client_detail, "GET"),
         ("/api/admin/channel-subscribers", handle_channel_subscribers_list, "GET"),

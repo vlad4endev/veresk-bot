@@ -13,11 +13,16 @@ from urllib.parse import quote
 import aiohttp
 
 from config import (
+    POSIFLORA_API_KEY,
     POSIFLORA_BASE_URL,
     POSIFLORA_PASSWORD,
     POSIFLORA_STORE_ID,
     POSIFLORA_USERNAME,
 )
+
+# Posiflora отвечает этим кодом, когда запрос идёт от сессии админки, а не от API-ключа.
+_ADMIN_PANEL_AUTH_CODE = "1da6c9fa-6024-477e-830d-ff1c91866da5"
+_API_KEY_RE = re.compile(r"^[^\s]{8,512}$")
 
 logger = logging.getLogger(__name__)
 
@@ -307,16 +312,96 @@ async def _read_body(resp: aiohttp.ClientResponse) -> str:
         return ""
 
 
-def _format_json_api_errors(body: str) -> str:
+def posiflora_api_key() -> str:
+    """Ключ из админки важнее .env: его можно вставить без перезапуска."""
+    import runtime_settings
+
+    raw = runtime_settings.get("posiflora_api_key")
+    if raw and str(raw).strip():
+        return str(raw).strip()
+    return POSIFLORA_API_KEY
+
+
+def normalize_posiflora_api_key(raw: str) -> str:
+    key = str(raw or "").strip()
+    if not _API_KEY_RE.fullmatch(key):
+        raise ValueError("API-ключ: 8–512 символов без пробелов")
+    return key
+
+
+def mask_posiflora_key(key: str) -> str:
+    if len(key) <= 10:
+        return "••••••••"
+    return key[:4] + "…" + key[-4:]
+
+
+def posiflora_settings_public() -> dict[str, Any]:
+    import runtime_settings
+
+    panel = str(runtime_settings.get("posiflora_api_key") or "").strip()
+    key = panel or POSIFLORA_API_KEY
+    return {
+        "api_key_set": bool(key),
+        "api_key_masked": mask_posiflora_key(key) if key else None,
+        "source": "panel" if panel else ("env" if POSIFLORA_API_KEY else None),
+    }
+
+
+def save_posiflora_api_key(raw: str) -> None:
+    import runtime_settings
+
+    runtime_settings.set_many({"posiflora_api_key": normalize_posiflora_api_key(raw)})
+
+
+def clear_posiflora_api_key() -> None:
+    import runtime_settings
+
+    runtime_settings.delete_keys("posiflora_api_key")
+
+
+def build_posiflora_headers(api_key: str, access_token: str | None) -> dict[str, str]:
+    """Ключ и сессия вместе не отправляются: Posiflora тогда берёт только ключ."""
+    headers = dict(JSON_API_HEADERS)
+    if api_key:
+        headers["X-Api-Key"] = api_key
+        return headers
+    if access_token:
+        headers["Authorization"] = f"Bearer {access_token}"
+    return headers
+
+
+def _first_api_error(body: str) -> tuple[str, str]:
     try:
         payload = json.loads(body)
     except json.JSONDecodeError:
-        return body[:_ERROR_LOG_LIMIT]
+        return "", ""
+    errors = payload.get("errors") if isinstance(payload, dict) else None
+    if not isinstance(errors, list) or not errors or not isinstance(errors[0], dict):
+        return "", ""
+    err = errors[0]
+    return str(err.get("title") or "").strip(), str(err.get("code") or "").strip()
 
-    errors = payload.get("errors")
-    if isinstance(errors, list) and errors:
-        return json.dumps(errors, ensure_ascii=False, indent=2)
-    return json.dumps(payload, ensure_ascii=False, indent=2)[:_ERROR_LOG_LIMIT]
+
+def explain_posiflora_error(status: int, body: str, *, has_api_key: bool) -> str:
+    """Короткий текст для админки вместо сырого JSON:API."""
+    title, code = _first_api_error(body)
+    admin_panel = code == _ADMIN_PANEL_AUTH_CODE or "admin panel" in title.lower()
+    if status == 403 and admin_panel and not has_api_key:
+        return (
+            "Posiflora больше не принимает логин админки для выгрузки. "
+            "Выпустите API-ключ в Posiflora и вставьте его ниже."
+        )
+    if status == 403 and admin_panel and has_api_key:
+        return (
+            "Ключ Posiflora без права на клиентов (HTTP 403). "
+            "Выпустите ключ от администратора салона."
+        )
+    if status == 401 and has_api_key:
+        return "API-ключ Posiflora не принят (HTTP 401). Проверьте ключ и домен салона."
+    if title:
+        return f"HTTP {status}: {title}"[:300]
+    flat = " ".join(body.split())
+    return f"HTTP {status}: {flat[:180]}" if flat else f"HTTP {status}"
 
 
 def _is_sessions_path(path: str) -> bool:
@@ -332,9 +417,8 @@ async def _api_request(
     json_body: dict[str, Any] | None = None,
     _allow_refresh: bool = True,
 ) -> dict[str, Any]:
-    headers = dict(JSON_API_HEADERS)
-    if access_token:
-        headers["Authorization"] = f"Bearer {access_token}"
+    api_key = posiflora_api_key()
+    headers = build_posiflora_headers(api_key, access_token)
 
     url = _api_v1_url(path)
 
@@ -350,6 +434,7 @@ async def _api_request(
     if (
         status == 401
         and access_token
+        and not api_key
         and _allow_refresh
         and not _is_sessions_path(path)
     ):
@@ -369,15 +454,14 @@ async def _api_request(
         )
 
     if status >= 400:
-        formatted = _format_json_api_errors(body)
+        message = explain_posiflora_error(status, body, has_api_key=bool(api_key))
         logger.error(
-            "Posiflora %s %s → HTTP %s\n%s",
+            "Posiflora %s %s → %s",
             method,
-            path,
-            status,
-            formatted,
+            path.split("?", 1)[0],
+            message,
         )
-        raise PosifloraAPIError(f"HTTP {status}: {formatted}")
+        raise PosifloraAPIError(message)
     if not body:
         return {}
     try:
@@ -473,6 +557,9 @@ async def _get_access_token(
     *,
     force_refresh: bool = False,
 ) -> str:
+    if posiflora_api_key():
+        return ""
+
     now = time.time()
 
     if not force_refresh:

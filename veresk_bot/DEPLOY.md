@@ -70,9 +70,12 @@ MAX_WEBHOOK_SECRET=<случайная_строка_16+_символов>
 MAX_HUB_NOTIFY_URL=http://bot:3005/api/internal/max/event
 REDIS_URL=redis://redis:6379
 DATABASE_PATH=/app/data/veresk.db
+POSIFLORA_API_KEY=<ключ из админки Posiflora>
 ```
 
 `BOT_TOKEN`, Posiflora и остальное — как сейчас. Токен MAX можно задать в `.env` (`MAX_BOT_TOKEN=`) или позже в админке.
+
+Выгрузка клиентов требует `POSIFLORA_API_KEY` (или тот же ключ в админке Veresk → Сервисы). Логин и пароль Posiflora на список клиентов отвечают HTTP 403.
 
 ---
 

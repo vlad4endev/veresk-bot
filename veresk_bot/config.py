@@ -48,6 +48,8 @@ POSIFLORA_USERNAME = _require("POSIFLORA_USERNAME")
 POSIFLORA_PASSWORD = _require("POSIFLORA_PASSWORD")
 POSIFLORA_STORE_ID = _require("POSIFLORA_STORE_ID")
 POSIFLORA_BASE_URL = os.getenv("POSIFLORA_BASE_URL", "https://demo.posiflora.com/api").strip()
+# Ключ из админки Posiflora (заголовок X-Api-Key). Логин админки для выгрузки клиентов больше не принимается.
+POSIFLORA_API_KEY = os.getenv("POSIFLORA_API_KEY", "").strip()
 POLL_INTERVAL = int(os.getenv("POLL_INTERVAL", "60"))  # секунды между проверками
 
 # Mini App (HTTPS, путь /miniapp/)
